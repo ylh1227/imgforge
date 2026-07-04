@@ -1,6 +1,6 @@
 [package]
 name = "imgforge"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 rust-version = "1.85"
 description = "Cross-platform high-performance batch image format converter"
@@ -32,7 +32,6 @@ gui = [
   "rename",
   "thumbnails",
   "watermark",
-  "avif",
   "jpegxl",
 ]
 incremental = ["dep:sha2"]

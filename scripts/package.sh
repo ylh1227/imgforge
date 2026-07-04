@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 VERSION="$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
-FEATURES="incremental,rename,thumbnails,watermark,avif,jpegxl"
+FEATURES="incremental,rename,thumbnails,watermark,jpegxl"
 ARCH="$(uname -m)"
 
 case "$ARCH" in

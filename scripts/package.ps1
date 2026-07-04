@@ -5,7 +5,7 @@ $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
 
 $Version = (Select-String -Path Cargo.toml -Pattern '^version' | Select-Object -First 1).Line -replace '.*"(.*)".*', '$1'
-$Features = "incremental,rename,thumbnails,watermark,avif,jpegxl"
+$Features = "incremental,rename,thumbnails,watermark,jpegxl"
 $Suffix = "windows-x64"
 
 Write-Host "==> Building imgforge v$Version ($Suffix)..."

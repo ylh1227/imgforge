@@ -90,14 +90,29 @@ fn install_shutdown_handler(cancelled: Arc<AtomicBool>) {
 
   #[cfg(windows)]
   tokio::spawn(async move {
+    let mut ctrl_break = match tokio::signal::windows::ctrl_break() {
+      Ok(signal) => signal,
+      Err(e) => {
+        tracing::warn!(error = %e, "failed to install Ctrl+Break handler");
+        return;
+      }
+    };
+    let mut ctrl_close = match tokio::signal::windows::ctrl_close() {
+      Ok(signal) => signal,
+      Err(e) => {
+        tracing::warn!(error = %e, "failed to install console close handler");
+        return;
+      }
+    };
+
     tokio::select! {
       _ = tokio::signal::ctrl_c() => {
         tracing::warn!("received Ctrl+C, shutting down gracefully...");
       }
-      _ = tokio::signal::windows::ctrl_break() => {
+      _ = ctrl_break.recv() => {
         tracing::warn!("received Ctrl+Break, shutting down gracefully...");
       }
-      _ = tokio::signal::windows::ctrl_close() => {
+      _ = ctrl_close.recv() => {
         tracing::warn!("received console close, shutting down gracefully...");
       }
     }
