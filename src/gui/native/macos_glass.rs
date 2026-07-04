@@ -84,6 +84,7 @@ pub struct NativeGlassToolbar {
   btn_open: Retained<NSButton>,
   glass: Retained<NSGlassEffectView>,
   _content: Retained<NSView>,
+  stack: Retained<NSStackView>,
   parent: Retained<NSView>,
 }
 
@@ -143,7 +144,7 @@ impl NativeGlassToolbar {
 
     let content = NSView::new(mtm);
     content.addSubview(&stack);
-    pin_child_fill(&stack, &content);
+    center_stack_in_toolbar(&stack, &content);
 
     let glass = NSGlassEffectView::initWithFrame(
       NSGlassEffectView::alloc(mtm),
@@ -168,6 +169,7 @@ impl NativeGlassToolbar {
       btn_open,
       glass,
       _content: content,
+      stack,
       parent,
     })
   }
@@ -185,6 +187,7 @@ impl NativeGlassToolbar {
 
   pub fn layout(&self) {
     layout_glass(&self.glass, &self.parent);
+    center_stack_in_toolbar(&self.stack, &self._content);
   }
 
   pub fn drain_actions(&mut self) -> Vec<ToolbarAction> {
@@ -213,6 +216,26 @@ fn pin_child_fill(child: &NSView, parent: &NSView) {
   child.setFrame(bounds);
   child.setAutoresizingMask(
     NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
+  );
+}
+
+fn center_stack_in_toolbar(stack: &NSStackView, content: &NSView) {
+  let bounds = content.bounds();
+  let frame = stack.frame();
+  let stack_w = frame.size.width.max(1.0);
+  let stack_h = frame.size.height.max(40.0);
+  stack.setFrame(NSRect::new(
+    NSPoint::new(
+      ((bounds.size.width - stack_w) * 0.5).max(12.0),
+      ((bounds.size.height - stack_h) * 0.5).max(8.0),
+    ),
+    NSSize::new(stack_w, stack_h),
+  ));
+  stack.setAutoresizingMask(
+    NSAutoresizingMaskOptions::ViewMinXMargin
+      | NSAutoresizingMaskOptions::ViewMaxXMargin
+      | NSAutoresizingMaskOptions::ViewMinYMargin
+      | NSAutoresizingMaskOptions::ViewMaxYMargin,
   );
 }
 

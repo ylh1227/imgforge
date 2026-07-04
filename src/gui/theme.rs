@@ -14,6 +14,16 @@ pub const GROUP_RADIUS: u8 = 16;
 /// 底部工具栏圆角（仅顶边）。
 pub const TOOLBAR_TOP_RADIUS: u8 = 20;
 
+/// 内容区最大宽度（宽屏居中，不无限拉伸）。
+pub const CONTENT_MAX_WIDTH: f32 = 960.0;
+/// 内容区最小可用宽度。
+pub const CONTENT_MIN_WIDTH: f32 = 320.0;
+/// 窄屏断点：控件改为纵向堆叠。
+pub const NARROW_BREAKPOINT: f32 = 520.0;
+/// 日志面板高度上下限。
+pub const LOG_MIN_HEIGHT: f32 = 96.0;
+pub const LOG_MAX_HEIGHT: f32 = 360.0;
+
 static ACCESSIBILITY: OnceLock<AccessibilityPrefs> = OnceLock::new();
 
 fn a11y() -> AccessibilityPrefs {
@@ -213,6 +223,53 @@ pub fn macos_titlebar_inset(ctx: &egui::Context) -> f32 {
   #[cfg(not(target_os = "macos"))]
   {
     let _ = ctx;
+    0.0
+  }
+}
+
+/// 视口尺寸（逻辑像素）。
+pub fn viewport_size(ctx: &egui::Context) -> egui::Vec2 {
+  ctx.input(|input| {
+    input
+      .viewport()
+      .inner_rect
+      .map(|rect| rect.size())
+      .unwrap_or_else(|| ctx.screen_rect().size())
+  })
+}
+
+/// 内容区左右内边距（随窗口宽度缩放）。
+pub fn content_side_inset(viewport_width: f32) -> f32 {
+  if viewport_width < 560.0 {
+    12.0
+  } else if viewport_width < 800.0 {
+    16.0
+  } else {
+    24.0
+  }
+}
+
+/// 主内容区可用宽度（随窗口缩放，宽屏封顶居中）。
+pub fn content_width(viewport_width: f32) -> f32 {
+  let inset = content_side_inset(viewport_width);
+  (viewport_width - inset * 2.0)
+    .clamp(CONTENT_MIN_WIDTH, CONTENT_MAX_WIDTH)
+}
+
+/// 日志面板高度：窗口变高时扩展，变矮时收缩。
+pub fn log_panel_height(viewport_height: f32, bottom_reserve: f32) -> f32 {
+  let fixed_estimate = 520.0 + macos_titlebar_inset_unconditional();
+  let flexible = viewport_height - fixed_estimate - bottom_reserve;
+  flexible.clamp(LOG_MIN_HEIGHT, LOG_MAX_HEIGHT)
+}
+
+fn macos_titlebar_inset_unconditional() -> f32 {
+  #[cfg(target_os = "macos")]
+  {
+    36.0
+  }
+  #[cfg(not(target_os = "macos"))]
+  {
     0.0
   }
 }

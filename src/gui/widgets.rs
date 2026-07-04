@@ -1,6 +1,6 @@
-//! 可复用 UI 组件（macOS 26 Liquid Glass 布局）。
+//! 可复用 UI 组件（macOS 26 Liquid Glass 布局，随窗口自适应）。
 
-use eframe::egui::{self, Button, Color32, CornerRadius, Frame, Margin, RichText, Stroke, TextEdit, Ui};
+use eframe::egui::{self, Button, Color32, CornerRadius, Frame, Layout, Margin, RichText, Stroke, TextEdit, Ui};
 
 use crate::gui::theme;
 
@@ -22,7 +22,7 @@ pub fn navigation_header(ui: &mut Ui, subtitle: &str) {
   });
 }
 
-/// 内容层分组（inset grouped list），不使用 Liquid Glass。
+/// 内容层分组（inset grouped list），宽度随父级拉伸。
 pub fn grouped_section<R>(ui: &mut Ui, title: &str, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
   let dark = ui.style().visuals.dark_mode;
   ui.label(
@@ -37,7 +37,10 @@ pub fn grouped_section<R>(ui: &mut Ui, title: &str, add_contents: impl FnOnce(&m
     .fill(theme::grouped_fill(dark))
     .corner_radius(CornerRadius::same(theme::GROUP_RADIUS))
     .inner_margin(Margin::symmetric(16, 14))
-    .show(ui, |ui| add_contents(ui))
+    .show(ui, |ui| {
+      ui.set_width(ui.available_width());
+      add_contents(ui)
+    })
     .inner
 }
 
@@ -56,38 +59,125 @@ pub fn glass_toolbar_frame(dark: bool) -> Frame {
     })
 }
 
+/// egui 回退工具栏点击结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolbarClick {
+  Start,
+  Cancel,
+  OpenOutput,
+}
+
+/// egui 回退工具栏：宽屏居中，窄屏自动换行。
+pub fn action_toolbar_row(ui: &mut Ui, enabled: bool, running: bool) -> Option<ToolbarClick> {
+  let narrow = ui.available_width() < theme::NARROW_BREAKPOINT;
+  let mut clicked = None;
+
+  ui.with_layout(
+    if narrow {
+      Layout::top_down(egui::Align::Center)
+    } else {
+      Layout::left_to_right(egui::Align::Center)
+    },
+    |ui| {
+      if narrow {
+        if primary_button(ui, "开始转换", enabled).clicked() {
+          clicked = Some(ToolbarClick::Start);
+        }
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+          if secondary_button(ui, "取消", running).clicked() {
+            clicked = Some(ToolbarClick::Cancel);
+          }
+          ui.add_space(8.0);
+          if secondary_button(ui, "打开输出", true).clicked() {
+            clicked = Some(ToolbarClick::OpenOutput);
+          }
+        });
+      } else {
+        ui.horizontal_centered(|ui| {
+          if primary_button(ui, "开始转换", enabled).clicked() {
+            clicked = Some(ToolbarClick::Start);
+          }
+          ui.add_space(8.0);
+          if secondary_button(ui, "取消", running).clicked() {
+            clicked = Some(ToolbarClick::Cancel);
+          }
+          ui.add_space(8.0);
+          if secondary_button(ui, "打开输出", true).clicked() {
+            clicked = Some(ToolbarClick::OpenOutput);
+          }
+        });
+      }
+    },
+  );
+
+  clicked
+}
+
 pub fn folder_field(ui: &mut Ui, label: &str, path: &mut String, enabled: bool) {
   let dark = ui.style().visuals.dark_mode;
-  ui.horizontal(|ui| {
+  let narrow = ui.available_width() < theme::NARROW_BREAKPOINT;
+  const BROWSE_WIDTH: f32 = 88.0;
+
+  if narrow {
     ui.label(
       RichText::new(label)
         .font(theme::section_font())
         .color(theme::primary_label(dark)),
     );
-    ui.add_space(12.0);
-    let edit = TextEdit::singleline(path)
-      .hint_text("选择或拖入文件夹…")
-      .margin(egui::vec2(12.0, 10.0))
-      .desired_width(ui.available_width() - 100.0);
-    ui.add_enabled(enabled, edit);
-    if ui
-      .add_enabled(
-        enabled,
-        Button::new(RichText::new("浏览…").size(13.0))
-          .fill(theme::glass_regular(dark))
-          .stroke(theme::glass_stroke(dark))
-          .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS)),
-      )
-      .clicked()
-    {
-      if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-        *path = folder.display().to_string();
-      }
-    }
-  });
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+      let edit_w = (ui.available_width() - BROWSE_WIDTH - 8.0).max(80.0);
+      let edit = TextEdit::singleline(path)
+        .hint_text("选择或拖入文件夹…")
+        .margin(egui::vec2(12.0, 10.0))
+        .desired_width(edit_w);
+      ui.add_enabled(enabled, edit);
+      browse_button(ui, enabled, path, dark);
+    });
+  } else {
+    ui.horizontal(|ui| {
+      ui.allocate_ui_with_layout(
+        egui::vec2(52.0, ui.spacing().interact_size.y),
+        Layout::left_to_right(egui::Align::Center),
+        |ui| {
+          ui.label(
+            RichText::new(label)
+              .font(theme::section_font())
+              .color(theme::primary_label(dark)),
+          );
+        },
+      );
+      let edit_w = (ui.available_width() - BROWSE_WIDTH - 8.0).max(120.0);
+      let edit = TextEdit::singleline(path)
+        .hint_text("选择或拖入文件夹…")
+        .margin(egui::vec2(12.0, 10.0))
+        .desired_width(edit_w);
+      ui.add_enabled(enabled, edit);
+      browse_button(ui, enabled, path, dark);
+    });
+  }
+
   ui.add_space(4.0);
   ui.separator();
   ui.add_space(4.0);
+}
+
+fn browse_button(ui: &mut Ui, enabled: bool, path: &mut String, dark: bool) {
+  if ui
+    .add_enabled(
+      enabled,
+      Button::new(RichText::new("浏览…").size(13.0))
+        .fill(theme::glass_regular(dark))
+        .stroke(theme::glass_stroke(dark))
+        .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS)),
+    )
+    .clicked()
+  {
+    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+      *path = folder.display().to_string();
+    }
+  }
 }
 
 pub fn primary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Response {
@@ -143,6 +233,66 @@ pub fn quality_preset_chip(ui: &mut Ui, label: &str, value: u8, current: &mut u8
   }
 }
 
+pub fn quality_slider_row(ui: &mut Ui, quality: &mut u8, enabled: bool) {
+  let dark = ui.style().visuals.dark_mode;
+  let narrow = ui.available_width() < theme::NARROW_BREAKPOINT;
+
+  if narrow {
+    ui.label(
+      RichText::new(format!("质量  {}", quality))
+        .font(theme::section_font())
+        .color(theme::primary_label(dark)),
+    );
+    ui.add_space(4.0);
+    let slider_w = ui.available_width().max(120.0);
+    let slider_h = ui.spacing().interact_size.y;
+    ui.add_enabled_ui(enabled, |ui| {
+      ui.add_sized(
+        egui::vec2(slider_w, slider_h),
+        egui::Slider::new(quality, 1..=100).show_value(false),
+      );
+    });
+  } else {
+    ui.horizontal(|ui| {
+      ui.label(
+        RichText::new(format!("质量  {}", quality))
+          .font(theme::section_font())
+          .color(theme::primary_label(dark)),
+      );
+      ui.add_space(8.0);
+      let slider_w = (ui.available_width() - 8.0).max(120.0);
+      let slider_h = ui.spacing().interact_size.y;
+      ui.add_enabled_ui(enabled, |ui| {
+        ui.add_sized(
+          egui::vec2(slider_w, slider_h),
+          egui::Slider::new(quality, 1..=100).show_value(false),
+        );
+      });
+    });
+  }
+}
+
+pub fn quality_presets_row(ui: &mut Ui, quality: &mut u8, enabled: bool) {
+  let narrow = ui.available_width() < theme::NARROW_BREAKPOINT;
+  if narrow {
+    ui.horizontal_wrapped(|ui| {
+      quality_preset_chip(ui, "Web", 75, quality, enabled);
+      ui.add_space(6.0);
+      quality_preset_chip(ui, "默认", 85, quality, enabled);
+      ui.add_space(6.0);
+      quality_preset_chip(ui, "打印", 95, quality, enabled);
+    });
+  } else {
+    ui.horizontal(|ui| {
+      quality_preset_chip(ui, "Web", 75, quality, enabled);
+      ui.add_space(6.0);
+      quality_preset_chip(ui, "默认", 85, quality, enabled);
+      ui.add_space(6.0);
+      quality_preset_chip(ui, "打印", 95, quality, enabled);
+    });
+  }
+}
+
 pub fn status_banner(ui: &mut Ui, text: &str, running: bool) {
   let dark = ui.style().visuals.dark_mode;
   let (fill, fg) = if running {
@@ -160,11 +310,12 @@ pub fn status_banner(ui: &mut Ui, text: &str, running: bool) {
     .inner_margin(Margin::symmetric(14, 10))
     .stroke(theme::separator_stroke(dark))
     .show(ui, |ui| {
+      ui.set_width(ui.available_width());
       ui.label(RichText::new(text).size(13.5).color(fg));
     });
 }
 
-pub fn log_panel(ui: &mut Ui, lines: &[String]) {
+pub fn log_panel(ui: &mut Ui, lines: &[String], max_height: f32) {
   let dark = ui.style().visuals.dark_mode;
   ui.label(
     RichText::new("日志")
@@ -180,10 +331,12 @@ pub fn log_panel(ui: &mut Ui, lines: &[String]) {
     .inner_margin(Margin::symmetric(12, 10))
     .stroke(theme::separator_stroke(dark))
     .show(ui, |ui| {
+      ui.set_width(ui.available_width());
       egui::ScrollArea::vertical()
-        .max_height(160.0)
+        .max_height(max_height)
         .stick_to_bottom(true)
         .show(ui, |ui| {
+          ui.set_width(ui.available_width());
           if lines.is_empty() {
             ui.label(
               RichText::new("转换记录会显示在这里")

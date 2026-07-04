@@ -227,7 +227,7 @@ impl ImgforgeApp {
   }
 
   fn settings_checkboxes(&mut self, ui: &mut egui::Ui, enabled: bool) {
-    let two_col = ui.available_width() > 520.0;
+    let two_col = ui.available_width() > theme::NARROW_BREAKPOINT;
     let options = [
       (&mut self.recursive, "包含子文件夹"),
       (&mut self.preserve_structure, "保留目录结构"),
@@ -303,21 +303,24 @@ impl eframe::App for ImgforgeApp {
       egui::TopBottomPanel::bottom("action_toolbar")
         .frame(widgets::glass_toolbar_frame(dark))
         .show(ctx, |ui| {
-          ui.horizontal(|ui| {
-            if widgets::primary_button(ui, "开始转换", enabled).clicked() {
-              self.start_conversion();
+          if let Some(click) = widgets::action_toolbar_row(ui, enabled, running) {
+            match click {
+              widgets::ToolbarClick::Start => self.start_conversion(),
+              widgets::ToolbarClick::Cancel => self.cancel_conversion(),
+              widgets::ToolbarClick::OpenOutput => self.open_output_folder(),
             }
-            ui.add_space(8.0);
-            if widgets::secondary_button(ui, "取消", running).clicked() {
-              self.cancel_conversion();
-            }
-            ui.add_space(8.0);
-            if widgets::secondary_button(ui, "打开输出", true).clicked() {
-              self.open_output_folder();
-            }
-          });
+          }
         });
     }
+
+    let viewport = theme::viewport_size(ctx);
+    let content_w = theme::content_width(viewport.x);
+    let bottom_reserve = if native_toolbar_active {
+      native::TOOLBAR_HEIGHT + 14.0
+    } else {
+      88.0
+    };
+    let log_height = theme::log_panel_height(viewport.y, bottom_reserve);
 
     egui::CentralPanel::default()
       .frame(egui::Frame::NONE.fill(theme::window_fill(dark)))
@@ -326,8 +329,9 @@ impl eframe::App for ImgforgeApp {
         ScrollArea::vertical()
           .auto_shrink([false, false])
           .show(ui, |ui| {
-            ui.set_max_width(760.0);
             ui.vertical_centered(|ui| {
+              ui.set_width(content_w);
+
               widgets::navigation_header(ui, "批量图片格式转换");
               ui.add_space(20.0);
 
@@ -350,7 +354,7 @@ impl eframe::App for ImgforgeApp {
                   );
                   ui.add_space(8.0);
                   egui::ComboBox::from_id_salt("format")
-                    .width(128.0)
+                    .width(f32::min(128.0, ui.available_width() * 0.35))
                     .selected_text(self.formats[self.format_index].extension().to_uppercase())
                     .show_ui(ui, |ui| {
                       for (idx, format) in self.formats.iter().enumerate() {
@@ -364,27 +368,10 @@ impl eframe::App for ImgforgeApp {
                 });
 
                 ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                  ui.label(
-                    RichText::new(format!("质量  {}", self.quality))
-                      .font(theme::section_font())
-                      .color(theme::primary_label(dark)),
-                  );
-                  ui.add_space(8.0);
-                  ui.add_enabled(
-                    enabled,
-                    egui::Slider::new(&mut self.quality, 1..=100).show_value(false),
-                  );
-                });
+                widgets::quality_slider_row(ui, &mut self.quality, enabled);
 
                 ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                  widgets::quality_preset_chip(ui, "Web", 75, &mut self.quality, enabled);
-                  ui.add_space(6.0);
-                  widgets::quality_preset_chip(ui, "默认", 85, &mut self.quality, enabled);
-                  ui.add_space(6.0);
-                  widgets::quality_preset_chip(ui, "打印", 95, &mut self.quality, enabled);
-                });
+                widgets::quality_presets_row(ui, &mut self.quality, enabled);
 
                 ui.add_space(10.0);
                 self.settings_checkboxes(ui, enabled);
@@ -393,7 +380,9 @@ impl eframe::App for ImgforgeApp {
               ui.add_space(16.0);
 
               if running {
-                ui.add(
+                let bar_h = ui.spacing().interact_size.y;
+                ui.add_sized(
+                  egui::vec2(ui.available_width(), bar_h),
                   egui::ProgressBar::new(
                     match &self.state {
                       RunState::Running { progress, .. } => progress.fraction(),
@@ -417,12 +406,8 @@ impl eframe::App for ImgforgeApp {
 
               widgets::status_banner(ui, &self.status, running);
               ui.add_space(16.0);
-              widgets::log_panel(ui, &self.log_lines);
-              ui.add_space(if native_toolbar_active {
-                native::TOOLBAR_HEIGHT + 14.0
-              } else {
-                88.0
-              });
+              widgets::log_panel(ui, &self.log_lines, log_height);
+              ui.add_space(bottom_reserve);
             });
           });
       });
