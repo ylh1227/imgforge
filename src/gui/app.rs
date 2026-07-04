@@ -14,6 +14,23 @@ use crate::gui::{fonts, native, theme, widgets};
 use crate::job::run_batch;
 use crate::ui::progress::{GuiProgress, ProgressReporter};
 use crate::ui::report::ProcessReport;
+use crate::review::ui::ReviewPanelHost;
+
+/// 主应用 → 评审面板的转换队列上下文。
+struct AppReviewHost<'a> {
+  queue: &'a [PathBuf],
+  output_dir: &'a str,
+}
+
+impl ReviewPanelHost for AppReviewHost<'_> {
+  fn conversion_queue_paths(&self) -> &[PathBuf] {
+    self.queue
+  }
+
+  fn output_directory(&self) -> &str {
+    self.output_dir
+  }
+}
 
 enum RunState {
   Idle,
@@ -29,8 +46,18 @@ enum WorkerMessage {
   Finished(Result<ProcessReport, String>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppMode {
+  Convert,
+  Review,
+}
+
 /// 主窗口应用。
 pub struct ImgforgeApp {
+  mode: AppMode,
+  review_panel: Option<crate::review::ui::ReviewPanel>,
+  review_queue: Vec<PathBuf>,
+  burn_review_annotations: bool,
   input_dir: String,
   output_dir: String,
   format_index: usize,
@@ -53,7 +80,12 @@ impl ImgforgeApp {
     theme::apply(&cc.egui_ctx);
 
     let formats = ImageFormat::all_supported();
+    let review_panel = crate::review::ui::ReviewPanel::new().ok();
     Self {
+      mode: AppMode::Convert,
+      review_panel,
+      review_queue: Vec::new(),
+      burn_review_annotations: false,
       input_dir: String::new(),
       output_dir: String::from("./output"),
       format_index: formats
@@ -116,6 +148,13 @@ impl ImgforgeApp {
     } else {
       MetadataPolicy::Preserve
     };
+    if !self.review_queue.is_empty() {
+      config.explicit_inputs = self.review_queue.clone();
+      if let Some(parent) = self.review_queue[0].parent() {
+        config.input_dir = parent.to_path_buf();
+      }
+    }
+    config.burn_review_annotations = self.burn_review_annotations;
     config.validate().map_err(|e| e.to_string())?;
     Ok(config)
   }
@@ -299,7 +338,7 @@ impl eframe::App for ImgforgeApp {
       }
     }
 
-    if !native_toolbar_active {
+    if self.mode == AppMode::Convert && !native_toolbar_active {
       egui::TopBottomPanel::bottom("action_toolbar")
         .frame(widgets::glass_toolbar_frame(dark))
         .show(ctx, |ui| {
@@ -326,6 +365,43 @@ impl eframe::App for ImgforgeApp {
       .frame(egui::Frame::NONE.fill(theme::window_fill(dark)))
       .show(ctx, |ui| {
         ui.add_space(theme::macos_titlebar_inset(ctx));
+
+        ui.horizontal(|ui| {
+          ui.selectable_value(&mut self.mode, AppMode::Convert, "格式转换");
+          if self.review_panel.is_some() {
+            ui.selectable_value(&mut self.mode, AppMode::Review, "图片评审");
+          }
+        });
+        ui.add_space(8.0);
+
+        if self.mode == AppMode::Review {
+          if let Some(panel) = &mut self.review_panel {
+            let host = AppReviewHost {
+              queue: &self.review_queue,
+              output_dir: &self.output_dir,
+            };
+            panel.ui(ctx, ui, &host);
+            let output = panel.take_output();
+            if !output.enqueue_approved.is_empty() {
+              self.review_queue = output.enqueue_approved;
+              self.mode = AppMode::Convert;
+              self.status = format!(
+                "已从评审导入 {} 张「通过」图片，可开始转换",
+                self.review_queue.len()
+              );
+              self.push_log(self.status.clone());
+            } else if output.switch_to_convert {
+              self.mode = AppMode::Convert;
+              self.status = output.status_message.clone();
+            } else if !output.status_message.is_empty() {
+              self.status = output.status_message;
+            }
+          } else {
+            ui.label("评审模块初始化失败");
+          }
+          return;
+        }
+
         ScrollArea::vertical()
           .auto_shrink([false, false])
           .show(ui, |ui| {
@@ -334,6 +410,55 @@ impl eframe::App for ImgforgeApp {
 
               widgets::navigation_header(ui, "批量图片格式转换");
               ui.add_space(20.0);
+
+              if !self.review_queue.is_empty() {
+                widgets::grouped_section(ui, "评审队列", |ui| {
+                  ui.label(format!(
+                    "已从评审导入 {} 张「通过」图片，将仅转换这些文件",
+                    self.review_queue.len()
+                  ));
+                  ui.horizontal_wrapped(|ui| {
+                    for path in self.review_queue.iter().take(8) {
+                      let label = if let Some(panel) = &self.review_panel {
+                        panel
+                          .status_for_path(path)
+                          .map(|s| format!("[{}] {}", s.label(), path.file_name().and_then(|n| n.to_str()).unwrap_or("")))
+                          .unwrap_or_else(|| path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string())
+                      } else {
+                        path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string()
+                      };
+                      ui.label(RichText::new(label).size(12.0).color(theme::secondary_label(dark)));
+                    }
+                    if self.review_queue.len() > 8 {
+                      ui.label(format!("…等 {} 张", self.review_queue.len()));
+                    }
+                  });
+                  ui.horizontal(|ui| {
+                    ui.add_enabled(enabled, egui::Checkbox::new(&mut self.burn_review_annotations, "导出时叠加标注"));
+                    if ui.button("清空评审队列").clicked() {
+                      self.review_queue.clear();
+                      self.status = "已清空评审导入队列".into();
+                    }
+                    if ui
+                      .add_enabled(enabled && !self.review_queue.is_empty(), egui::Button::new("发送到评审"))
+                      .clicked()
+                    {
+                      if let Some(panel) = &mut self.review_panel {
+                        panel.schedule_import_from_queue(
+                          self.review_queue.clone(),
+                          "转换队列",
+                        );
+                        self.mode = AppMode::Review;
+                        self.status = format!(
+                          "已将 {} 张图片发送到评审模块",
+                          self.review_queue.len()
+                        );
+                      }
+                    }
+                  });
+                });
+                ui.add_space(16.0);
+              }
 
               widgets::grouped_section(ui, "文件夹", |ui| {
                 widgets::folder_field(ui, "输入", &mut self.input_dir, enabled);

@@ -136,6 +136,50 @@ pub fn scan_inputs(options: &ScanOptions) -> AppResult<Vec<ConversionTask>> {
   Ok(tasks)
 }
 
+/// 从显式文件列表构建转换任务（评审「通过」队列联动）。
+pub fn tasks_from_paths(
+  paths: &[PathBuf],
+  output_dir: &Path,
+  target_format: ImageFormat,
+  overwrite: bool,
+) -> AppResult<Vec<ConversionTask>> {
+  let output_root = paths::canonicalize(output_dir);
+  let mut tasks = Vec::new();
+  for path in paths {
+    if !path.is_file() {
+      continue;
+    }
+    let ext = path
+      .extension()
+      .and_then(|e| e.to_str())
+      .unwrap_or("")
+      .to_ascii_lowercase();
+    if ImageFormat::from_extension(&ext).is_none() {
+      continue;
+    }
+    let size = std::fs::metadata(path)
+      .map_err(|e| AppError::io(path, e))?
+      .len();
+    let source = paths::canonicalize(path);
+    let stem = path
+      .file_stem()
+      .map(|s| s.to_string_lossy().to_string())
+      .unwrap_or_else(|| "output".to_string());
+    let output = output_root.join(format!("{stem}.{}", target_format.extension()));
+    ensure_safe_relative(&output)?;
+    if !overwrite && output.exists() {
+      continue;
+    }
+    tasks.push(ConversionTask::new(source, output, size));
+  }
+  if tasks.is_empty() {
+    return Err(AppError::Config(
+      "explicit input list contains no convertible images".into(),
+    ));
+  }
+  Ok(tasks)
+}
+
 fn resolve_output_path(
   input_root: &Path,
   source: &Path,

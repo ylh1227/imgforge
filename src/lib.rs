@@ -10,3 +10,6 @@ pub mod ui;
 
 #[cfg(feature = "gui")]
 pub mod gui;
+
+#[cfg(feature = "review")]
+pub mod review;

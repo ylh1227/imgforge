@@ -33,7 +33,16 @@ pub async fn run_batch(
     rename_template: config.rename_template.clone(),
   };
 
-  let mut tasks = crate::io::scanner::scan_inputs(&scan_options)?;
+  let mut tasks = if !config.explicit_inputs.is_empty() {
+    crate::io::scanner::tasks_from_paths(
+      &config.explicit_inputs,
+      &config.output_dir,
+      config.target_format,
+      config.overwrite,
+    )?
+  } else {
+    crate::io::scanner::scan_inputs(&scan_options)?
+  };
 
   #[cfg(feature = "thumbnails")]
   if !config.thumbnails.is_empty() {

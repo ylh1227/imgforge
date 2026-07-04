@@ -196,6 +196,13 @@ async fn process_single_task(
 
   if !config.dry_run {
     atomic_write(&task.output_path, &encoded).await?;
+    #[cfg(feature = "review")]
+    if config.burn_review_annotations {
+      use crate::review::ReviewConversionBridge;
+      if let Ok(service) = crate::review::ReviewService::open() {
+        let _ = service.burn_annotations_for_export(&task.input_path, &task.output_path);
+      }
+    }
   }
 
   Ok(TaskOutcome { output_size })

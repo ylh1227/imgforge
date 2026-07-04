@@ -37,6 +37,12 @@ pub struct AppConfig {
   pub watermark: WatermarkOptions,
   /// 多尺寸缩略图规格（需 thumbnails feature）。
   pub thumbnails: Vec<ThumbnailSpec>,
+  /// 若非空，仅转换这些文件（评审联动队列），跳过目录扫描。
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub explicit_inputs: Vec<PathBuf>,
+  /// 导出时叠加评审标注到输出图（需 review feature）。
+  #[serde(default)]
+  pub burn_review_annotations: bool,
 }
 
 impl Default for AppConfig {
@@ -67,6 +73,8 @@ impl Default for AppConfig {
       rename_template: None,
       watermark: WatermarkOptions::default(),
       thumbnails: Vec::new(),
+      explicit_inputs: Vec::new(),
+      burn_review_annotations: false,
     }
   }
 }

@@ -4,7 +4,7 @@ mod app;
 mod fonts;
 mod macos;
 mod native;
-mod theme;
-mod widgets;
+pub mod theme;
+pub mod widgets;
 
 pub use app::ImgforgeApp;
