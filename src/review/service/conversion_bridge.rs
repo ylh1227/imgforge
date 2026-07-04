@@ -20,11 +20,12 @@ pub trait ReviewConversionBridge {
   /// 查询单文件评审状态（转换列表展示标签）。
   fn status_for_path(&self, path: &Path) -> ReviewResult<Option<ReviewStatus>>;
 
-  /// 导出时可选：将标注烧录到输出图。
+  /// 导出时可选：将标注烧录到已转换的输出图，并按指定质量重新编码。
   fn burn_annotations_for_export(
     &self,
     source: &Path,
     output: &Path,
+    quality: u8,
   ) -> ReviewResult<()>;
 
   /// 导出标注 JSON 侧载文件（同名 `.json`）。

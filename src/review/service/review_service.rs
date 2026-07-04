@@ -218,10 +218,17 @@ impl ReviewConversionBridge for ReviewService {
     self.repo.status_for_path(path)
   }
 
-  fn burn_annotations_for_export(&self, source: &Path, output: &Path) -> ReviewResult<()> {
+  fn burn_annotations_for_export(
+    &self,
+    source: &Path,
+    output: &Path,
+    quality: u8,
+  ) -> ReviewResult<()> {
+    use image::DynamicImage;
+    use crate::core::types::{ImageFormat, Quality};
+    use crate::processing::backends::native_backend::encode_dynamic_image;
+
     let path_str = source.to_string_lossy();
-    let status = self.repo.status_for_path(source)?;
-    let _ = status;
     let image_id = self
       .repo
       .connection()
@@ -235,14 +242,26 @@ impl ReviewConversionBridge for ReviewService {
         id: 0,
       })?;
     let annotations = self.repo.list_annotations(image_id)?;
-    let mut img = image::open(source)
+    let img = image::open(output)
       .map_err(|e| ReviewError::ImageDecode {
-        path: source.to_path_buf(),
+        path: output.to_path_buf(),
         source: e,
-      })?
-      .to_rgba8();
-    crate::review::domain::burn_annotations_onto(&mut img, &annotations);
-    img.save(output).map_err(ReviewError::from)?;
+      })?;
+    let mut rgba = img.to_rgba8();
+    crate::review::domain::burn_annotations_onto(&mut rgba, &annotations);
+
+    let target_format = output
+      .extension()
+      .and_then(|ext| ext.to_str())
+      .and_then(ImageFormat::from_extension)
+      .unwrap_or(ImageFormat::Jpeg);
+    let encoded = encode_dynamic_image(
+      &DynamicImage::ImageRgba8(rgba),
+      target_format,
+      Quality::new(quality).unwrap_or(Quality::DEFAULT),
+    )
+    .map_err(|e| ReviewError::Message(e.to_string()))?;
+    std::fs::write(output, encoded)?;
     Ok(())
   }
 

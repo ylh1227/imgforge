@@ -200,7 +200,11 @@ async fn process_single_task(
     if config.burn_review_annotations {
       use crate::review::ReviewConversionBridge;
       if let Ok(service) = crate::review::ReviewService::open() {
-        let _ = service.burn_annotations_for_export(&task.input_path, &task.output_path);
+        let _ = service.burn_annotations_for_export(
+          &task.input_path,
+          &task.output_path,
+          config.quality.value(),
+        );
       }
     }
   }

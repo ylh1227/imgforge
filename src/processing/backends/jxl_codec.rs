@@ -57,17 +57,26 @@ pub fn decode_jpegxl(bytes: &[u8]) -> AppResult<DynamicImage> {
 }
 
 /// 使用 zune-jpegxl 编码 JPEG XL。
-pub fn encode_jpegxl(image: &DynamicImage, _quality: u8) -> AppResult<Vec<u8>> {
+pub fn encode_jpegxl(image: &DynamicImage, quality: u8) -> AppResult<Vec<u8>> {
   let rgba = image.to_rgba8();
   let (width, height) = rgba.dimensions();
   let raw = rgba.into_raw();
 
+  let effort = if quality >= 95 {
+    7
+  } else if quality >= 85 {
+    5
+  } else {
+    4
+  };
   let options = EncoderOptions::new(
     width as usize,
     height as usize,
     ColorSpace::RGB,
     BitDepth::Eight,
-  );
+  )
+  .set_quality(quality)
+  .set_effort(effort);
   let encoder = JxlSimpleEncoder::new(&raw, options);
   let mut output = Vec::new();
   encoder

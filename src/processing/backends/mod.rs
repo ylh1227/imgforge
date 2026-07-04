@@ -1,6 +1,7 @@
 //! 图像处理后端抽象与实现。
 
 pub mod native_backend;
+pub mod webp_codec;
 
 #[cfg(feature = "avif")]
 pub mod avif_codec;

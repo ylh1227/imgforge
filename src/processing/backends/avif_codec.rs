@@ -14,7 +14,7 @@ pub fn encode_avif(image: &DynamicImage, quality: u8) -> AppResult<Vec<u8>> {
   let img = Img::new(pixels, width as usize, height as usize);
   let encoder = Encoder::new()
     .with_quality(quality as f32)
-    .with_speed(6);
+    .with_speed(avif_speed_for_quality(quality));
 
   let encoded = encoder
     .encode_rgba(img)
@@ -24,6 +24,16 @@ pub fn encode_avif(image: &DynamicImage, quality: u8) -> AppResult<Vec<u8>> {
     })?;
 
   Ok(encoded.avif_file)
+}
+
+/// 质量越高编码越慢、细节保留越好（ravif speed 1=最慢最好，10=最快）。
+fn avif_speed_for_quality(quality: u8) -> u8 {
+  match quality {
+    95..=100 => 2,
+    85..=94 => 4,
+    70..=84 => 6,
+    _ => 8,
+  }
 }
 
 /// 解码 AVIF 输入（feature: avif-decode，需 cmake/libaom）。
