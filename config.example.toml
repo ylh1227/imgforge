@@ -1,0 +1,49 @@
+# imgforge 配置文件示例
+# 优先级：命令行 > 环境变量 > 配置文件 > 默认值
+
+input_dir = "./photos"
+output_dir = "./output"
+target_format = "webp"
+quality = 85
+concurrency = 8
+recursive = true
+overwrite = false
+preserve_structure = true
+dry_run = false
+verbose = false
+
+[resize]
+width = 1920
+height = 1080
+mode = "fit"
+
+[adjust]
+brightness = 0.0
+contrast = 0.0
+sharpen = 0.0
+
+# 增量处理（需 --features incremental）
+incremental = false
+
+# 输出文件名模板（需 --features rename）
+# rename_template = "{stem}_optimized"
+
+# 多尺寸缩略图（需 --features thumbnails）
+# thumbnails = [{ width = 256, suffix = "_sm" }, { width = 512, height = 384, suffix = "_md" }]
+
+[watermark]
+# text = "© imgforge"
+# image_path = "./logo.png"
+# font_path = "/System/Library/Fonts/Helvetica.ttc"   # macOS / Linux
+# font_path = "C:\\Windows\\Fonts\\arial.ttf"           # Windows
+opacity = 0.5
+font_size = 24.0
+position = "bottom_right"
+margin = 16
+
+metadata_policy = "preserve"
+transform = "none"
+extensions = []
+
+# min_size = 1024
+# max_size = 10485760

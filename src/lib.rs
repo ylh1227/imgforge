@@ -1,0 +1,12 @@
+//! imgforge 核心库：图像处理流水线、调度与配置。
+
+pub mod config;
+pub mod core;
+pub mod io;
+pub mod job;
+pub mod processing;
+pub mod scheduler;
+pub mod ui;
+
+#[cfg(feature = "gui")]
+pub mod gui;

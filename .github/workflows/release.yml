@@ -1,0 +1,182 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RELEASE_FEATURES: incremental,rename,thumbnails,watermark,avif,jpegxl
+
+jobs:
+  build-cli:
+    name: cli-${{ matrix.artifact_name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: imgforge-windows-x64
+            binary_name: imgforge.exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: imgforge-macos-arm64
+            binary_name: imgforge
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: imgforge-macos-x64
+            binary_name: imgforge
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build CLI
+        run: cargo build --release --target ${{ matrix.target }} --features "${{ env.RELEASE_FEATURES }}"
+
+      - name: Stage CLI distribution
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.value }}"
+          STAGE="dist/imgforge-${VERSION}-${{ matrix.artifact_name }}"
+          mkdir -p "$STAGE"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "$STAGE/"
+          cp config.example.toml scripts/QUICKSTART.txt README.md LICENSE "$STAGE/"
+          if [ "${{ matrix.binary_name }}" != "imgforge.exe" ]; then
+            chmod +x "$STAGE/${{ matrix.binary_name }}"
+          fi
+          echo "STAGE=$STAGE" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Create Windows zip
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = "dist/imgforge-$env:VERSION-${{ matrix.artifact_name }}.zip"
+          Compress-Archive -Path "$env:STAGE\*" -DestinationPath $archive
+          echo "ARCHIVE=$archive" >> $env:GITHUB_ENV
+
+      - name: Create macOS tarball
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ARCHIVE="dist/imgforge-${VERSION}-${{ matrix.artifact_name }}.tar.gz"
+          tar -czf "$ARCHIVE" -C dist "$(basename "$STAGE")"
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ env.ARCHIVE }}
+
+  build-gui:
+    name: gui-${{ matrix.artifact_name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: imgforge-windows-x64-app
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: imgforge-macos-arm64-app
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: imgforge-macos-x64-app
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build GUI
+        run: cargo build --release --target ${{ matrix.target }} --features gui --bin imgforge-app
+
+      - name: Package Windows GUI
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $VERSION = "${{ steps.version.outputs.value }}"
+          $STAGE = "dist/imgforge-$VERSION-${{ matrix.artifact_name }}"
+          New-Item -ItemType Directory -Path $STAGE -Force | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/imgforge-app.exe" "$STAGE/ImgForge.exe"
+          Copy-Item config.example.toml, scripts/QUICKSTART.txt, README.md, LICENSE $STAGE
+          $archive = "dist/imgforge-$VERSION-${{ matrix.artifact_name }}.zip"
+          Compress-Archive -Path "$STAGE/*" -DestinationPath $archive
+          echo "ARCHIVE=$archive" >> $env:GITHUB_ENV
+
+      - name: Package macOS GUI app bundle
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.value }}"
+          STAGE="dist/imgforge-${VERSION}-${{ matrix.artifact_name }}"
+          APP_PATH="$STAGE/ImgForge.app"
+          mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
+          cp "target/${{ matrix.target }}/release/imgforge-app" "$APP_PATH/Contents/MacOS/imgforge-app"
+          chmod +x "$APP_PATH/Contents/MacOS/imgforge-app"
+          sed "s/VERSION/${VERSION}/g" scripts/Info.plist.template > "$APP_PATH/Contents/Info.plist"
+          cp config.example.toml scripts/QUICKSTART.txt README.md LICENSE "$APP_PATH/Contents/Resources/"
+          ARCHIVE="dist/imgforge-${VERSION}-${{ matrix.artifact_name }}.tar.gz"
+          tar -czf "$ARCHIVE" -C "$STAGE" ImgForge.app
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ env.ARCHIVE }}
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-cli, build-gui]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: imgforge v${{ steps.version.outputs.value }}
+          generate_release_notes: true
+          files: artifacts/*

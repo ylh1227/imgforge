@@ -1,0 +1,38 @@
+imgforge — 批量图片格式转换工具
+================================
+
+无需安装 Rust，解压后即可使用。
+
+快速开始
+--------
+
+Windows (PowerShell):
+  .\imgforge.exe -i .\photos -o .\output -f webp
+  .\imgforge.exe doctor
+
+macOS / Linux (终端):
+  chmod +x imgforge
+  ./imgforge -i ./photos -o ./output -f webp
+  ./imgforge doctor
+
+常用参数
+--------
+  -i, --input      输入目录
+  -o, --output     输出目录
+  -f, --format     目标格式 (jpg, png, webp, bmp, tiff, gif, avif, jxl)
+  -q, --quality    质量 1-100
+  -j, --concurrency  并发线程数
+  --overwrite      覆盖已存在文件
+  --dry-run        预览，不写入
+
+配置文件
+--------
+  复制 config.example.toml 为 imgforge.toml 后编辑，运行：
+  imgforge -c imgforge.toml -i ./photos -o ./output
+
+macOS 首次运行
+--------------
+若系统提示「无法验证开发者」，在终端执行：
+  xattr -dr com.apple.quarantine ./imgforge
+
+更多说明见 README.md 或项目主页。
