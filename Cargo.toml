@@ -1,6 +1,6 @@
 [package]
 name = "imgforge"
-version = "0.1.4"
+version = "0.1.6"
 edition = "2021"
 rust-version = "1.85"
 description = "Cross-platform high-performance batch image format converter"
@@ -87,6 +87,31 @@ eframe = { version = "0.31", optional = true, default-features = true, features 
 egui = { version = "0.31", optional = true }
 rfd = { version = "0.15", optional = true }
 open = { version = "5", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSArray",
+  "NSGeometry",
+  "NSString",
+  "NSProcessInfo",
+  "objc2-core-foundation",
+] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "NSGlassEffectView",
+  "NSResponder",
+  "NSView",
+  "NSButton",
+  "NSButtonCell",
+  "NSStackView",
+  "NSUserInterfaceLayout",
+  "NSControl",
+  "NSCell",
+  "NSColor",
+] }
+raw-window-handle = "0.6"
 
 [profile.release]
 lto = "thin"

@@ -2187,7 +2187,7 @@ dependencies = [
 
 [[package]]
 name = "imgforge"
-version = "0.1.4"
+version = "0.1.6"
 dependencies = [
  "ab_glyph",
  "avif-decode",
@@ -2209,8 +2209,12 @@ dependencies = [
  "jxl-oxide",
  "kamadak-exif",
  "num_cpus",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "open",
  "ravif",
+ "raw-window-handle",
  "rayon",
  "rfd",
  "rgb",

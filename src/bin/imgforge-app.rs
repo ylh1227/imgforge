@@ -18,13 +18,14 @@ fn main() -> eframe::Result<()> {
 
 fn app_viewport() -> egui::ViewportBuilder {
   let builder = egui::ViewportBuilder::default()
-    .with_inner_size([820.0, 720.0])
-    .with_min_inner_size([680.0, 560.0])
+    .with_inner_size([840.0, 740.0])
+    .with_min_inner_size([700.0, 580.0])
     .with_title("ImgForge")
     .with_app_id("com.imgforge.app");
 
   #[cfg(target_os = "macos")]
   {
+    // 全尺寸内容视图 + 系统标题栏；底部操作栏由 AppKit NSGlassEffectView 原生层渲染
     return builder
       .with_fullsize_content_view(true)
       .with_titlebar_shown(true)

@@ -2,6 +2,8 @@
 
 mod app;
 mod fonts;
+mod macos;
+mod native;
 mod theme;
 mod widgets;
 

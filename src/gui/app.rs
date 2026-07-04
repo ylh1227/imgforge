@@ -10,7 +10,7 @@ use eframe::egui::{self, RichText, ScrollArea};
 
 use crate::config::AppConfig;
 use crate::core::types::{ImageFormat, MetadataPolicy, Quality};
-use crate::gui::{fonts, theme, widgets};
+use crate::gui::{fonts, native, theme, widgets};
 use crate::job::run_batch;
 use crate::ui::progress::{GuiProgress, ProgressReporter};
 use crate::ui::report::ProcessReport;
@@ -44,6 +44,7 @@ pub struct ImgforgeApp {
   log_lines: Vec<String>,
   state: RunState,
   worker_rx: Option<Receiver<WorkerMessage>>,
+  native_toolbar: Option<native::NativeGlassToolbar>,
 }
 
 impl ImgforgeApp {
@@ -69,6 +70,7 @@ impl ImgforgeApp {
       log_lines: Vec::new(),
       state: RunState::Idle,
       worker_rx: None,
+      native_toolbar: None,
     }
   }
 
@@ -248,7 +250,7 @@ impl ImgforgeApp {
 }
 
 impl eframe::App for ImgforgeApp {
-  fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+  fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
     self.poll_worker();
 
     let running = self.is_running();
@@ -275,19 +277,61 @@ impl eframe::App for ImgforgeApp {
       }
     });
 
+    let dark = ctx.style().visuals.dark_mode;
+
+    if self.native_toolbar.is_none() {
+      self.native_toolbar = native::NativeGlassToolbar::try_install(frame);
+    }
+
+    let native_toolbar_active = self
+      .native_toolbar
+      .as_ref()
+      .is_some_and(|toolbar| toolbar.is_active());
+
+    if let Some(toolbar) = &mut self.native_toolbar {
+      toolbar.sync(enabled, running);
+      for action in toolbar.drain_actions() {
+        match action {
+          native::ToolbarAction::Start => self.start_conversion(),
+          native::ToolbarAction::Cancel => self.cancel_conversion(),
+          native::ToolbarAction::OpenOutput => self.open_output_folder(),
+        }
+      }
+    }
+
+    if !native_toolbar_active {
+      egui::TopBottomPanel::bottom("action_toolbar")
+        .frame(widgets::glass_toolbar_frame(dark))
+        .show(ctx, |ui| {
+          ui.horizontal(|ui| {
+            if widgets::primary_button(ui, "开始转换", enabled).clicked() {
+              self.start_conversion();
+            }
+            ui.add_space(8.0);
+            if widgets::secondary_button(ui, "取消", running).clicked() {
+              self.cancel_conversion();
+            }
+            ui.add_space(8.0);
+            if widgets::secondary_button(ui, "打开输出", true).clicked() {
+              self.open_output_folder();
+            }
+          });
+        });
+    }
+
     egui::CentralPanel::default()
-      .frame(egui::Frame::NONE.fill(theme::window_fill(ctx.style().visuals.dark_mode)))
+      .frame(egui::Frame::NONE.fill(theme::window_fill(dark)))
       .show(ctx, |ui| {
+        ui.add_space(theme::macos_titlebar_inset(ctx));
         ScrollArea::vertical()
           .auto_shrink([false, false])
           .show(ui, |ui| {
             ui.set_max_width(760.0);
             ui.vertical_centered(|ui| {
-              ui.add_space(4.0);
-              widgets::header(ui, "批量图片格式转换");
-              ui.add_space(18.0);
+              widgets::navigation_header(ui, "批量图片格式转换");
+              ui.add_space(20.0);
 
-              widgets::section_card(ui, "文件夹", |ui| {
+              widgets::grouped_section(ui, "文件夹", |ui| {
                 widgets::folder_field(ui, "输入", &mut self.input_dir, enabled);
                 widgets::folder_field(ui, "输出", &mut self.output_dir, enabled);
                 if self.input_dir.trim().is_empty() {
@@ -295,14 +339,18 @@ impl eframe::App for ImgforgeApp {
                 }
               });
 
-              ui.add_space(14.0);
+              ui.add_space(16.0);
 
-              widgets::section_card(ui, "转换设置", |ui| {
+              widgets::grouped_section(ui, "转换设置", |ui| {
                 ui.horizontal(|ui| {
-                  ui.label(RichText::new("目标格式").size(13.0));
+                  ui.label(
+                    RichText::new("目标格式")
+                      .font(theme::section_font())
+                      .color(theme::primary_label(dark)),
+                  );
                   ui.add_space(8.0);
                   egui::ComboBox::from_id_salt("format")
-                    .width(120.0)
+                    .width(128.0)
                     .selected_text(self.formats[self.format_index].extension().to_uppercase())
                     .show_ui(ui, |ui| {
                       for (idx, format) in self.formats.iter().enumerate() {
@@ -315,9 +363,13 @@ impl eframe::App for ImgforgeApp {
                     });
                 });
 
-                ui.add_space(8.0);
+                ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                  ui.label(RichText::new(format!("质量  {}", self.quality)).size(13.0));
+                  ui.label(
+                    RichText::new(format!("质量  {}", self.quality))
+                      .font(theme::section_font())
+                      .color(theme::primary_label(dark)),
+                  );
                   ui.add_space(8.0);
                   ui.add_enabled(
                     enabled,
@@ -326,10 +378,19 @@ impl eframe::App for ImgforgeApp {
                 });
 
                 ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                  widgets::quality_preset_chip(ui, "Web", 75, &mut self.quality, enabled);
+                  ui.add_space(6.0);
+                  widgets::quality_preset_chip(ui, "默认", 85, &mut self.quality, enabled);
+                  ui.add_space(6.0);
+                  widgets::quality_preset_chip(ui, "打印", 95, &mut self.quality, enabled);
+                });
+
+                ui.add_space(10.0);
                 self.settings_checkboxes(ui, enabled);
               });
 
-              ui.add_space(14.0);
+              ui.add_space(16.0);
 
               if running {
                 ui.add(
@@ -349,31 +410,19 @@ impl eframe::App for ImgforgeApp {
                 ui.label(
                   RichText::new(format!("压缩率约 {ratio:.1}%"))
                     .size(13.0)
-                    .color(theme::secondary_label(ui.style().visuals.dark_mode)),
+                    .color(theme::secondary_label(dark)),
                 );
                 ui.add_space(8.0);
               }
 
               widgets::status_banner(ui, &self.status, running);
-              ui.add_space(14.0);
-
-              ui.horizontal(|ui| {
-                if widgets::primary_button(ui, "开始转换", enabled).clicked() {
-                  self.start_conversion();
-                }
-                ui.add_space(8.0);
-                if widgets::secondary_button(ui, "取消", running).clicked() {
-                  self.cancel_conversion();
-                }
-                ui.add_space(8.0);
-                if widgets::secondary_button(ui, "打开输出", true).clicked() {
-                  self.open_output_folder();
-                }
-              });
-
               ui.add_space(16.0);
               widgets::log_panel(ui, &self.log_lines);
-              ui.add_space(12.0);
+              ui.add_space(if native_toolbar_active {
+                native::TOOLBAR_HEIGHT + 14.0
+              } else {
+                88.0
+              });
             });
           });
       });
