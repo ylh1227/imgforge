@@ -86,11 +86,26 @@ pub struct NativeGlassToolbar {
   _content: Retained<NSView>,
   stack: Retained<NSStackView>,
   parent: Retained<NSView>,
+  last_parent_size: NSSize,
+  last_enabled: Option<bool>,
+  last_running: Option<bool>,
 }
 
 impl NativeGlassToolbar {
   /// 在 winit 内容视图上挂载原生玻璃工具栏；不可用时返回 `None`（回退 egui 绘制）。
   pub fn try_install(frame: &Frame) -> Option<Self> {
+    if !native_toolbar_enabled() {
+      tracing::debug!(
+        "native toolbar disabled by default; set IMGFORGE_NATIVE_TOOLBAR=1 to enable"
+      );
+      return None;
+    }
+
+    if native_toolbar_disabled() {
+      tracing::debug!("native toolbar disabled via IMGFORGE_DISABLE_NATIVE_TOOLBAR");
+      return None;
+    }
+
     let mtm = MainThreadMarker::new()?;
     if !liquid_glass_available(mtm) {
       tracing::debug!("NSGlassEffectView unavailable; using egui toolbar fallback");
@@ -144,7 +159,6 @@ impl NativeGlassToolbar {
 
     let content = NSView::new(mtm);
     content.addSubview(&stack);
-    center_stack_in_toolbar(&stack, &content);
 
     let glass = NSGlassEffectView::initWithFrame(
       NSGlassEffectView::alloc(mtm),
@@ -156,11 +170,8 @@ impl NativeGlassToolbar {
     pin_child_fill(&content, &glass);
 
     parent.addSubview(&glass);
-    layout_glass(&glass, &parent);
 
-    tracing::info!("installed native NSGlassEffectView toolbar");
-
-    Some(Self {
+    let mut toolbar = Self {
       active: true,
       action_rx,
       _target: target,
@@ -171,27 +182,62 @@ impl NativeGlassToolbar {
       _content: content,
       stack,
       parent,
-    })
+      last_parent_size: NSSize::new(0.0, 0.0),
+      last_enabled: None,
+      last_running: None,
+    };
+    toolbar.layout_if_needed();
+    toolbar.sync(true, false);
+
+    tracing::info!("installed native NSGlassEffectView toolbar");
+
+    Some(toolbar)
   }
 
   pub fn is_active(&self) -> bool {
     self.active
   }
 
-  pub fn sync(&self, enabled: bool, running: bool) {
-    self.btn_start.setEnabled(enabled);
-    self.btn_cancel.setEnabled(running);
+  /// 更新按钮状态；仅在状态或窗口尺寸变化时触发布局，避免每帧 setFrame 导致卡死。
+  pub fn sync(&mut self, enabled: bool, running: bool) {
+    if self.last_enabled != Some(enabled) {
+      self.btn_start.setEnabled(enabled);
+      self.last_enabled = Some(enabled);
+    }
+    if self.last_running != Some(running) {
+      self.btn_cancel.setEnabled(running);
+      self.last_running = Some(running);
+    }
     self.btn_open.setEnabled(true);
-    self.layout();
+    self.layout_if_needed();
   }
 
-  pub fn layout(&self) {
-    layout_glass(&self.glass, &self.parent);
-    center_stack_in_toolbar(&self.stack, &self._content);
+  pub fn teardown(&mut self) {
+    if self.active {
+      self.glass.removeFromSuperviewWithoutNeedingDisplay();
+      self.active = false;
+    }
   }
 
   pub fn drain_actions(&mut self) -> Vec<ToolbarAction> {
     self.action_rx.try_iter().collect()
+  }
+
+  fn layout_if_needed(&mut self) {
+    let bounds = self.parent.bounds();
+    let size = bounds.size;
+    if size.width == self.last_parent_size.width && size.height == self.last_parent_size.height {
+      return;
+    }
+    self.last_parent_size = size;
+    layout_glass(&self.glass, &self.parent);
+    center_stack_in_toolbar(&self.stack, &self._content);
+  }
+}
+
+impl Drop for NativeGlassToolbar {
+  fn drop(&mut self) {
+    self.teardown();
   }
 }
 
@@ -222,7 +268,7 @@ fn pin_child_fill(child: &NSView, parent: &NSView) {
 fn center_stack_in_toolbar(stack: &NSStackView, content: &NSView) {
   let bounds = content.bounds();
   let frame = stack.frame();
-  let stack_w = frame.size.width.max(1.0);
+  let stack_w = frame.size.width.max(360.0);
   let stack_h = frame.size.height.max(40.0);
   stack.setFrame(NSRect::new(
     NSPoint::new(
@@ -250,6 +296,20 @@ fn layout_glass(glass: &NSGlassEffectView, parent: &NSView) {
   );
 }
 
+fn native_toolbar_enabled() -> bool {
+  matches!(
+    std::env::var("IMGFORGE_NATIVE_TOOLBAR").ok().as_deref(),
+    Some("1") | Some("true") | Some("TRUE")
+  )
+}
+
+fn native_toolbar_disabled() -> bool {
+  matches!(
+    std::env::var("IMGFORGE_DISABLE_NATIVE_TOOLBAR").ok().as_deref(),
+    Some("1") | Some("true") | Some("TRUE")
+  )
+}
+
 fn liquid_glass_available(_mtm: MainThreadMarker) -> bool {
   let info = NSProcessInfo::processInfo();
   let version: NSOperatingSystemVersion = info.operatingSystemVersion();
@@ -257,6 +317,5 @@ fn liquid_glass_available(_mtm: MainThreadMarker) -> bool {
     return false;
   }
 
-  // 运行时确认 AppKit 已注册 NSGlassEffectView（旧系统链接但新 SDK 构建时兜底）。
   objc2::runtime::AnyClass::get(c"NSGlassEffectView").is_some()
 }

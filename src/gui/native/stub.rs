@@ -25,9 +25,9 @@ impl NativeGlassToolbar {
     false
   }
 
-  pub fn sync(&self, _enabled: bool, _running: bool) {}
+  pub fn sync(&mut self, enabled: bool, running: bool) {}
 
-  pub fn layout(&self) {}
+  pub fn teardown(&mut self) {}
 
   pub fn drain_actions(&mut self) -> Vec<ToolbarAction> {
     Vec::new()

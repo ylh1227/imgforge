@@ -412,4 +412,10 @@ impl eframe::App for ImgforgeApp {
           });
       });
   }
+
+  fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+    if let Some(toolbar) = &mut self.native_toolbar {
+      toolbar.teardown();
+    }
+  }
 }
