@@ -5,7 +5,7 @@ use std::io::Cursor;
 use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::codecs::webp::WebPEncoder;
-use image::{DynamicImage, ImageEncoder, ImageFormat as ImageCrateFormat};
+use image::{DynamicImage, ImageFormat as ImageCrateFormat};
 
 use crate::core::context::ImageContext;
 use crate::core::error::{AppError, AppResult};

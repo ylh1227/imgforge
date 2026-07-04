@@ -10,6 +10,7 @@ use eframe::egui;
 
 use crate::config::AppConfig;
 use crate::core::types::{ImageFormat, MetadataPolicy, Quality};
+use crate::gui::fonts;
 use crate::job::run_batch;
 use crate::ui::progress::{GuiProgress, ProgressReporter};
 use crate::ui::report::ProcessReport;
@@ -46,7 +47,9 @@ pub struct ImgforgeApp {
 }
 
 impl ImgforgeApp {
-  pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+  pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    fonts::install_cjk_fonts(&cc.egui_ctx);
+
     let formats = ImageFormat::all_supported();
     Self {
       input_dir: String::new(),

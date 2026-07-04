@@ -30,6 +30,22 @@ async fn main() -> eyre::Result<()> {
     return Ok(());
   }
 
+  // 未指定输入时给出用法提示（避免 IDE 直接 Run 扫当前目录报错）
+  if cli.command.is_none()
+    && cli.input.is_none()
+    && cli.config.is_none()
+    && std::env::var("IMGFORGE_INPUT").is_err()
+    && std::env::var("IMGFORGE_INPUT_DIR").is_err()
+  {
+    use clap::CommandFactory;
+    Cli::command().print_help()?;
+    eprintln!();
+    eprintln!("示例:");
+    eprintln!("  imgforge -i ./photos -o ./output -f webp");
+    eprintln!("图形界面: cargo run --features gui --bin imgforge-app");
+    return Ok(());
+  }
+
   ui::init_logger(cli.verbose);
 
   let config = load_config(&cli).wrap_err("failed to load configuration")?;

@@ -127,7 +127,10 @@ pub fn scan_inputs(options: &ScanOptions) -> AppResult<Vec<ConversionTask>> {
   }
 
   if tasks.is_empty() {
-    return Err(AppError::NoInputFiles);
+    return Err(AppError::Config(format!(
+      "no image files found in '{}'. Check the folder path and supported formats (jpg, png, webp, …)",
+      options.input_dir.display()
+    )));
   }
 
   Ok(tasks)
