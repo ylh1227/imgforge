@@ -132,8 +132,8 @@ chmod +x scripts/package.sh
 ### 发布新版本（维护者）
 
 ```bash
-git tag v0.1.3
-git push origin v0.1.3
+git tag v0.1.4
+git push origin v0.1.4
 ```
 
 推送 `v*` 标签后，GitHub Actions 会自动构建 **图形界面版 + 命令行版**（Windows / macOS）并创建 Release。

@@ -2,5 +2,7 @@
 
 mod app;
 mod fonts;
+mod theme;
+mod widgets;
 
 pub use app::ImgforgeApp;

@@ -6,11 +6,11 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::thread;
 
-use eframe::egui;
+use eframe::egui::{self, RichText, ScrollArea};
 
 use crate::config::AppConfig;
 use crate::core::types::{ImageFormat, MetadataPolicy, Quality};
-use crate::gui::fonts;
+use crate::gui::{fonts, theme, widgets};
 use crate::job::run_batch;
 use crate::ui::progress::{GuiProgress, ProgressReporter};
 use crate::ui::report::ProcessReport;
@@ -22,7 +22,7 @@ enum RunState {
     progress: Arc<dyn ProgressReporter>,
   },
   Done(ProcessReport),
-  Failed(String),
+  Failed,
 }
 
 enum WorkerMessage {
@@ -49,6 +49,7 @@ pub struct ImgforgeApp {
 impl ImgforgeApp {
   pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
     fonts::install_cjk_fonts(&cc.egui_ctx);
+    theme::apply(&cc.egui_ctx);
 
     let formats = ImageFormat::all_supported();
     Self {
@@ -208,24 +209,9 @@ impl ImgforgeApp {
       WorkerMessage::Finished(Err(e)) => {
         self.status = format!("转换失败：{e}");
         self.push_log(format!("错误：{e}"));
-        self.state = RunState::Failed(e);
+        self.state = RunState::Failed;
       }
     }
-  }
-
-  fn folder_row(ui: &mut egui::Ui, label: &str, path: &mut String, enabled: bool) {
-    ui.horizontal(|ui| {
-      ui.label(label);
-      ui.add_enabled(
-        enabled,
-        egui::TextEdit::singleline(path).desired_width(ui.available_width() - 90.0),
-      );
-      if ui.add_enabled(enabled, egui::Button::new("浏览…")).clicked() {
-        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-          *path = folder.display().to_string();
-        }
-      }
-    });
   }
 
   fn open_output_folder(&self) {
@@ -237,13 +223,36 @@ impl ImgforgeApp {
       let _ = open::that(&path);
     }
   }
+
+  fn settings_checkboxes(&mut self, ui: &mut egui::Ui, enabled: bool) {
+    let two_col = ui.available_width() > 520.0;
+    let options = [
+      (&mut self.recursive, "包含子文件夹"),
+      (&mut self.preserve_structure, "保留目录结构"),
+      (&mut self.overwrite, "覆盖已有文件"),
+      (&mut self.strip_metadata, "移除 EXIF 元数据"),
+    ];
+
+    if two_col {
+      ui.columns(2, |cols| {
+        for (idx, (value, label)) in options.into_iter().enumerate() {
+          cols[idx % 2].add_enabled(enabled, egui::Checkbox::new(value, label));
+        }
+      });
+    } else {
+      for (value, label) in options {
+        ui.add_enabled(enabled, egui::Checkbox::new(value, label));
+      }
+    }
+  }
 }
 
 impl eframe::App for ImgforgeApp {
   fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
     self.poll_worker();
 
-    let enabled = !self.is_running();
+    let running = self.is_running();
+    let enabled = !running;
 
     if let RunState::Running { progress, .. } = &self.state {
       if let Some(label) = progress.status_label() {
@@ -266,94 +275,107 @@ impl eframe::App for ImgforgeApp {
       }
     });
 
-    egui::CentralPanel::default().show(ctx, |ui| {
-      ui.heading("ImgForge");
-      ui.label("批量图片格式转换");
-      ui.add_space(8.0);
+    egui::CentralPanel::default()
+      .frame(egui::Frame::NONE.fill(theme::window_fill(ctx.style().visuals.dark_mode)))
+      .show(ctx, |ui| {
+        ScrollArea::vertical()
+          .auto_shrink([false, false])
+          .show(ui, |ui| {
+            ui.set_max_width(760.0);
+            ui.vertical_centered(|ui| {
+              ui.add_space(4.0);
+              widgets::header(ui, "批量图片格式转换");
+              ui.add_space(18.0);
 
-      let enabled = !self.is_running();
+              widgets::section_card(ui, "文件夹", |ui| {
+                widgets::folder_field(ui, "输入", &mut self.input_dir, enabled);
+                widgets::folder_field(ui, "输出", &mut self.output_dir, enabled);
+                if self.input_dir.trim().is_empty() {
+                  widgets::drop_hint(ui);
+                }
+              });
 
-      ui.group(|ui| {
-        ui.label(egui::RichText::new("文件夹").strong());
-        ui.add_space(4.0);
-        Self::folder_row(ui, "输入", &mut self.input_dir, enabled);
-        Self::folder_row(ui, "输出", &mut self.output_dir, enabled);
-      });
+              ui.add_space(14.0);
 
-      ui.add_space(8.0);
+              widgets::section_card(ui, "转换设置", |ui| {
+                ui.horizontal(|ui| {
+                  ui.label(RichText::new("目标格式").size(13.0));
+                  ui.add_space(8.0);
+                  egui::ComboBox::from_id_salt("format")
+                    .width(120.0)
+                    .selected_text(self.formats[self.format_index].extension().to_uppercase())
+                    .show_ui(ui, |ui| {
+                      for (idx, format) in self.formats.iter().enumerate() {
+                        ui.selectable_value(
+                          &mut self.format_index,
+                          idx,
+                          format.extension().to_uppercase(),
+                        );
+                      }
+                    });
+                });
 
-      ui.group(|ui| {
-        ui.label(egui::RichText::new("转换设置").strong());
-        ui.add_space(4.0);
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                  ui.label(RichText::new(format!("质量  {}", self.quality)).size(13.0));
+                  ui.add_space(8.0);
+                  ui.add_enabled(
+                    enabled,
+                    egui::Slider::new(&mut self.quality, 1..=100).show_value(false),
+                  );
+                });
 
-        ui.horizontal(|ui| {
-          ui.label("目标格式");
-          egui::ComboBox::from_id_salt("format")
-            .selected_text(self.formats[self.format_index].extension())
-            .show_ui(ui, |ui| {
-              for (idx, format) in self.formats.iter().enumerate() {
-                ui.selectable_value(&mut self.format_index, idx, format.extension());
+                ui.add_space(8.0);
+                self.settings_checkboxes(ui, enabled);
+              });
+
+              ui.add_space(14.0);
+
+              if running {
+                ui.add(
+                  egui::ProgressBar::new(
+                    match &self.state {
+                      RunState::Running { progress, .. } => progress.fraction(),
+                      _ => 0.0,
+                    },
+                  )
+                  .text("处理中…")
+                  .show_percentage()
+                  .animate(running),
+                );
+                ui.add_space(8.0);
+              } else if let RunState::Done(report) = &self.state {
+                let ratio = report.compression_ratio() * 100.0;
+                ui.label(
+                  RichText::new(format!("压缩率约 {ratio:.1}%"))
+                    .size(13.0)
+                    .color(theme::secondary_label(ui.style().visuals.dark_mode)),
+                );
+                ui.add_space(8.0);
               }
+
+              widgets::status_banner(ui, &self.status, running);
+              ui.add_space(14.0);
+
+              ui.horizontal(|ui| {
+                if widgets::primary_button(ui, "开始转换", enabled).clicked() {
+                  self.start_conversion();
+                }
+                ui.add_space(8.0);
+                if widgets::secondary_button(ui, "取消", running).clicked() {
+                  self.cancel_conversion();
+                }
+                ui.add_space(8.0);
+                if widgets::secondary_button(ui, "打开输出", true).clicked() {
+                  self.open_output_folder();
+                }
+              });
+
+              ui.add_space(16.0);
+              widgets::log_panel(ui, &self.log_lines);
+              ui.add_space(12.0);
             });
-        });
-
-        ui.horizontal(|ui| {
-          ui.label(format!("质量：{}", self.quality));
-          ui.add_enabled(enabled, egui::Slider::new(&mut self.quality, 1..=100));
-        });
-
-        ui.add_enabled(enabled, egui::Checkbox::new(&mut self.recursive, "包含子文件夹"));
-        ui.add_enabled(
-          enabled,
-          egui::Checkbox::new(&mut self.preserve_structure, "保留目录结构"),
-        );
-        ui.add_enabled(enabled, egui::Checkbox::new(&mut self.overwrite, "覆盖已有文件"));
-        ui.add_enabled(
-          enabled,
-          egui::Checkbox::new(&mut self.strip_metadata, "移除 EXIF 元数据"),
-        );
+          });
       });
-
-      ui.add_space(8.0);
-
-      if let RunState::Running { progress, .. } = &self.state {
-        ui.add(egui::ProgressBar::new(progress.fraction()).show_percentage());
-      } else if let RunState::Done(report) = &self.state {
-        let ratio = report.compression_ratio() * 100.0;
-        ui.label(format!("压缩率约 {ratio:.1}%"));
-      }
-
-      ui.label(&self.status);
-      ui.add_space(8.0);
-
-      ui.horizontal(|ui| {
-        if ui
-          .add_enabled(enabled, egui::Button::new("开始转换"))
-          .clicked()
-        {
-          self.start_conversion();
-        }
-        if ui
-          .add_enabled(self.is_running(), egui::Button::new("取消"))
-          .clicked()
-        {
-          self.cancel_conversion();
-        }
-        if ui.button("打开输出文件夹").clicked() {
-          self.open_output_folder();
-        }
-      });
-
-      ui.add_space(8.0);
-      ui.label(egui::RichText::new("日志").strong());
-      egui::ScrollArea::vertical()
-        .max_height(160.0)
-        .stick_to_bottom(true)
-        .show(ui, |ui| {
-          for line in &self.log_lines {
-            ui.label(line);
-          }
-        });
-    });
   }
 }

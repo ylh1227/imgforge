@@ -4,10 +4,8 @@
 
 fn main() -> eframe::Result<()> {
   let options = eframe::NativeOptions {
-    viewport: egui::ViewportBuilder::default()
-      .with_inner_size([760.0, 680.0])
-      .with_min_inner_size([640.0, 520.0])
-      .with_title("ImgForge"),
+    viewport: app_viewport(),
+    centered: true,
     ..Default::default()
   };
 
@@ -16,4 +14,25 @@ fn main() -> eframe::Result<()> {
     options,
     Box::new(|cc| Ok(Box::new(imgforge::gui::ImgforgeApp::new(cc)))),
   )
+}
+
+fn app_viewport() -> egui::ViewportBuilder {
+  let builder = egui::ViewportBuilder::default()
+    .with_inner_size([820.0, 720.0])
+    .with_min_inner_size([680.0, 560.0])
+    .with_title("ImgForge")
+    .with_app_id("com.imgforge.app");
+
+  #[cfg(target_os = "macos")]
+  {
+    return builder
+      .with_fullsize_content_view(true)
+      .with_titlebar_shown(true)
+      .with_titlebar_buttons_shown(true);
+  }
+
+  #[cfg(not(target_os = "macos"))]
+  {
+    builder
+  }
 }

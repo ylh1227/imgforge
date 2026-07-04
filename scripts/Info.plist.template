@@ -19,8 +19,10 @@
   <key>CFBundleVersion</key>
   <string>VERSION</string>
   <key>LSMinimumSystemVersion</key>
-  <string>11.0</string>
+  <string>15.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSRequiresAquaSystemAppearance</key>
+  <false/>
 </dict>
 </plist>
