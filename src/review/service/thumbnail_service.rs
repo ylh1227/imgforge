@@ -74,6 +74,17 @@ impl ThumbnailService {
     tracing::info!(removed, "review thumbnail cache cleared");
     Ok(removed)
   }
+
+  /// 若磁盘缓存有效则返回路径（不触发生成）。
+  pub fn valid_cache_path(source: &Path) -> Option<PathBuf> {
+    let cache_dir = thumbnail_cache_dir().ok()?;
+    let dest = cache_path(&cache_dir, source);
+    if dest.exists() && !is_stale(source, &dest) {
+      Some(dest)
+    } else {
+      None
+    }
+  }
 }
 
 /// 缓存文件路径：源路径哈希 + 尺寸后缀，WebP 扩展名。
@@ -107,4 +118,52 @@ fn hash_path(path: &Path) -> u64 {
   let mut h = DefaultHasher::new();
   path.to_string_lossy().hash(&mut h);
   h.finish()
+}
+
+/// 后台异步生成磁盘缩略图（不阻塞 UI）。
+pub struct AsyncThumbnailGenerator {
+  tx: std::sync::mpsc::Sender<(i64, PathBuf)>,
+  rx: std::sync::mpsc::Receiver<(i64, PathBuf)>,
+}
+
+impl AsyncThumbnailGenerator {
+  pub fn new() -> Self {
+    use std::sync::mpsc::{self, TryRecvError};
+    use std::thread;
+    let (job_tx, job_rx) = mpsc::channel::<(i64, PathBuf)>();
+    let (res_tx, res_rx) = mpsc::channel::<(i64, PathBuf)>();
+    thread::spawn(move || {
+      while let Ok((id, source)) = job_rx.recv() {
+        if let Ok(path) = ThumbnailService::generate(&source) {
+          let _ = res_tx.send((id, path));
+        }
+      }
+    });
+    Self {
+      tx: job_tx,
+      rx: res_rx,
+    }
+  }
+
+  pub fn request(&self, image_id: i64, source: PathBuf) {
+    let _ = self.tx.send((image_id, source));
+  }
+
+  pub fn poll(&self) -> Vec<(i64, PathBuf)> {
+    use std::sync::mpsc::TryRecvError;
+    let mut out = Vec::new();
+    loop {
+      match self.rx.try_recv() {
+        Ok(v) => out.push(v),
+        Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+      }
+    }
+    out
+  }
+}
+
+impl Default for AsyncThumbnailGenerator {
+  fn default() -> Self {
+    Self::new()
+  }
 }

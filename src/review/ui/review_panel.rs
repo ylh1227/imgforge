@@ -25,7 +25,7 @@ use crate::review::service::ReviewModuleConfig;
 use crate::review::ui::properties_panel::{properties_panel_ui, PropertiesPanelState};
 use crate::review::ui::shortcut_panel::{shortcut_panel_ui, ShortcutPanelState};
 use crate::review::ui::sidebar::{
-  batch_list_ui, format_stats, image_list_ui, status_buttons, SidebarState,
+  batch_list_ui, format_stats, image_list_ui, status_buttons, ListThumbnailCache, SidebarState,
 };
 use crate::review::{ReviewConversionBridge, ReviewService};
 
@@ -81,6 +81,7 @@ pub struct ReviewPanel {
   new_tag_name: String,
   new_tag_color_idx: usize,
   renaming_tag: Option<(i64, String)>,
+  list_thumbs: ListThumbnailCache,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -161,6 +162,7 @@ impl ReviewPanel {
       new_tag_name: String::new(),
       new_tag_color_idx: 0,
       renaming_tag: None,
+      list_thumbs: ListThumbnailCache::default(),
     };
     let _ = panel.reload_tags();
     panel.reload_batches()?;
@@ -313,7 +315,10 @@ impl ReviewPanel {
       }
       if widgets::compact_secondary_button(ui, "清理缩略图缓存", true).clicked() {
         match crate::review::service::ThumbnailService::clear_cache() {
-          Ok(n) => self.set_status(format!("已清理 {n} 个缩略图缓存")),
+          Ok(n) => {
+            self.list_thumbs.clear();
+            self.set_status(format!("已清理 {n} 个缩略图缓存"));
+          }
           Err(e) => self.error = Some(e.to_string()),
         }
       }
@@ -351,7 +356,7 @@ impl ReviewPanel {
     ui.horizontal_top(|ui| {
       ui.vertical(|ui| {
         ui.set_width(260.0);
-        self.left_column(ui, dark);
+        self.left_column(ui, ctx, dark);
       });
 
       ui.separator();
@@ -378,7 +383,7 @@ impl ReviewPanel {
     dark: bool,
   ) {
     ui.vertical(|ui| {
-      self.left_column(ui, dark);
+      self.left_column(ui, ctx, dark);
       ui.separator();
       self.center_column(ui, ctx, host);
       ui.separator();
@@ -386,7 +391,7 @@ impl ReviewPanel {
     });
   }
 
-  fn left_column(&mut self, ui: &mut egui::Ui, dark: bool) {
+  fn left_column(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, dark: bool) {
     widgets::grouped_section(ui, "批次", |ui| {
       ui.add(
         egui::TextEdit::singleline(&mut self.sidebar.batch_name_input)
@@ -397,6 +402,7 @@ impl ReviewPanel {
       if let Some(id) = batch_list_ui(ui, &self.batches, &self.batch_stats, self.current_batch) {
         self.current_batch = Some(id);
         self.current_image = None;
+        self.list_thumbs.clear();
         let _ = self.reload_images();
       }
     });
@@ -404,8 +410,14 @@ impl ReviewPanel {
     ui.add_space(16.0);
 
     widgets::grouped_section(ui, "图片", |ui| {
-      let list_action =
-        image_list_ui(ui, &self.images, self.current_image, &mut self.sidebar);
+      let list_action = image_list_ui(
+        ui,
+        ctx,
+        &self.images,
+        self.current_image,
+        &mut self.sidebar,
+        &mut self.list_thumbs,
+      );
       if list_action.reload {
         let _ = self.reload_images();
       }
@@ -430,11 +442,8 @@ impl ReviewPanel {
     let dark = ui.style().visuals.dark_mode;
     widgets::grouped_section(ui, "画布", |ui| {
       if let Some(item) = self.current_item().cloned() {
-        let thumb = self
-          .service
-          .ensure_thumbnail(item.id, &item.file_path)
-          .ok();
-        let thumb_ref = thumb.as_deref();
+        let thumb_path = crate::review::service::ThumbnailService::valid_cache_path(&item.file_path);
+        let thumb_ref = thumb_path.as_deref();
         self.update_converted_preview(host.output_directory(), &item.file_path);
 
         let events = {
@@ -558,6 +567,8 @@ impl ReviewPanel {
     ui.add_space(6.0);
 
     let mut delete_id: Option<i64> = None;
+    let mut focus_ann: Option<i64> = None;
+    let selected_ann = self.compare_view.left_canvas().selected_id();
     egui::ScrollArea::vertical()
       .id_salt("annotation_list_tab")
       .max_height(260.0)
@@ -571,7 +582,13 @@ impl ReviewPanel {
               5.0,
               egui::Color32::from_rgba_unmultiplied(dot[0], dot[1], dot[2], dot[3]),
             );
-            ui.label(format!("{}. {}", idx + 1, annotation_kind_label(ann.kind)));
+            let row_selected = selected_ann == Some(ann.id);
+            let label = format!("{}. {}", idx + 1, annotation_kind_label(ann.kind));
+            let row_resp = ui.selectable_label(row_selected, label);
+            row_resp.on_hover_text("点击定位到画布");
+            if row_resp.clicked() {
+              focus_ann = Some(ann.id);
+            }
             if !ann.content.is_empty() {
               ui.label(
                 RichText::new(truncate_text(&ann.content, 16))
@@ -585,6 +602,13 @@ impl ReviewPanel {
           });
         }
       });
+
+    if let Some(aid) = focus_ann {
+      if let Some(ann) = self.current_annotations.iter().find(|a| a.id == aid) {
+        self.compare_view.focus_annotation(ann);
+        self.set_status("已定位到标注");
+      }
+    }
 
     if clear_all {
       let ids: Vec<i64> = self.current_annotations.iter().map(|a| a.id).collect();

@@ -199,6 +199,12 @@ impl AnnotationCanvas {
     self.transform = transform;
   }
 
+  /// 将视口平移至使指定标注居中并选中。
+  pub fn focus_on_annotation(&mut self, ann: &Annotation) {
+    crate::review::domain::coords::center_viewport_on_norm(&mut self.transform, ann.focus_norm());
+    self.set_selected_id(Some(ann.id));
+  }
+
   pub fn image_size(&self) -> (u32, u32) {
     self.image_size
   }

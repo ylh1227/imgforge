@@ -22,7 +22,7 @@ pub use export_service::{
   BatchJsonExportRequest, CsvExportRequest, CsvExportResult, ExportService,
   JsonSidecarRequest,
 };
-pub use image_loader::{AsyncImageLoader, DecodedImage, ImageLoadTier};
+pub use image_loader::{cache_key, AsyncImageLoader, DecodedImage, ImageLoadTier};
 pub use review_service::ReviewService;
 pub use shortcuts::{ShortcutAction, ShortcutConfig, save_custom_binding};
-pub use thumbnail_service::ThumbnailService;
+pub use thumbnail_service::{AsyncThumbnailGenerator, ThumbnailService};

@@ -3,6 +3,7 @@
 pub mod annotation_canvas;
 mod canvas;
 mod compare_view;
+mod list_thumbnail_cache;
 mod properties_panel;
 mod review_panel;
 mod shortcut_panel;
@@ -13,4 +14,5 @@ mod toolbar;
 
 pub use annotation_canvas::AnnotationCanvas;
 pub use compare_view::{CompareDisplayMode, CompareView, CompareViewConfig, SplitLayout};
+pub use list_thumbnail_cache::ListThumbnailCache;
 pub use review_panel::{ReviewPanel, ReviewPanelHost, ReviewPanelOutput};

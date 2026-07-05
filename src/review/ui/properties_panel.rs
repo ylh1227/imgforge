@@ -54,6 +54,13 @@ pub fn properties_panel_ui(
 
   widgets::settings_subheading(ui, "文件");
   ui.label(format!("路径：{}", item.file_path.display()));
+  let format_label = item
+    .file_path
+    .extension()
+    .and_then(|e| e.to_str())
+    .map(|e| e.to_ascii_uppercase())
+    .unwrap_or_else(|| "—".into());
+  ui.label(format!("格式：{format_label}"));
   if let Some(meta) = &state.metadata {
     ui.label(format!("分辨率：{}", meta.resolution_label()));
     ui.label(format!(

@@ -126,4 +126,20 @@ impl Annotation {
       z_index: 0,
     }
   }
+
+  /// 标注在归一化坐标系下的焦点（用于画布定位）。
+  pub fn focus_norm(&self) -> crate::review::domain::coords::NormPoint {
+    use crate::review::domain::coords::NormPoint;
+    match &self.position {
+      AnnotationPosition::Rectangle(r) => NormPoint {
+        x: (r.x0 + r.x1) * 0.5,
+        y: (r.y0 + r.y1) * 0.5,
+      },
+      AnnotationPosition::Arrow(a) => NormPoint {
+        x: (a.x0 + a.x1) * 0.5,
+        y: (a.y0 + a.y1) * 0.5,
+      },
+      AnnotationPosition::Text(t) => NormPoint { x: t.x, y: t.y },
+    }
+  }
 }

@@ -163,6 +163,18 @@ impl ViewportTransform {
   }
 }
 
+/// 将视口平移，使归一化坐标点居中于画布。
+pub fn center_viewport_on_norm(transform: &mut ViewportTransform, norm: NormPoint) {
+  let size = Vec2 {
+    x: transform.image_rect.size.x * transform.zoom,
+    y: transform.image_rect.size.y * transform.zoom,
+  };
+  transform.pan = Vec2 {
+    x: size.x * (0.5 - norm.x),
+    y: size.y * (0.5 - norm.y),
+  };
+}
+
 impl Vec2 {
   pub const ZERO: Self = Self { x: 0.0, y: 0.0 };
 

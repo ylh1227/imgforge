@@ -158,9 +158,12 @@ pub struct ImageFilter {
   pub include_deleted: bool,
   /// 标注数量筛选模式。
   pub annotation_filter: AnnotationFilter,
-  /// 分辨率下限（宽或高的像素总面积近似，单位百万像素×100 简化为像素宽）。
+  /// 分辨率宽度下限/上限（像素）。
   pub min_width: Option<u32>,
   pub max_width: Option<u32>,
+  /// 分辨率高度下限/上限（像素）。
+  pub min_height: Option<u32>,
+  pub max_height: Option<u32>,
   /// 文件大小下限/上限（字节）。
   pub min_file_size: Option<u64>,
   pub max_file_size: Option<u64>,
@@ -262,6 +265,16 @@ impl ImageFilter {
       }
       if let Some(maxw) = self.max_width {
         if i.width.unwrap_or(u32::MAX) > maxw {
+          return false;
+        }
+      }
+      if let Some(minh) = self.min_height {
+        if i.height.unwrap_or(0) < minh {
+          return false;
+        }
+      }
+      if let Some(maxh) = self.max_height {
+        if i.height.unwrap_or(u32::MAX) > maxh {
           return false;
         }
       }

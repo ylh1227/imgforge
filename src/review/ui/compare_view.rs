@@ -145,6 +145,14 @@ impl CompareView {
     }
   }
 
+  /// 在左侧画布定位到指定标注（同步视口可选）。
+  pub fn focus_annotation(&mut self, ann: &Annotation) {
+    self.left.focus_on_annotation(ann);
+    if self.config.sync_viewport {
+      self.sync_right_from_left();
+    }
+  }
+
   /// 左侧可编辑画布（工具栏样式等）。
   pub fn left_canvas(&self) -> &AnnotationCanvas {
     &self.left
