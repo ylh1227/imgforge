@@ -221,6 +221,9 @@ impl ReviewPanel {
     }
 
     widgets::status_banner(ui, &self.status_message(dark), false);
+    ui.add_space(12.0);
+
+    self.main_workflow_bar(ui, ctx, dark);
     ui.add_space(16.0);
 
     if self.show_shortcut_panel {
@@ -311,9 +314,6 @@ impl ReviewPanel {
           Err(e) => self.error = Some(e.to_string()),
         }
       }
-      if widgets::compact_secondary_button(ui, "对比模式", true).clicked() {
-        self.compare_view.cycle_compare_mode();
-      }
       if widgets::compact_secondary_button(ui, "清理缩略图缓存", true).clicked() {
         match crate::review::service::ThumbnailService::clear_cache() {
           Ok(n) => {
@@ -323,27 +323,121 @@ impl ReviewPanel {
           Err(e) => self.error = Some(e.to_string()),
         }
       }
+    });
+  }
 
-      let approved = self
-        .current_batch
-        .map(|id| {
-          self
-            .batch_stats
-            .iter()
-            .find(|(bid, _)| *bid == id)
-            .map(|(_, s)| s.approved)
-            .unwrap_or(0)
-        })
-        .unwrap_or(0);
-      if widgets::compact_primary_button(
-        ui,
-        &format!("回流转换队列 ({approved})"),
-        approved > 0,
-      )
-      .clicked()
-      {
-        self.enqueue_approved_to_convert();
-      }
+  /// 主界面常用工作条：导航、状态、筛选、视图与回流。
+  fn main_workflow_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, dark: bool) {
+    let has_image = self.current_image.is_some();
+    let idx = self.current_index();
+    let can_prev = idx.map(|i| i > 0).unwrap_or(false);
+    let can_next = idx
+      .map(|i| i + 1 < self.images.len())
+      .unwrap_or(false);
+
+    widgets::grouped_section(ui, "常用", |ui| {
+      widgets::toolbar_row(ui, |ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        if widgets::compact_secondary_button(ui, "◀ 上一张", can_prev).clicked() {
+          self.select_relative(-1);
+        }
+        if widgets::compact_secondary_button(ui, "下一张 ▶", can_next).clicked() {
+          self.select_relative(1);
+        }
+        if let (Some(i), len) = (idx, self.images.len()) {
+          ui.label(
+            RichText::new(format!("{}/{}", i + 1, len))
+              .size(13.0)
+              .color(theme::secondary_label(dark)),
+          );
+        }
+
+        widgets::toolbar_separator(ui);
+
+        let current_status = self.current_item().map(|item| item.status);
+        if let Some(status) = status_buttons(ui, current_status) {
+          if let Some(id) = self.current_image {
+            self.set_image_status(id, status);
+          }
+        }
+      });
+
+      ui.add_space(8.0);
+
+      widgets::toolbar_row(ui, |ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        if widgets::compact_secondary_button(ui, "适应窗口", has_image).clicked() {
+          self.compare_view.fit_to_window(viewport_size(ctx));
+        }
+        if widgets::compact_secondary_button(ui, "100%", has_image).clicked() {
+          self.compare_view.set_zoom_100(viewport_size(ctx));
+        }
+        if widgets::compact_secondary_button(ui, "撤销标注", has_image).clicked() {
+          if let Some(id) = self.current_image {
+            if let Err(e) = self.service.undo_last_annotation(id) {
+              self.error = Some(e.to_string());
+            } else {
+              self.load_current_annotations();
+              let _ = self.reload_images();
+            }
+          }
+        }
+
+        widgets::toolbar_separator(ui);
+
+        if widgets::compact_secondary_button(ui, "仅显示未评审", self.current_batch.is_some()).clicked()
+        {
+          self.sidebar.filter.status = Some(ReviewStatus::Pending);
+          let _ = self.reload_images();
+        }
+        if widgets::compact_secondary_button(ui, "重置筛选", true).clicked() {
+          self.sidebar.filter.reset_filters();
+          self.sidebar.show_recycle = false;
+          let _ = self.reload_images();
+        }
+
+        if ui
+          .checkbox(
+            &mut self.config.auto_advance_on_status,
+            "自动跳下一张未评审",
+          )
+          .changed()
+        {
+          let _ = self.config.save();
+        }
+
+        widgets::toolbar_separator(ui);
+
+        ui.label(
+          RichText::new(format!("对比：{}", self.compare_view.mode_label()))
+            .size(13.0)
+            .color(theme::secondary_label(dark)),
+        );
+        if widgets::compact_secondary_button(ui, "切换对比模式", true).clicked() {
+          self.compare_view.cycle_compare_mode();
+        }
+
+        let approved = self
+          .current_batch
+          .map(|batch_id| {
+            self
+              .batch_stats
+              .iter()
+              .find(|(id, _)| *id == batch_id)
+              .map(|(_, s)| s.approved)
+              .unwrap_or(0)
+          })
+          .unwrap_or(0);
+        if widgets::compact_primary_button(
+          ui,
+          &format!("回流转换队列 ({approved})"),
+          approved > 0,
+        )
+        .clicked()
+        {
+          self.enqueue_approved_to_convert();
+        }
+      });
     });
   }
 
@@ -480,14 +574,6 @@ impl ReviewPanel {
   }
 
   fn tab_review(&mut self, ui: &mut egui::Ui, dark: bool) {
-    let current_status = self.current_item().map(|item| item.status);
-    if let Some(status) = status_buttons(ui, current_status) {
-      if let Some(id) = self.current_image {
-        self.set_image_status(id, status);
-      }
-    }
-
-    ui.add_space(8.0);
     widgets::section_label(ui, "备注");
     if ui
       .add(
@@ -521,17 +607,6 @@ impl ReviewPanel {
           .size(12.0)
           .color(theme::secondary_label(dark)),
       );
-    }
-
-    ui.add_space(8.0);
-    if ui
-      .checkbox(
-        &mut self.config.auto_advance_on_status,
-        "切换状态后跳下一张未评审",
-      )
-      .changed()
-    {
-      let _ = self.config.save();
     }
   }
 

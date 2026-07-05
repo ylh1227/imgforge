@@ -489,7 +489,8 @@ pub struct ImageListAction {
 
 pub fn status_buttons(ui: &mut Ui, current: Option<ReviewStatus>) -> Option<ReviewStatus> {
   let mut picked = None;
-  ui.horizontal_wrapped(|ui| {
+  ui.horizontal(|ui| {
+    ui.spacing_mut().item_spacing.x = 6.0;
     for s in ReviewStatus::all() {
       if widgets::colored_toggle_chip(ui, s.label(), s.color_rgba(), current == Some(s), true) {
         picked = Some(s);

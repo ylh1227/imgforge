@@ -29,6 +29,19 @@ pub enum CompareDisplayMode {
   Toggle,
 }
 
+impl CompareDisplayMode {
+  pub fn label(self) -> &'static str {
+    match self {
+      Self::Single => "单图",
+      Self::Split => "并排",
+      Self::Wipe => "卷帘",
+      Self::Overlay => "叠加",
+      Self::Diff => "差异",
+      Self::Toggle => "切换",
+    }
+  }
+}
+
 /// 分屏布局方向。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SplitLayout {
@@ -136,6 +149,10 @@ impl CompareView {
       CompareDisplayMode::Toggle => CompareDisplayMode::Split,
       _ => CompareDisplayMode::Split,
     };
+  }
+
+  pub fn mode_label(&self) -> &'static str {
+    self.mode.label()
   }
 
   /// 切换对比：手动翻转显示原图/转换后。

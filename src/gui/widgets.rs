@@ -4,6 +4,32 @@ use eframe::egui::{self, Button, Color32, CornerRadius, Frame, Layout, Margin, R
 
 use crate::gui::theme;
 
+/// 工具栏统一行高（与 compact 按钮、状态芯片一致）。
+pub const TOOLBAR_ROW_HEIGHT: f32 = 32.0;
+
+/// 工具栏单行：垂直居中对齐，避免 `horizontal_wrapped` 顶对齐导致错位。
+pub fn toolbar_row<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+  ui.horizontal(|ui| {
+    ui.set_min_height(TOOLBAR_ROW_HEIGHT);
+    ui.with_layout(Layout::left_to_right(egui::Align::Center), add_contents)
+      .inner
+  })
+  .inner
+}
+
+/// 工具栏竖向分隔线（与行高等高）。
+pub fn toolbar_separator(ui: &mut Ui) {
+  let dark = ui.style().visuals.dark_mode;
+  ui.add_space(6.0);
+  let (rect, _) = ui.allocate_exact_size(
+    egui::vec2(1.0, TOOLBAR_ROW_HEIGHT),
+    egui::Sense::hover(),
+  );
+  ui.painter()
+    .vline(rect.center().x, rect.y_range(), theme::separator_stroke(dark));
+  ui.add_space(6.0);
+}
+
 pub fn navigation_header(ui: &mut Ui, subtitle: &str) {
   let dark = ui.style().visuals.dark_mode;
   ui.vertical(|ui| {
@@ -206,7 +232,7 @@ pub fn compact_secondary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui
     .fill(theme::control_fill(dark))
     .stroke(theme::control_stroke(dark))
     .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
-    .min_size(egui::vec2(72.0, 32.0));
+    .min_size(egui::vec2(72.0, TOOLBAR_ROW_HEIGHT));
   ui.add_enabled(enabled, btn)
 }
 
@@ -221,7 +247,7 @@ pub fn compact_primary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::
       accent.linear_multiply(0.45)
     })
     .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
-    .min_size(egui::vec2(88.0, 32.0));
+    .min_size(egui::vec2(88.0, TOOLBAR_ROW_HEIGHT));
   ui.add_enabled(enabled, btn)
 }
 
@@ -247,7 +273,7 @@ pub fn toggle_chip(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> b
     .fill(fill)
     .stroke(stroke)
     .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
-    .min_size(egui::vec2(56.0, 32.0));
+    .min_size(egui::vec2(56.0, TOOLBAR_ROW_HEIGHT));
 
   ui.add_enabled(enabled, btn).clicked()
 }
@@ -275,7 +301,7 @@ pub fn colored_toggle_chip(
     .fill(fill)
     .stroke(stroke)
     .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
-    .min_size(egui::vec2(56.0, 32.0));
+    .min_size(egui::vec2(56.0, TOOLBAR_ROW_HEIGHT));
   ui.add_enabled(enabled, btn).clicked()
 }
 
