@@ -19,6 +19,8 @@ pub const CONTENT_MAX_WIDTH: f32 = 960.0;
 pub const CONTENT_MIN_WIDTH: f32 = 320.0;
 /// 窄屏断点：控件改为纵向堆叠。
 pub const NARROW_BREAKPOINT: f32 = 520.0;
+/// 评审面板三栏改单栏的断点。
+pub const REVIEW_NARROW_BREAKPOINT: f32 = 880.0;
 /// 日志面板高度上下限。
 pub const LOG_MIN_HEIGHT: f32 = 96.0;
 pub const LOG_MAX_HEIGHT: f32 = 360.0;
@@ -65,6 +67,14 @@ pub fn primary_label(dark: bool) -> Color32 {
     Color32::from_rgb(245, 245, 247)
   } else {
     Color32::from_rgb(28, 28, 30)
+  }
+}
+
+pub fn error_color(dark: bool) -> Color32 {
+  if dark {
+    Color32::from_rgb(255, 105, 97)
+  } else {
+    Color32::from_rgb(255, 59, 48)
   }
 }
 

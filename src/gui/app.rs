@@ -435,12 +435,11 @@ impl eframe::App for ImgforgeApp {
                   });
                   ui.horizontal(|ui| {
                     ui.add_enabled(enabled, egui::Checkbox::new(&mut self.burn_review_annotations, "导出时叠加标注"));
-                    if ui.button("清空评审队列").clicked() {
+                    if widgets::secondary_button(ui, "清空评审队列", enabled).clicked() {
                       self.review_queue.clear();
                       self.status = "已清空评审导入队列".into();
                     }
-                    if ui
-                      .add_enabled(enabled && !self.review_queue.is_empty(), egui::Button::new("发送到评审"))
+                    if widgets::compact_primary_button(ui, "发送到评审", enabled && !self.review_queue.is_empty())
                       .clicked()
                     {
                       if let Some(panel) = &mut self.review_panel {

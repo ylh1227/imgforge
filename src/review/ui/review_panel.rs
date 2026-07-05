@@ -18,7 +18,7 @@ use crate::review::service::{
 use crate::review::is_irreversible_transition;
 use crate::review::RemarkWriteMode;
 use crate::review::ui::annotation_canvas::AnnotationCanvasEvent;
-use crate::review::ui::compare_view::{CompareDisplayMode, CompareView};
+use crate::review::ui::compare_view::CompareView;
 use crate::review::ui::shortcuts::handle_shortcuts;
 use crate::review::ui::sidebar::{
   batch_list_ui, format_stats, image_list_ui, status_buttons, SidebarState,
@@ -141,61 +141,89 @@ impl ReviewPanel {
     self.show_dialogs(ctx);
 
     let dark = ui.style().visuals.dark_mode;
-    let narrow = ui.available_width() < 880.0;
+    let narrow = ui.available_width() < theme::REVIEW_NARROW_BREAKPOINT;
 
-    self.top_toolbar(ui, host, dark);
-    ui.add_space(6.0);
+    widgets::navigation_header(ui, "图片评审");
+    ui.add_space(20.0);
+
+    widgets::grouped_section(ui, "操作", |ui| {
+      self.top_toolbar(ui, host);
+    });
+
+    ui.add_space(16.0);
 
     if let Some(err) = &self.error {
-      ui.colored_label(egui::Color32::LIGHT_RED, err);
+      widgets::error_banner(ui, err);
+      ui.add_space(8.0);
     }
+
+    widgets::status_banner(ui, &self.status_message(dark), false);
+    ui.add_space(16.0);
 
     if narrow {
       self.layout_stacked(ui, ctx, host, dark);
     } else {
       self.layout_three_column(ui, ctx, host, dark);
     }
-
-    ui.add_space(6.0);
-    self.bottom_status_bar(ui, dark);
   }
 
-  fn top_toolbar(&mut self, ui: &mut egui::Ui, host: &dyn ReviewPanelHost, dark: bool) {
-    ui.horizontal_wrapped(|ui| {
-      ui.label(
-        RichText::new("图片评审")
-          .font(theme::section_font())
-          .strong()
-          .color(theme::primary_label(dark)),
+  fn status_message(&self, dark: bool) -> String {
+    let _ = dark;
+    if !self.output.status_message.is_empty() {
+      return self.output.status_message.clone();
+    }
+    if !self.status_hint.is_empty() {
+      return self.status_hint.clone();
+    }
+    if let (Some(item), Some(idx)) = (self.current_item(), self.current_index()) {
+      return format!(
+        "就绪 · {}/{} · {}",
+        idx + 1,
+        self.images.len(),
+        item
+          .file_path
+          .file_name()
+          .and_then(|n| n.to_str())
+          .unwrap_or("—")
       );
-      ui.separator();
+    }
+    "选择评审批次与图片，或从转换队列导入".into()
+  }
 
-      if ui.button("从文件夹创建").clicked() {
+  fn top_toolbar(&mut self, ui: &mut egui::Ui, host: &dyn ReviewPanelHost) {
+    ui.horizontal_wrapped(|ui| {
+      if widgets::compact_primary_button(ui, "从文件夹创建", true).clicked() {
         if let Some(folder) = rfd::FileDialog::new().pick_folder() {
           self.create_batch_from_folder(&folder);
         }
       }
 
       let queue_len = host.conversion_queue_paths().len();
-      ui.add_enabled_ui(queue_len > 0, |ui| {
-        if ui
-          .button(format!("从转换队列导入 ({queue_len})"))
-          .clicked()
-        {
-          let paths = host.conversion_queue_paths().to_vec();
-          self.import_from_paths(&paths, "转换队列导入");
-        }
-      });
+      if widgets::compact_secondary_button(
+        ui,
+        &format!("从转换队列导入 ({queue_len})"),
+        queue_len > 0,
+      )
+      .clicked()
+      {
+        let paths = host.conversion_queue_paths().to_vec();
+        self.import_from_paths(&paths, "转换队列导入");
+      }
 
       ui.separator();
 
-      if ui.button("导出 CSV").clicked() {
+      if widgets::compact_secondary_button(ui, "导出 CSV", self.current_batch.is_some()).clicked()
+      {
         self.export_csv();
       }
-      if ui.button("导出标注 JSON").clicked() {
+      if widgets::compact_secondary_button(ui, "导出标注 JSON", self.current_image.is_some())
+        .clicked()
+      {
         self.export_sidecar();
       }
-      if ui.button("批量导出 JSON").clicked() {
+      if widgets::compact_secondary_button(ui, "批量导出 JSON", self.current_batch.is_some())
+        .clicked()
+      {
         self.export_batch_json();
       }
 
@@ -212,14 +240,15 @@ impl ReviewPanel {
             .unwrap_or(0)
         })
         .unwrap_or(0);
-      ui.add_enabled_ui(approved > 0, |ui| {
-        if ui
-          .button(format!("回流转换队列 ({approved})"))
-          .clicked()
-        {
-          self.enqueue_approved_to_convert();
-        }
-      });
+      if widgets::compact_primary_button(
+        ui,
+        &format!("回流转换队列 ({approved})"),
+        approved > 0,
+      )
+      .clicked()
+      {
+        self.enqueue_approved_to_convert();
+      }
     });
   }
 
@@ -272,8 +301,10 @@ impl ReviewPanel {
     widgets::grouped_section(ui, "批次", |ui| {
       ui.add(
         egui::TextEdit::singleline(&mut self.sidebar.batch_name_input)
-          .hint_text("批次名称"),
+          .hint_text("批次名称")
+          .margin(egui::vec2(12.0, 10.0)),
       );
+      ui.add_space(4.0);
       if let Some(id) = batch_list_ui(ui, &self.batches, &self.batch_stats, self.current_batch) {
         self.current_batch = Some(id);
         self.current_image = None;
@@ -281,7 +312,7 @@ impl ReviewPanel {
       }
     });
 
-    ui.add_space(8.0);
+    ui.add_space(16.0);
 
     widgets::grouped_section(ui, "图片", |ui| {
       let list_action =
@@ -307,31 +338,8 @@ impl ReviewPanel {
   }
 
   fn center_column(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, host: &dyn ReviewPanelHost) {
+    let dark = ui.style().visuals.dark_mode;
     widgets::grouped_section(ui, "画布", |ui| {
-      ui.horizontal(|ui| {
-        ui.selectable_value(
-          &mut self.compare_view.mode,
-          CompareDisplayMode::Single,
-          "单图",
-        );
-        ui.selectable_value(
-          &mut self.compare_view.mode,
-          CompareDisplayMode::Split,
-          "对比",
-        );
-        ui.separator();
-        if ui.button("适应窗口").clicked() {
-          let size = viewport_size(ctx);
-          self.compare_view.fit_to_window(size);
-        }
-        if ui.button("100%").clicked() {
-          let size = viewport_size(ctx);
-          self.compare_view.set_zoom_100(size);
-        }
-      });
-
-      ui.add_space(4.0);
-
       if let Some(item) = self.current_item().cloned() {
         let thumb = self
           .service
@@ -358,12 +366,15 @@ impl ReviewPanel {
         ui.label(
           RichText::new(item.file_path.display().to_string())
             .size(12.0)
-            .weak(),
+            .color(theme::secondary_label(dark)),
         );
       } else {
         ui.vertical_centered(|ui| {
           ui.add_space(48.0);
-          ui.label("请选择评审批次与图片，或从转换队列导入");
+          ui.label(
+            RichText::new("请选择评审批次与图片，或从转换队列导入")
+              .color(theme::secondary_label(dark)),
+          );
         });
       }
     });
@@ -371,15 +382,23 @@ impl ReviewPanel {
 
   fn right_column(&mut self, ui: &mut egui::Ui, dark: bool) {
     widgets::grouped_section(ui, "当前图片", |ui| {
-      if let Some(status) = status_buttons(ui) {
+      let current_status = self.current_item().map(|item| item.status);
+      if let Some(status) = status_buttons(ui, current_status) {
         if let Some(id) = self.current_image {
           self.set_image_status(id, status);
         }
       }
 
-      ui.add_space(6.0);
-      ui.label("备注");
-      if ui.text_edit_multiline(&mut self.remark_buf).changed() {
+      ui.add_space(8.0);
+      widgets::section_label(ui, "备注");
+      if ui
+        .add(
+          egui::TextEdit::multiline(&mut self.remark_buf)
+            .margin(egui::vec2(12.0, 10.0))
+            .desired_rows(4),
+        )
+        .changed()
+      {
         if let Some(id) = self.current_image {
           let remark = self.remark_buf.clone();
           if let Err(e) = self.service.set_remark(id, &remark) {
@@ -402,13 +421,17 @@ impl ReviewPanel {
       }
     });
 
-    ui.add_space(8.0);
+    ui.add_space(16.0);
 
     widgets::grouped_section(ui, "批量操作", |ui| {
-      let selected = self.sidebar.selected_ids.len();
-      ui.label(format!("已选 {selected} 张"));
+      ui.label(
+        RichText::new(format!("已选 {} 张", self.sidebar.selected_ids.len()))
+          .font(theme::section_font())
+          .color(theme::primary_label(dark)),
+      );
 
       ui.horizontal(|ui| {
+        widgets::section_label(ui, "目标状态");
         egui::ComboBox::from_id_salt("batch_status_target")
           .selected_text(self.batch_target_status.label())
           .show_ui(ui, |ui| {
@@ -423,37 +446,45 @@ impl ReviewPanel {
           });
       });
 
-      if ui.button("批量更新状态").clicked() {
-        self.dialog = Some(DialogState::ConfirmBatchOp(BatchOpKind::SetStatus(
-          self.batch_target_status,
-        )));
-      }
-      if ui.button("批量清空标注").clicked() {
-        self.dialog = Some(DialogState::ConfirmBatchOp(BatchOpKind::ClearAnnotations));
-      }
-      if ui.button("复制当前标注到所选").clicked() {
-        self.dialog = Some(DialogState::ConfirmBatchOp(BatchOpKind::CopyCurrentAnnotations));
-      }
+      ui.horizontal_wrapped(|ui| {
+        if widgets::compact_secondary_button(ui, "批量更新状态", true).clicked() {
+          self.dialog = Some(DialogState::ConfirmBatchOp(BatchOpKind::SetStatus(
+            self.batch_target_status,
+          )));
+        }
+        if widgets::compact_secondary_button(ui, "批量清空标注", true).clicked() {
+          self.dialog = Some(DialogState::ConfirmBatchOp(BatchOpKind::ClearAnnotations));
+        }
+        if widgets::compact_secondary_button(ui, "复制当前标注", true).clicked() {
+          self.dialog = Some(DialogState::ConfirmBatchOp(BatchOpKind::CopyCurrentAnnotations));
+        }
+      });
 
       ui.add_space(6.0);
-      ui.horizontal(|ui| {
-        ui.selectable_value(
-          &mut self.batch_remark_mode,
-          RemarkWriteMode::Overwrite,
+      ui.horizontal_wrapped(|ui| {
+        if widgets::toggle_chip(
+          ui,
           "覆盖备注",
-        );
-        ui.selectable_value(
-          &mut self.batch_remark_mode,
-          RemarkWriteMode::Append,
+          self.batch_remark_mode == RemarkWriteMode::Overwrite,
+          true,
+        ) {
+          self.batch_remark_mode = RemarkWriteMode::Overwrite;
+        }
+        if widgets::toggle_chip(
+          ui,
           "追加备注",
-        );
+          self.batch_remark_mode == RemarkWriteMode::Append,
+          true,
+        ) {
+          self.batch_remark_mode = RemarkWriteMode::Append;
+        }
       });
-      if ui.button("批量写入备注").clicked() {
+      if widgets::compact_secondary_button(ui, "批量写入备注", true).clicked() {
         self.dialog = Some(DialogState::ConfirmBatchOp(BatchOpKind::AddRemark));
       }
 
       if !self.last_batch_annotation_ids.is_empty()
-        && ui.button("撤销上次批量标注").clicked()
+        && widgets::compact_secondary_button(ui, "撤销上次批量标注", true).clicked()
       {
         match self
           .service
@@ -470,40 +501,6 @@ impl ReviewPanel {
     });
   }
 
-  fn bottom_status_bar(&mut self, ui: &mut egui::Ui, dark: bool) {
-    egui::Frame::new()
-      .fill(theme::grouped_fill(dark))
-      .inner_margin(egui::Margin::symmetric(12, 6))
-      .corner_radius(egui::CornerRadius::same(theme::GROUP_RADIUS))
-      .show(ui, |ui| {
-        ui.horizontal(|ui| {
-          let msg = if !self.output.status_message.is_empty() {
-            self.output.status_message.clone()
-          } else if !self.status_hint.is_empty() {
-            self.status_hint.clone()
-          } else {
-            "就绪".into()
-          };
-          ui.label(RichText::new(msg).size(12.0));
-
-          ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if let (Some(item), Some(idx)) = (self.current_item(), self.current_index()) {
-              ui.label(
-                RichText::new(format!(
-                  "{}/{} · {}",
-                  idx + 1,
-                  self.images.len(),
-                  item.file_path.file_name().and_then(|n| n.to_str()).unwrap_or("—")
-                ))
-                .size(12.0)
-                .color(theme::secondary_label(dark)),
-              );
-            }
-          });
-        });
-      });
-  }
-
   fn show_dialogs(&mut self, ctx: &egui::Context) {
     let Some(dialog) = self.dialog.clone() else {
       return;
@@ -517,11 +514,11 @@ impl ReviewPanel {
           .show(ctx, |ui| {
             ui.label(batch_op_description(op));
             ui.horizontal(|ui| {
-              if ui.button("确认").clicked() {
+              if widgets::primary_button(ui, "确认", true).clicked() {
                 self.run_batch_op(op);
                 self.dialog = None;
               }
-              if ui.button("取消").clicked() {
+              if widgets::secondary_button(ui, "取消", true).clicked() {
                 self.dialog = None;
               }
             });
@@ -552,12 +549,12 @@ impl ReviewPanel {
             ui.checkbox(&mut confirm, "我已了解该操作不可自动撤销");
             ui.horizontal(|ui| {
               ui.add_enabled_ui(confirm, |ui| {
-                if ui.button("继续执行").clicked() {
+                if widgets::primary_button(ui, "继续执行", confirm).clicked() {
                   self.apply_batch_status(target, true);
                   self.dialog = None;
                 }
               });
-              if ui.button("取消").clicked() {
+              if widgets::secondary_button(ui, "取消", true).clicked() {
                 self.dialog = None;
               }
             });

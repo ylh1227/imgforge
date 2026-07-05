@@ -2,7 +2,9 @@
 
 use std::path::Path;
 
-use eframe::egui::{self, Context, Ui, Vec2};
+use eframe::egui::{self, Context, RichText, Ui, Vec2};
+
+use crate::gui::{theme, widgets};
 
 use crate::review::domain::coords::ViewportTransform;
 use crate::review::ui::annotation_canvas::{
@@ -162,14 +164,14 @@ impl CompareView {
     thumb_path: Option<&Path>,
     annotations: &[Annotation],
   ) -> Vec<AnnotationCanvasEvent> {
-    self.header_ui(ui);
+    self.header_ui(ui, ctx);
 
     let original_entry = self
       .textures
       .load(ctx, original_path, thumb_path)
       .cloned();
     let Some(original) = original_entry else {
-      ui.colored_label(egui::Color32::LIGHT_RED, "无法加载原图");
+      ui.colored_label(theme::error_color(ui.style().visuals.dark_mode), "无法加载原图");
       return Vec::new();
     };
     self.left.set_image_size(original.size);
@@ -197,27 +199,68 @@ impl CompareView {
     events
   }
 
-  fn header_ui(&mut self, ui: &mut Ui) {
-    ui.horizontal(|ui| {
-      ui.label("显示");
-      ui.selectable_value(&mut self.mode, CompareDisplayMode::Single, "单图");
-      ui.selectable_value(&mut self.mode, CompareDisplayMode::Split, "对比");
+  fn header_ui(&mut self, ui: &mut Ui, ctx: &Context) {
+    let dark = ui.style().visuals.dark_mode;
+    let canvas_size = ctx.input(|i| {
+      i.viewport()
+        .inner_rect
+        .map(|r| r.size())
+        .unwrap_or_else(|| ctx.screen_rect().size())
+    });
+
+    ui.horizontal_wrapped(|ui| {
+      widgets::section_label(ui, "显示");
+      if widgets::toggle_chip(
+        ui,
+        "单图",
+        self.mode == CompareDisplayMode::Single,
+        true,
+      ) {
+        self.mode = CompareDisplayMode::Single;
+      }
+      if widgets::toggle_chip(
+        ui,
+        "对比",
+        self.mode == CompareDisplayMode::Split,
+        true,
+      ) {
+        self.mode = CompareDisplayMode::Split;
+      }
+
       ui.separator();
       ui.checkbox(&mut self.config.sync_viewport, "同步缩放平移");
       if self.mode == CompareDisplayMode::Split {
         ui.checkbox(&mut self.config.reverse_sync, "右侧反向同步");
         ui.separator();
-        ui.label("布局");
-        ui.selectable_value(
-          &mut self.config.layout,
-          SplitLayout::Horizontal,
+        ui.label(
+          RichText::new("布局")
+            .font(theme::section_font())
+            .color(theme::primary_label(dark)),
+        );
+        if widgets::toggle_chip(
+          ui,
           "左右",
-        );
-        ui.selectable_value(
-          &mut self.config.layout,
-          SplitLayout::Vertical,
+          self.config.layout == SplitLayout::Horizontal,
+          true,
+        ) {
+          self.config.layout = SplitLayout::Horizontal;
+        }
+        if widgets::toggle_chip(
+          ui,
           "上下",
-        );
+          self.config.layout == SplitLayout::Vertical,
+          true,
+        ) {
+          self.config.layout = SplitLayout::Vertical;
+        }
+      }
+
+      ui.separator();
+      if widgets::compact_secondary_button(ui, "适应窗口", true).clicked() {
+        self.fit_to_window(canvas_size);
+      }
+      if widgets::compact_secondary_button(ui, "100%", true).clicked() {
+        self.set_zoom_100(canvas_size);
       }
     });
     ui.add_space(4.0);

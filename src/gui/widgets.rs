@@ -199,9 +199,35 @@ pub fn secondary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Respon
   ui.add_enabled(enabled, btn)
 }
 
-pub fn quality_preset_chip(ui: &mut Ui, label: &str, value: u8, current: &mut u8, enabled: bool) {
+/// 工具栏用紧凑次要按钮（评审操作栏等）。
+pub fn compact_secondary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Response {
   let dark = ui.style().visuals.dark_mode;
-  let selected = *current == value;
+  let btn = Button::new(RichText::new(label).size(13.0).color(theme::primary_label(dark)))
+    .fill(theme::control_fill(dark))
+    .stroke(theme::control_stroke(dark))
+    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
+    .min_size(egui::vec2(72.0, 32.0));
+  ui.add_enabled(enabled, btn)
+}
+
+/// 工具栏用紧凑主要按钮。
+pub fn compact_primary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Response {
+  let dark = ui.style().visuals.dark_mode;
+  let accent = theme::accent(dark);
+  let btn = Button::new(RichText::new(label).size(13.0).strong().color(Color32::WHITE))
+    .fill(if enabled {
+      accent
+    } else {
+      accent.linear_multiply(0.45)
+    })
+    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
+    .min_size(egui::vec2(88.0, 32.0));
+  ui.add_enabled(enabled, btn)
+}
+
+/// 可选中芯片（与质量预设样式一致）。
+pub fn toggle_chip(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> bool {
+  let dark = ui.style().visuals.dark_mode;
   let accent = theme::accent(dark);
   let (fill, stroke, fg) = if selected {
     (
@@ -223,7 +249,37 @@ pub fn quality_preset_chip(ui: &mut Ui, label: &str, value: u8, current: &mut u8
     .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
     .min_size(egui::vec2(56.0, 32.0));
 
-  if ui.add_enabled(enabled, btn).clicked() {
+  ui.add_enabled(enabled, btn).clicked()
+}
+
+pub fn error_banner(ui: &mut Ui, text: &str) {
+  let dark = ui.style().visuals.dark_mode;
+  Frame::new()
+    .fill(theme::error_color(dark).linear_multiply(0.12))
+    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
+    .inner_margin(Margin::symmetric(14, 10))
+    .stroke(Stroke::new(1.0, theme::error_color(dark).linear_multiply(0.55)))
+    .show(ui, |ui| {
+      ui.set_width(ui.available_width());
+      ui.label(
+        RichText::new(text)
+          .size(13.5)
+          .color(theme::error_color(dark)),
+      );
+    });
+}
+
+pub fn section_label(ui: &mut Ui, text: &str) {
+  let dark = ui.style().visuals.dark_mode;
+  ui.label(
+    RichText::new(text)
+      .font(theme::section_font())
+      .color(theme::primary_label(dark)),
+  );
+}
+
+pub fn quality_preset_chip(ui: &mut Ui, label: &str, value: u8, current: &mut u8, enabled: bool) {
+  if toggle_chip(ui, label, *current == value, enabled) {
     *current = value;
   }
 }

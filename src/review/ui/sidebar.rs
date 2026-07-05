@@ -2,6 +2,7 @@
 
 use eframe::egui::{self, RichText, Ui};
 
+use crate::gui::{theme, widgets};
 use crate::review::domain::{BatchStats, ImageFilter, ReviewBatch, ReviewImageItem, ReviewStatus};
 use crate::review::error::ReviewResult;
 
@@ -27,31 +28,38 @@ pub fn batch_list_ui(
   stats_cache: &[(i64, BatchStats)],
   current: Option<i64>,
 ) -> Option<i64> {
-  ui.heading("评审批次");
+  let dark = ui.style().visuals.dark_mode;
   let mut picked = None;
   egui::ScrollArea::vertical()
     .id_salt("review_batch_list")
     .max_height(160.0)
     .show(ui, |ui| {
-    for batch in batches {
-      let stats = stats_cache
-        .iter()
-        .find(|(id, _)| *id == batch.id)
-        .map(|(_, s)| s);
-      let label = if let Some(s) = stats {
-        format!(
-          "{} · {} 张 · 通过 {}",
-          batch.name, batch.total_count, s.approved
-        )
-      } else {
-        format!("{} · {} 张", batch.name, batch.total_count)
-      };
-      let selected = current == Some(batch.id);
-      if ui.selectable_label(selected, label).clicked() {
-        picked = Some(batch.id);
+      for batch in batches {
+        let stats = stats_cache
+          .iter()
+          .find(|(id, _)| *id == batch.id)
+          .map(|(_, s)| s);
+        let label = if let Some(s) = stats {
+          format!(
+            "{} · {} 张 · 通过 {}",
+            batch.name, batch.total_count, s.approved
+          )
+        } else {
+          format!("{} · {} 张", batch.name, batch.total_count)
+        };
+        let selected = current == Some(batch.id);
+        if ui.selectable_label(selected, label).clicked() {
+          picked = Some(batch.id);
+        }
       }
-    }
-  });
+      if batches.is_empty() {
+        ui.label(
+          RichText::new("暂无批次")
+            .size(12.0)
+            .color(theme::secondary_label(dark)),
+        );
+      }
+    });
   picked
 }
 
@@ -61,9 +69,10 @@ pub fn image_list_ui(
   current: Option<i64>,
   sidebar: &mut SidebarState,
 ) -> ImageListAction {
-  ui.separator();
+  let dark = ui.style().visuals.dark_mode;
+
   ui.horizontal(|ui| {
-    ui.label("筛选");
+    widgets::section_label(ui, "筛选");
     egui::ComboBox::from_id_salt("status_filter")
       .selected_text(
         sidebar
@@ -73,7 +82,10 @@ pub fn image_list_ui(
           .unwrap_or("全部"),
       )
       .show_ui(ui, |ui| {
-        if ui.selectable_label(sidebar.filter.status.is_none(), "全部").clicked() {
+        if ui
+          .selectable_label(sidebar.filter.status.is_none(), "全部")
+          .clicked()
+        {
           sidebar.filter.status = None;
         }
         for s in [
@@ -91,9 +103,11 @@ pub fn image_list_ui(
         }
       });
   });
+
   ui.add(
     egui::TextEdit::singleline(&mut sidebar.filter.search)
-      .hint_text("搜索文件名…"),
+      .hint_text("搜索文件名…")
+      .margin(egui::vec2(12.0, 10.0)),
   );
 
   let mut filter_changed = false;
@@ -101,36 +115,45 @@ pub fn image_list_ui(
     filter_changed = true;
   }
 
+  ui.add_space(4.0);
   ui.separator();
-  ui.label(RichText::new("图片列表").strong());
+  ui.add_space(4.0);
+
   let mut picked = None;
   egui::ScrollArea::vertical()
     .id_salt("review_image_list")
     .show(ui, |ui| {
-    for img in images {
-      let name = img
-        .file_path
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| img.file_path.display().to_string());
-      let row = format!("[{}] {}", img.status.label(), name);
-      let multi = sidebar.selected_ids.contains(&img.id);
-      ui.horizontal(|ui| {
-        let mut checked = multi;
-        if ui.checkbox(&mut checked, "").changed() {
-          if checked {
-            sidebar.selected_ids.push(img.id);
-          } else {
-            sidebar.selected_ids.retain(|id| *id != img.id);
+      for img in images {
+        let name = img
+          .file_path
+          .file_name()
+          .map(|s| s.to_string_lossy().to_string())
+          .unwrap_or_else(|| img.file_path.display().to_string());
+        let row = format!("[{}] {}", img.status.label(), name);
+        let multi = sidebar.selected_ids.contains(&img.id);
+        ui.horizontal(|ui| {
+          let mut checked = multi;
+          if ui.checkbox(&mut checked, "").changed() {
+            if checked {
+              sidebar.selected_ids.push(img.id);
+            } else {
+              sidebar.selected_ids.retain(|id| *id != img.id);
+            }
           }
-        }
-        let selected = current == Some(img.id);
-        if ui.selectable_label(selected, row).clicked() {
-          picked = Some(img.id);
-        }
-      });
-    }
-  });
+          let selected = current == Some(img.id);
+          if ui.selectable_label(selected, row).clicked() {
+            picked = Some(img.id);
+          }
+        });
+      }
+      if images.is_empty() {
+        ui.label(
+          RichText::new("暂无图片")
+            .size(12.0)
+            .color(theme::secondary_label(dark)),
+        );
+      }
+    });
   ImageListAction {
     reload: filter_changed,
     selected: picked,
@@ -143,16 +166,16 @@ pub struct ImageListAction {
   pub selected: Option<i64>,
 }
 
-pub fn status_buttons(ui: &mut Ui) -> Option<ReviewStatus> {
+pub fn status_buttons(ui: &mut Ui, current: Option<ReviewStatus>) -> Option<ReviewStatus> {
   let mut picked = None;
-  ui.horizontal(|ui| {
+  ui.horizontal_wrapped(|ui| {
     for s in [
       ReviewStatus::Pending,
       ReviewStatus::Approved,
       ReviewStatus::NeedsFix,
       ReviewStatus::Rejected,
     ] {
-      if ui.button(s.label()).clicked() {
+      if widgets::toggle_chip(ui, s.label(), current == Some(s), true) {
         picked = Some(s);
       }
     }
