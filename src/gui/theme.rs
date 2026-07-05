@@ -19,6 +19,8 @@ pub const CONTENT_MAX_WIDTH: f32 = 960.0;
 pub const CONTENT_MIN_WIDTH: f32 = 320.0;
 /// 窄屏断点：控件改为纵向堆叠。
 pub const NARROW_BREAKPOINT: f32 = 520.0;
+/// 转换设置区标签列宽（与文件夹行对齐）。
+pub const SETTINGS_LABEL_WIDTH: f32 = 72.0;
 /// 评审面板三栏改单栏的断点。
 pub const REVIEW_NARROW_BREAKPOINT: f32 = 880.0;
 /// 日志面板高度上下限。
@@ -129,6 +131,15 @@ pub fn toolbar_fill(dark: bool) -> Color32 {
     Color32::from_rgb(36, 36, 38)
   } else {
     Color32::from_rgb(251, 251, 253)
+  }
+}
+
+/// 顶部分段切换轨道背景。
+pub fn segment_track_fill(dark: bool) -> Color32 {
+  if dark {
+    Color32::from_rgb(50, 50, 52)
+  } else {
+    Color32::from_rgb(229, 229, 234)
   }
 }
 

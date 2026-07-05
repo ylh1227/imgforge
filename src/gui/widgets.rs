@@ -252,6 +252,63 @@ pub fn toggle_chip(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> b
   ui.add_enabled(enabled, btn).clicked()
 }
 
+/// 顶部模式切换条：紧凑横向分段，宽度随内容收缩（不撑满父级）。
+pub fn mode_tab_bar<T: PartialEq + Copy>(
+  ui: &mut Ui,
+  value: &mut T,
+  options: &[(T, &str)],
+) {
+  if options.len() < 2 {
+    return;
+  }
+
+  let dark = ui.style().visuals.dark_mode;
+  let accent = theme::accent(dark);
+  let seg_w = if ui.available_width() < theme::NARROW_BREAKPOINT {
+    108.0
+  } else {
+    120.0
+  };
+  let seg_h = 36.0;
+
+  ui.horizontal(|ui| {
+    Frame::new()
+      .fill(theme::segment_track_fill(dark))
+      .stroke(theme::separator_stroke(dark))
+      .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
+      .inner_margin(Margin::same(4))
+      .show(ui, |ui| {
+        ui.horizontal(|ui| {
+          ui.spacing_mut().item_spacing.x = 4.0;
+          for (option, label) in options {
+            let selected = *value == *option;
+            let (fill, stroke, fg) = if selected {
+              (accent, Stroke::NONE, Color32::WHITE)
+            } else {
+              (
+                Color32::TRANSPARENT,
+                Stroke::NONE,
+                theme::primary_label(dark),
+              )
+            };
+
+            let text = RichText::new(*label).size(14.0).color(fg);
+            let text = if selected { text.strong() } else { text };
+            let btn = Button::new(text)
+              .fill(fill)
+              .stroke(stroke)
+              .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS.saturating_sub(2)))
+              .min_size(egui::vec2(seg_w, seg_h));
+
+            if ui.add(btn).clicked() {
+              *value = *option;
+            }
+          }
+        });
+      });
+  });
+}
+
 pub fn error_banner(ui: &mut Ui, text: &str) {
   let dark = ui.style().visuals.dark_mode;
   Frame::new()
@@ -278,6 +335,100 @@ pub fn section_label(ui: &mut Ui, text: &str) {
   );
 }
 
+/// 转换设置区内细分组标题（如「文件选项」）。
+pub fn settings_subheading(ui: &mut Ui, text: &str) {
+  let dark = ui.style().visuals.dark_mode;
+  ui.label(
+    RichText::new(text)
+      .size(12.0)
+      .color(theme::secondary_label(dark)),
+  );
+}
+
+/// 分组内细分隔线。
+pub fn inset_separator(ui: &mut Ui) {
+  ui.add_space(4.0);
+  ui.separator();
+  ui.add_space(4.0);
+}
+
+fn settings_label(ui: &mut Ui, text: &str, dark: bool) {
+  ui.allocate_ui_with_layout(
+    egui::vec2(theme::SETTINGS_LABEL_WIDTH, ui.spacing().interact_size.y),
+    Layout::left_to_right(egui::Align::Center),
+    |ui| {
+      ui.label(
+        RichText::new(text)
+          .font(theme::section_font())
+          .color(theme::primary_label(dark)),
+      );
+    },
+  );
+}
+
+/// 固定标签列 + 右侧控件行（宽屏）；窄屏改为标签在上。
+pub fn settings_labeled_row<R>(
+  ui: &mut Ui,
+  label: &str,
+  add_contents: impl FnOnce(&mut Ui) -> R,
+) -> R {
+  let dark = ui.style().visuals.dark_mode;
+  let narrow = ui.available_width() < theme::NARROW_BREAKPOINT;
+
+  if narrow {
+    ui.label(
+      RichText::new(label)
+        .font(theme::section_font())
+        .color(theme::primary_label(dark)),
+    );
+    ui.add_space(4.0);
+    add_contents(ui)
+  } else {
+    ui.horizontal(|ui| {
+      settings_label(ui, label, dark);
+      ui.add_space(8.0);
+      add_contents(ui)
+    })
+    .inner
+  }
+}
+
+/// 与 [`settings_labeled_row`] 标签列对齐的缩进区域（用于预设按钮等）。
+pub fn settings_indented<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+  let narrow = ui.available_width() < theme::NARROW_BREAKPOINT;
+  if narrow {
+    add_contents(ui)
+  } else {
+    ui.horizontal(|ui| {
+      ui.add_space(theme::SETTINGS_LABEL_WIDTH + 8.0);
+      add_contents(ui)
+    })
+    .inner
+  }
+}
+
+/// 多列复选框网格，列宽均分。
+pub fn checkbox_grid(
+  ui: &mut Ui,
+  options: &mut [(&mut bool, &str)],
+  enabled: bool,
+  columns: usize,
+) {
+  if options.is_empty() {
+    return;
+  }
+
+  let columns = columns.max(1);
+  let narrow = ui.available_width() < theme::NARROW_BREAKPOINT;
+  let cols = if narrow { 1 } else { columns };
+
+  ui.columns(cols, |columns_ui| {
+    for (idx, (value, label)) in options.iter_mut().enumerate() {
+      columns_ui[idx % cols].add_enabled(enabled, egui::Checkbox::new(*value, *label));
+    }
+  });
+}
+
 pub fn quality_preset_chip(ui: &mut Ui, label: &str, value: u8, current: &mut u8, enabled: bool) {
   if toggle_chip(ui, label, *current == value, enabled) {
     *current = value;
@@ -285,16 +436,7 @@ pub fn quality_preset_chip(ui: &mut Ui, label: &str, value: u8, current: &mut u8
 }
 
 pub fn quality_slider_row(ui: &mut Ui, quality: &mut u8, enabled: bool) {
-  let dark = ui.style().visuals.dark_mode;
-  let narrow = ui.available_width() < theme::NARROW_BREAKPOINT;
-
-  if narrow {
-    ui.label(
-      RichText::new(format!("质量  {}", quality))
-        .font(theme::section_font())
-        .color(theme::primary_label(dark)),
-    );
-    ui.add_space(4.0);
+  settings_labeled_row(ui, &format!("质量  {quality}"), |ui| {
     let slider_w = ui.available_width().max(120.0);
     let slider_h = ui.spacing().interact_size.y;
     ui.add_enabled_ui(enabled, |ui| {
@@ -303,45 +445,30 @@ pub fn quality_slider_row(ui: &mut Ui, quality: &mut u8, enabled: bool) {
         egui::Slider::new(quality, 1..=100).show_value(false),
       );
     });
-  } else {
-    ui.horizontal(|ui| {
-      ui.label(
-        RichText::new(format!("质量  {}", quality))
-          .font(theme::section_font())
-          .color(theme::primary_label(dark)),
-      );
-      ui.add_space(8.0);
-      let slider_w = (ui.available_width() - 8.0).max(120.0);
-      let slider_h = ui.spacing().interact_size.y;
-      ui.add_enabled_ui(enabled, |ui| {
-        ui.add_sized(
-          egui::vec2(slider_w, slider_h),
-          egui::Slider::new(quality, 1..=100).show_value(false),
-        );
-      });
-    });
-  }
+  });
 }
 
 pub fn quality_presets_row(ui: &mut Ui, quality: &mut u8, enabled: bool) {
-  let narrow = ui.available_width() < theme::NARROW_BREAKPOINT;
-  if narrow {
-    ui.horizontal_wrapped(|ui| {
-      quality_preset_chip(ui, "Web", 75, quality, enabled);
-      ui.add_space(6.0);
-      quality_preset_chip(ui, "默认", 85, quality, enabled);
-      ui.add_space(6.0);
-      quality_preset_chip(ui, "打印", 95, quality, enabled);
-    });
-  } else {
-    ui.horizontal(|ui| {
-      quality_preset_chip(ui, "Web", 75, quality, enabled);
-      ui.add_space(6.0);
-      quality_preset_chip(ui, "默认", 85, quality, enabled);
-      ui.add_space(6.0);
-      quality_preset_chip(ui, "打印", 95, quality, enabled);
-    });
-  }
+  settings_indented(ui, |ui| {
+    let narrow = ui.available_width() < theme::NARROW_BREAKPOINT;
+    if narrow {
+      ui.horizontal_wrapped(|ui| {
+        quality_preset_chip(ui, "Web", 75, quality, enabled);
+        ui.add_space(6.0);
+        quality_preset_chip(ui, "默认", 85, quality, enabled);
+        ui.add_space(6.0);
+        quality_preset_chip(ui, "打印", 95, quality, enabled);
+      });
+    } else {
+      ui.horizontal(|ui| {
+        quality_preset_chip(ui, "Web", 75, quality, enabled);
+        ui.add_space(6.0);
+        quality_preset_chip(ui, "默认", 85, quality, enabled);
+        ui.add_space(6.0);
+        quality_preset_chip(ui, "打印", 95, quality, enabled);
+      });
+    }
+  });
 }
 
 pub fn status_banner(ui: &mut Ui, text: &str, running: bool) {

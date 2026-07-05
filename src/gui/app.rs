@@ -269,32 +269,24 @@ impl ImgforgeApp {
   }
 
   fn settings_checkboxes(&mut self, ui: &mut egui::Ui, enabled: bool) {
-    let two_col = ui.available_width() > theme::NARROW_BREAKPOINT;
-    let options = [
+    let mut file_options = vec![
       (&mut self.recursive, "包含子文件夹"),
       (&mut self.preserve_structure, "保留目录结构"),
       (&mut self.overwrite, "覆盖已有文件"),
       (&mut self.strip_metadata, "移除 EXIF 元数据"),
     ];
 
-    if two_col {
-      ui.columns(2, |cols| {
-        for (idx, (value, label)) in options.into_iter().enumerate() {
-          cols[idx % 2].add_enabled(enabled, egui::Checkbox::new(value, label));
-        }
-      });
-    } else {
-      for (value, label) in options {
-        ui.add_enabled(enabled, egui::Checkbox::new(value, label));
-      }
-    }
+    widgets::settings_subheading(ui, "文件选项");
+    ui.add_space(4.0);
+    widgets::checkbox_grid(ui, &mut file_options, enabled, 2);
 
     #[cfg(feature = "bayer")]
     {
-      ui.add_enabled(
-        enabled,
-        egui::Checkbox::new(&mut self.bayer_only, "仅解 Bayer/RAW（不做缩放锐化）"),
-      );
+      widgets::inset_separator(ui);
+      widgets::settings_subheading(ui, "RAW 处理");
+      ui.add_space(4.0);
+      let mut raw_options = [(&mut self.bayer_only, "仅解 Bayer/RAW（不做缩放锐化）")];
+      widgets::checkbox_grid(ui, &mut raw_options, enabled, 1);
     }
   }
 }
@@ -378,9 +370,15 @@ impl eframe::App for ImgforgeApp {
         ui.add_space(theme::macos_titlebar_inset(ctx));
 
         ui.horizontal(|ui| {
-          ui.selectable_value(&mut self.mode, AppMode::Convert, "格式转换");
           if self.review_panel.is_some() {
-            ui.selectable_value(&mut self.mode, AppMode::Review, "图片评审");
+            widgets::mode_tab_bar(
+              ui,
+              &mut self.mode,
+              &[
+                (AppMode::Convert, "格式转换"),
+                (AppMode::Review, "图片评审"),
+              ],
+            );
           }
         });
         ui.add_space(8.0);
@@ -481,15 +479,10 @@ impl eframe::App for ImgforgeApp {
               ui.add_space(16.0);
 
               widgets::grouped_section(ui, "转换设置", |ui| {
-                ui.horizontal(|ui| {
-                  ui.label(
-                    RichText::new("目标格式")
-                      .font(theme::section_font())
-                      .color(theme::primary_label(dark)),
-                  );
-                  ui.add_space(8.0);
+                widgets::settings_labeled_row(ui, "目标格式", |ui| {
+                  let combo_w = f32::min(140.0, ui.available_width());
                   egui::ComboBox::from_id_salt("format")
-                    .width(f32::min(128.0, ui.available_width() * 0.35))
+                    .width(combo_w)
                     .selected_text(self.formats[self.format_index].extension().to_uppercase())
                     .show_ui(ui, |ui| {
                       for (idx, format) in self.formats.iter().enumerate() {
@@ -502,13 +495,13 @@ impl eframe::App for ImgforgeApp {
                     });
                 });
 
-                ui.add_space(10.0);
+                ui.add_space(6.0);
                 widgets::quality_slider_row(ui, &mut self.quality, enabled);
 
-                ui.add_space(8.0);
+                ui.add_space(6.0);
                 widgets::quality_presets_row(ui, &mut self.quality, enabled);
 
-                ui.add_space(10.0);
+                widgets::inset_separator(ui);
                 self.settings_checkboxes(ui, enabled);
               });
 
