@@ -11,6 +11,7 @@ use crate::review::error::ReviewResult;
 
 const ROW_HEIGHT: f32 = 64.0;
 const THUMB_SIZE: f32 = 48.0;
+const MAX_THUMB_REQUESTS_PER_FRAME: usize = 4;
 
 pub struct SidebarState {
   pub filter: ImageFilter,
@@ -331,6 +332,109 @@ fn filter_advanced_ui(ui: &mut Ui, sidebar: &mut SidebarState) -> bool {
   changed
 }
 
+fn render_image_list_row(
+  ui: &mut Ui,
+  dark: bool,
+  img: &ReviewImageItem,
+  current: Option<i64>,
+  sidebar: &mut SidebarState,
+  thumbs: &mut crate::review::ui::ListThumbnailCache,
+  thumb_requests: &mut usize,
+) -> Option<i64> {
+  if thumbs.get(img.id).is_none() && *thumb_requests < MAX_THUMB_REQUESTS_PER_FRAME {
+    thumbs.request(img.id, &img.file_path);
+    *thumb_requests += 1;
+  }
+
+  let name = img
+    .file_path
+    .file_name()
+    .map(|s| s.to_string_lossy().to_string())
+    .unwrap_or_else(|| img.file_path.display().to_string());
+  let multi = sidebar.selected_ids.contains(&img.id);
+  let selected = current == Some(img.id);
+  let mut picked = None;
+
+  ui.set_min_height(ROW_HEIGHT);
+  ui.horizontal(|ui| {
+    let mut checked = multi;
+    if ui.checkbox(&mut checked, "").changed() {
+      if checked {
+        sidebar.selected_ids.push(img.id);
+      } else {
+        sidebar.selected_ids.retain(|id| *id != img.id);
+      }
+    }
+
+    let (thumb_rect, thumb_resp) =
+      ui.allocate_exact_size(egui::vec2(THUMB_SIZE, THUMB_SIZE), egui::Sense::click());
+    if let Some(tex) = thumbs.get(img.id) {
+      ui.painter().image(
+        tex.id(),
+        thumb_rect,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        egui::Color32::WHITE,
+      );
+    } else {
+      ui.painter()
+        .rect_filled(thumb_rect, 4.0, theme::control_fill(dark));
+    }
+
+    widgets::status_dot(
+      ui,
+      egui::pos2(thumb_rect.right() - 6.0, thumb_rect.bottom() - 6.0),
+      img.status.color_rgba(),
+      5.0,
+    );
+
+    if let Some(tag_ids) = sidebar.image_tags.get(&img.id) {
+      for (i, tid) in tag_ids.iter().take(3).enumerate() {
+        if let Some(tag) = sidebar.available_tags.iter().find(|t| t.id == *tid) {
+          let c = tag.color;
+          ui.painter().circle_filled(
+            egui::pos2(thumb_rect.left() + 6.0 + i as f32 * 9.0, thumb_rect.top() + 6.0),
+            4.0,
+            egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]),
+          );
+        }
+      }
+    }
+
+    ui.vertical(|ui| {
+      let name_resp = ui.selectable_label(selected, &name);
+      if img.annotation_count > 0 {
+        ui.label(
+          RichText::new(format!("{} 条标注", img.annotation_count))
+            .size(11.0)
+            .color(theme::secondary_label(dark)),
+        );
+      }
+      let mut hover = img.status.label().to_string();
+      if let Some(tag_ids) = sidebar.image_tags.get(&img.id) {
+        let names: Vec<String> = tag_ids
+          .iter()
+          .filter_map(|tid| {
+            sidebar
+              .available_tags
+              .iter()
+              .find(|t| t.id == *tid)
+              .map(|t| t.name.clone())
+          })
+          .collect();
+        if !names.is_empty() {
+          hover = format!("{} · {}", hover, names.join("、"));
+        }
+      }
+      name_resp.clone().on_hover_text(hover);
+      if name_resp.clicked() || thumb_resp.clicked() {
+        picked = Some(img.id);
+      }
+    });
+  });
+
+  picked
+}
+
 pub fn image_list_ui(
   ui: &mut Ui,
   ctx: &egui::Context,
@@ -350,126 +454,37 @@ pub fn image_list_ui(
   let total = images.len();
   let scroll_id = ui.id().with("review_image_list");
 
-  egui::ScrollArea::vertical()
-    .id_salt(scroll_id)
-    .show(ui, |ui| {
-      if images.is_empty() {
-        ui.label(
-          RichText::new("暂无图片")
-            .size(12.0)
-            .color(theme::secondary_label(dark)),
-        );
-        return;
-      }
-
-      let viewport = ui.clip_rect();
-      let scroll_off = ui.min_rect().min.y - viewport.min.y;
-      let first = ((scroll_off / ROW_HEIGHT).floor() as isize).max(0) as usize;
-      let visible = ((viewport.height() / ROW_HEIGHT).ceil() as usize).saturating_add(2);
-      let last = (first + visible).min(total);
-
-      ui.set_min_height(total as f32 * ROW_HEIGHT);
-      ui.add_space(first as f32 * ROW_HEIGHT);
-
-      for img in &images[first..last] {
-        thumbs.request(img.id, &img.file_path);
-
-        let name = img
-          .file_path
-          .file_name()
-          .map(|s| s.to_string_lossy().to_string())
-          .unwrap_or_else(|| img.file_path.display().to_string());
-        let multi = sidebar.selected_ids.contains(&img.id);
-        let selected = current == Some(img.id);
-
-        ui.horizontal(|ui| {
-          let mut checked = multi;
-          if ui.checkbox(&mut checked, "").changed() {
-            if checked {
-              sidebar.selected_ids.push(img.id);
-            } else {
-              sidebar.selected_ids.retain(|id| *id != img.id);
-            }
-          }
-
-          let (thumb_rect, thumb_resp) =
-            ui.allocate_exact_size(egui::vec2(THUMB_SIZE, THUMB_SIZE), egui::Sense::click());
-          if let Some(tex) = thumbs.get(img.id) {
-            ui.painter().image(
-              tex.id(),
-              thumb_rect,
-              egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-              egui::Color32::WHITE,
-            );
-          } else {
-            ui.painter().rect_filled(
-              thumb_rect,
-              4.0,
-              theme::control_fill(dark),
-            );
-          }
-
-          // 状态色点：缩略图右下角
-          widgets::status_dot(
+  if images.is_empty() {
+    ui.label(
+      RichText::new("暂无图片")
+        .size(12.0)
+        .color(theme::secondary_label(dark)),
+    );
+  } else {
+    let mut thumb_requests = 0usize;
+    egui::ScrollArea::vertical()
+      .id_salt(scroll_id)
+      .show_rows(ui, ROW_HEIGHT, total, |ui, row_range| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        for row in row_range {
+          if let Some(id) = render_image_list_row(
             ui,
-            egui::pos2(thumb_rect.right() - 6.0, thumb_rect.bottom() - 6.0),
-            img.status.color_rgba(),
-            5.0,
-          );
-
-          // 标签色点：缩略图左上角，最多 3 个
-          if let Some(tag_ids) = sidebar.image_tags.get(&img.id) {
-            for (i, tid) in tag_ids.iter().take(3).enumerate() {
-              if let Some(tag) = sidebar.available_tags.iter().find(|t| t.id == *tid) {
-                let c = tag.color;
-                ui.painter().circle_filled(
-                  egui::pos2(thumb_rect.left() + 6.0 + i as f32 * 9.0, thumb_rect.top() + 6.0),
-                  4.0,
-                  egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]),
-                );
-              }
-            }
+            dark,
+            &images[row],
+            current,
+            sidebar,
+            thumbs,
+            &mut thumb_requests,
+          ) {
+            picked = Some(id);
           }
+        }
+      });
 
-          ui.vertical(|ui| {
-            let name_resp = ui.selectable_label(selected, &name);
-            if img.annotation_count > 0 {
-              ui.label(
-                RichText::new(format!("{} 条标注", img.annotation_count))
-                  .size(11.0)
-                  .color(theme::secondary_label(dark)),
-              );
-            }
-            let mut hover = img.status.label().to_string();
-            if let Some(tag_ids) = sidebar.image_tags.get(&img.id) {
-              let names: Vec<String> = tag_ids
-                .iter()
-                .filter_map(|tid| {
-                  sidebar
-                    .available_tags
-                    .iter()
-                    .find(|t| t.id == *tid)
-                    .map(|t| t.name.clone())
-                })
-                .collect();
-              if !names.is_empty() {
-                hover = format!("{} · {}", hover, names.join("、"));
-              }
-            }
-            name_resp.clone().on_hover_text(hover);
-            if name_resp.clicked() || thumb_resp.clicked() {
-              picked = Some(img.id);
-            }
-          });
-        });
-      }
-
-      ui.add_space((total.saturating_sub(last)) as f32 * ROW_HEIGHT);
-
-      if thumbs.poll(ctx) {
-        ctx.request_repaint();
-      }
-    });
+    if thumbs.poll(ctx) {
+      ctx.request_repaint_after(std::time::Duration::from_millis(48));
+    }
+  }
 
   if sidebar.filter.search.len() == 1 {
     filter_changed = true;
@@ -489,14 +504,11 @@ pub struct ImageListAction {
 
 pub fn status_buttons(ui: &mut Ui, current: Option<ReviewStatus>) -> Option<ReviewStatus> {
   let mut picked = None;
-  ui.horizontal(|ui| {
-    ui.spacing_mut().item_spacing.x = 6.0;
-    for s in ReviewStatus::all() {
-      if widgets::colored_toggle_chip(ui, s.label(), s.color_rgba(), current == Some(s), true) {
-        picked = Some(s);
-      }
+  for s in ReviewStatus::all() {
+    if widgets::colored_toggle_chip(ui, s.label(), s.color_rgba(), current == Some(s), true) {
+      picked = Some(s);
     }
-  });
+  }
   picked
 }
 

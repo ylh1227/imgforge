@@ -7,10 +7,79 @@ use crate::gui::theme;
 /// 工具栏统一行高（与 compact 按钮、状态芯片一致）。
 pub const TOOLBAR_ROW_HEIGHT: f32 = 32.0;
 
+/// 工具栏内按钮内边距（小于全局 `button_padding`，以便固定行高内垂直居中）。
+const TOOLBAR_BUTTON_PADDING: egui::Vec2 = egui::vec2(10.0, 4.0);
+/// 与 compact 按钮描边对齐，纯文本标签需补一点左距。
+const TOOLBAR_STROKE_INSET: f32 = 2.0;
+
+fn add_toolbar_sized_button(ui: &mut Ui, size: egui::Vec2, enabled: bool, btn: Button) -> egui::Response {
+  ui.add_enabled_ui(enabled, |ui| ui.add_sized(size, btn)).inner
+}
+
+fn toolbar_text_width(ui: &Ui, label: &str) -> f32 {
+  ui.fonts(|fonts| {
+    fonts
+      .layout_no_wrap(
+        label.to_owned(),
+        egui::FontId::proportional(13.0),
+        Color32::PLACEHOLDER,
+      )
+      .size()
+      .x
+  })
+}
+
+fn toolbar_button_width(ui: &Ui, label: &str) -> f32 {
+  (toolbar_text_width(ui, label) + TOOLBAR_BUTTON_PADDING.x * 2.0).max(56.0)
+}
+
+/// 常用栏左区宽度：三行左组对齐（导航 / 对比模式 / 视图）。
+pub fn workflow_left_zone_width(ui: &Ui, page_label: Option<&str>) -> f32 {
+  let spacing = 6.0;
+  let mut row1 =
+    toolbar_button_width(ui, "◀ 上一张") + spacing + toolbar_button_width(ui, "下一张 ▶");
+  if let Some(label) = page_label {
+    row1 += spacing + toolbar_text_width(ui, label);
+  }
+  let row2 = TOOLBAR_STROKE_INSET + toolbar_text_width(ui, "对比模式") + spacing + 120.0;
+  let row3 = toolbar_button_width(ui, "适应窗口")
+    + spacing
+    + toolbar_button_width(ui, "100%")
+    + spacing
+    + toolbar_button_width(ui, "撤销标注");
+  row1.max(row2).max(row3)
+}
+
+/// 常用栏左区容器（固定宽，内容自左排列）。
+pub fn toolbar_left_zone<R>(ui: &mut Ui, width: f32, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+  ui.allocate_ui_with_layout(
+    egui::vec2(width, TOOLBAR_ROW_HEIGHT),
+    Layout::left_to_right(egui::Align::Center),
+    |ui| {
+      ui.spacing_mut().item_spacing.x = 6.0;
+      add_contents(ui)
+    },
+  )
+  .inner
+}
+
+/// 工具栏字段标签（与 compact 按钮左缘对齐）。
+pub fn toolbar_field_label(ui: &mut Ui, text: &str, dark: bool) {
+  ui.add_space(TOOLBAR_STROKE_INSET);
+  ui.label(
+    RichText::new(text)
+      .size(13.0)
+      .strong()
+      .color(theme::primary_label(dark)),
+  );
+}
+
 /// 工具栏单行：垂直居中对齐，避免 `horizontal_wrapped` 顶对齐导致错位。
 pub fn toolbar_row<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
   ui.horizontal(|ui| {
+    ui.spacing_mut().button_padding = TOOLBAR_BUTTON_PADDING;
     ui.set_min_height(TOOLBAR_ROW_HEIGHT);
+    ui.set_width(ui.available_width());
     ui.with_layout(Layout::left_to_right(egui::Align::Center), add_contents)
       .inner
   })
@@ -28,6 +97,55 @@ pub fn toolbar_separator(ui: &mut Ui) {
   ui.painter()
     .vline(rect.center().x, rect.y_range(), theme::separator_stroke(dark));
   ui.add_space(6.0);
+}
+
+/// 工具栏下拉框：与 compact 按钮相同的圆角、描边与行高。
+pub fn toolbar_combo_box(
+  ui: &mut Ui,
+  id_salt: impl std::hash::Hash,
+  selected_label: &str,
+  width: f32,
+  add_menu: impl FnOnce(&mut Ui),
+) {
+  let dark = ui.style().visuals.dark_mode;
+  let popup_id = ui.id().with(id_salt).with("popup");
+  let is_open = ui.memory(|m| m.is_popup_open(popup_id));
+
+  let btn = Button::new(
+    RichText::new(selected_label)
+      .size(13.0)
+      .color(theme::primary_label(dark)),
+  )
+  .fill(if is_open {
+    theme::accent(dark).linear_multiply(0.15)
+  } else {
+    theme::control_fill(dark)
+  })
+  .stroke(theme::control_stroke(dark))
+  .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS));
+
+  let button_response =
+    add_toolbar_sized_button(ui, egui::vec2(width, TOOLBAR_ROW_HEIGHT), true, btn);
+
+  if button_response.clicked() {
+    ui.memory_mut(|m| m.toggle_popup(popup_id));
+  }
+
+  let _ = egui::popup::popup_below_widget(
+    ui,
+    popup_id,
+    &button_response,
+    egui::PopupCloseBehavior::CloseOnClickOutside,
+    |ui| {
+      ui.set_min_width(width);
+      Frame::new()
+        .fill(theme::grouped_fill(dark))
+        .stroke(theme::control_stroke(dark))
+        .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
+        .inner_margin(Margin::symmetric(4, 4))
+        .show(ui, add_menu);
+    },
+  );
 }
 
 pub fn navigation_header(ui: &mut Ui, subtitle: &str) {
@@ -225,18 +343,22 @@ pub fn secondary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Respon
   ui.add_enabled(enabled, btn)
 }
 
-/// 工具栏用紧凑次要按钮（评审操作栏等）。
+/// 工具栏用紧凑次要按钮（评审操作栏等，宽度随文案）。
 pub fn compact_secondary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Response {
   let dark = ui.style().visuals.dark_mode;
   let btn = Button::new(RichText::new(label).size(13.0).color(theme::primary_label(dark)))
     .fill(theme::control_fill(dark))
     .stroke(theme::control_stroke(dark))
-    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
-    .min_size(egui::vec2(72.0, TOOLBAR_ROW_HEIGHT));
-  ui.add_enabled(enabled, btn)
+    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS));
+  add_toolbar_sized_button(
+    ui,
+    egui::vec2(toolbar_button_width(ui, label), TOOLBAR_ROW_HEIGHT),
+    enabled,
+    btn,
+  )
 }
 
-/// 工具栏用紧凑主要按钮。
+/// 工具栏用紧凑主要按钮（宽度随文案）。
 pub fn compact_primary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Response {
   let dark = ui.style().visuals.dark_mode;
   let accent = theme::accent(dark);
@@ -246,9 +368,13 @@ pub fn compact_primary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::
     } else {
       accent.linear_multiply(0.45)
     })
-    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
-    .min_size(egui::vec2(88.0, TOOLBAR_ROW_HEIGHT));
-  ui.add_enabled(enabled, btn)
+    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS));
+  add_toolbar_sized_button(
+    ui,
+    egui::vec2(toolbar_button_width(ui, label), TOOLBAR_ROW_HEIGHT),
+    enabled,
+    btn,
+  )
 }
 
 /// 可选中芯片（与质量预设样式一致）。
@@ -272,10 +398,9 @@ pub fn toggle_chip(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> b
   let btn = Button::new(RichText::new(label).size(13.0).color(fg))
     .fill(fill)
     .stroke(stroke)
-    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
-    .min_size(egui::vec2(56.0, TOOLBAR_ROW_HEIGHT));
+    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS));
 
-  ui.add_enabled(enabled, btn).clicked()
+  add_toolbar_sized_button(ui, egui::vec2(56.0, TOOLBAR_ROW_HEIGHT), enabled, btn).clicked()
 }
 
 /// 带固定色的可选中芯片：选中时用该色填充，未选中显示描边点。
@@ -300,9 +425,8 @@ pub fn colored_toggle_chip(
   let btn = Button::new(RichText::new(label).size(13.0).color(fg))
     .fill(fill)
     .stroke(stroke)
-    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
-    .min_size(egui::vec2(56.0, TOOLBAR_ROW_HEIGHT));
-  ui.add_enabled(enabled, btn).clicked()
+    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS));
+  add_toolbar_sized_button(ui, egui::vec2(56.0, TOOLBAR_ROW_HEIGHT), enabled, btn).clicked()
 }
 
 /// 在指定矩形右下角绘制状态色小圆点（叠加到缩略图/行）。

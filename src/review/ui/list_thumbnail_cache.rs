@@ -10,6 +10,7 @@ use crate::review::service::{
 };
 
 const TEXTURE_PREFIX: &str = "review_list_thumb_";
+const MAX_LIST_TEXTURE_UPLOADS_PER_FRAME: usize = 2;
 
 /// 列表缩略图纹理缓存（按 image_id 索引）。
 pub struct ListThumbnailCache {
@@ -63,7 +64,11 @@ impl ListThumbnailCache {
       self.queue_decode(id, &path);
       dirty = true;
     }
-    for img in self.loader.poll() {
+    let mut uploaded = 0;
+    while uploaded < MAX_LIST_TEXTURE_UPLOADS_PER_FRAME {
+      let Some(img) = self.loader.try_recv_one() else {
+        break;
+      };
       if let Some(id) = self.decode_id_by_key.remove(&img.key) {
         let color = egui::ColorImage::from_rgba_unmultiplied(
           [img.width as usize, img.height as usize],
@@ -77,6 +82,7 @@ impl ListThumbnailCache {
         self.textures.insert(id, tex);
         self.inflight.remove(&id);
         dirty = true;
+        uploaded += 1;
       }
     }
     dirty

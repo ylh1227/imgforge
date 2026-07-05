@@ -18,7 +18,7 @@ use crate::review::service::{
 use crate::review::is_irreversible_transition;
 use crate::review::RemarkWriteMode;
 use crate::review::ui::annotation_canvas::AnnotationCanvasEvent;
-use crate::review::ui::compare_view::CompareView;
+use crate::review::ui::compare_view::{CompareDisplayMode, CompareView, MAX_MULTI_COMPARE_PANES};
 use crate::review::ui::shortcuts::handle_shortcuts;
 use crate::review::domain::image_item::next_image_id;
 use crate::review::service::ReviewModuleConfig;
@@ -83,6 +83,10 @@ pub struct ReviewPanel {
   new_tag_color_idx: usize,
   renaming_tag: Option<(i64, String)>,
   list_thumbs: ListThumbnailCache,
+  /// 画布区域最近一次布局尺寸（用于「适应窗口」，避免用整窗 viewport 误算）。
+  canvas_area_size: egui::Vec2,
+  last_viewport_size: egui::Vec2,
+  viewport_resize_frames: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -164,6 +168,9 @@ impl ReviewPanel {
       new_tag_color_idx: 0,
       renaming_tag: None,
       list_thumbs: ListThumbnailCache::default(),
+      canvas_area_size: egui::Vec2::ZERO,
+      last_viewport_size: egui::Vec2::ZERO,
+      viewport_resize_frames: 0,
     };
     let _ = panel.reload_tags();
     panel.reload_batches()?;
@@ -196,6 +203,16 @@ impl ReviewPanel {
   ) {
     self.process_pending_import();
     self.handle_shortcut_actions(ctx);
+    let vp = viewport_size(ctx);
+    if (vp - self.last_viewport_size).length_sq() > 4.0 {
+      self.viewport_resize_frames = 12;
+      self.last_viewport_size = vp;
+    } else if self.viewport_resize_frames > 0 {
+      self.viewport_resize_frames -= 1;
+    }
+    self
+      .compare_view
+      .set_defer_texture_load(self.viewport_resize_frames > 0);
     // 切换对比模式下：空格键手动翻转原图/转换后
     if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
       self.compare_view.toggle_flip();
@@ -336,24 +353,27 @@ impl ReviewPanel {
       .unwrap_or(false);
 
     widgets::grouped_section(ui, "常用", |ui| {
+      let selected_count = self.sidebar.selected_ids.len();
+      let page_label = idx.map(|i| format!("{}/{}", i + 1, self.images.len()));
+      let left_w = widgets::workflow_left_zone_width(ui, page_label.as_deref());
+
       widgets::toolbar_row(ui, |ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        if widgets::compact_secondary_button(ui, "◀ 上一张", can_prev).clicked() {
-          self.select_relative(-1);
-        }
-        if widgets::compact_secondary_button(ui, "下一张 ▶", can_next).clicked() {
-          self.select_relative(1);
-        }
-        if let (Some(i), len) = (idx, self.images.len()) {
-          ui.label(
-            RichText::new(format!("{}/{}", i + 1, len))
-              .size(13.0)
-              .color(theme::secondary_label(dark)),
-          );
-        }
-
+        widgets::toolbar_left_zone(ui, left_w, |ui| {
+          if widgets::compact_secondary_button(ui, "◀ 上一张", can_prev).clicked() {
+            self.select_relative(-1);
+          }
+          if widgets::compact_secondary_button(ui, "下一张 ▶", can_next).clicked() {
+            self.select_relative(1);
+          }
+          if let Some(label) = &page_label {
+            ui.label(
+              RichText::new(label)
+                .size(13.0)
+                .color(theme::secondary_label(dark)),
+            );
+          }
+        });
         widgets::toolbar_separator(ui);
-
         let current_status = self.current_item().map(|item| item.status);
         if let Some(status) = status_buttons(ui, current_status) {
           if let Some(id) = self.current_image {
@@ -365,27 +385,51 @@ impl ReviewPanel {
       ui.add_space(8.0);
 
       widgets::toolbar_row(ui, |ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        if widgets::compact_secondary_button(ui, "适应窗口", has_image).clicked() {
-          self.compare_view.fit_to_window(viewport_size(ctx));
+        widgets::toolbar_left_zone(ui, left_w, |ui| {
+          widgets::toolbar_field_label(ui, "对比模式", dark);
+          self.compare_view.mode_selector_ui(ui);
+        });
+        widgets::toolbar_separator(ui);
+        let selected = selected_count;
+        let batch_label = format!("批量对比 ({selected})");
+        let batch_clicked = if selected >= 2 {
+          widgets::compact_primary_button(ui, &batch_label, true).clicked()
+        } else {
+          widgets::compact_secondary_button(ui, &batch_label, false).clicked()
+        };
+        if batch_clicked {
+          self.start_batch_compare();
         }
-        if widgets::compact_secondary_button(ui, "100%", has_image).clicked() {
-          self.compare_view.set_zoom_100(viewport_size(ctx));
-        }
-        if widgets::compact_secondary_button(ui, "撤销标注", has_image).clicked() {
-          if let Some(id) = self.current_image {
-            if let Err(e) = self.service.undo_last_annotation(id) {
-              self.error = Some(e.to_string());
-            } else {
-              self.load_current_annotations();
-              let _ = self.reload_images();
+      });
+
+      ui.add_space(8.0);
+
+      widgets::toolbar_row(ui, |ui| {
+        widgets::toolbar_left_zone(ui, left_w, |ui| {
+          let canvas = self.canvas_size_for_view(ctx);
+          if widgets::compact_secondary_button(ui, "适应窗口", has_image || selected_count >= 2)
+            .clicked()
+          {
+            self.compare_view.fit_to_window(canvas);
+          }
+          if widgets::compact_secondary_button(ui, "100%", has_image || selected_count >= 2).clicked()
+          {
+            self.compare_view.set_zoom_100(canvas);
+          }
+          if widgets::compact_secondary_button(ui, "撤销标注", has_image).clicked() {
+            if let Some(id) = self.current_image {
+              if let Err(e) = self.service.undo_last_annotation(id) {
+                self.error = Some(e.to_string());
+              } else {
+                self.load_current_annotations();
+                let _ = self.reload_images();
+              }
             }
           }
-        }
-
+        });
         widgets::toolbar_separator(ui);
-
-        if widgets::compact_secondary_button(ui, "仅显示未评审", self.current_batch.is_some()).clicked()
+        if widgets::compact_secondary_button(ui, "仅显示未评审", self.current_batch.is_some())
+          .clicked()
         {
           self.sidebar.filter.status = Some(ReviewStatus::Pending);
           let _ = self.reload_images();
@@ -407,15 +451,6 @@ impl ReviewPanel {
         }
 
         widgets::toolbar_separator(ui);
-
-        ui.label(
-          RichText::new(format!("对比：{}", self.compare_view.mode_label()))
-            .size(13.0)
-            .color(theme::secondary_label(dark)),
-        );
-        if widgets::compact_secondary_button(ui, "切换对比模式", true).clicked() {
-          self.compare_view.cycle_compare_mode();
-        }
 
         let approved = self
           .current_batch
@@ -535,7 +570,50 @@ impl ReviewPanel {
 
   fn center_column(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, host: &dyn ReviewPanelHost) {
     let dark = ui.style().visuals.dark_mode;
-    widgets::grouped_section(ui, "画布", |ui| {
+    let multi_active = self.compare_view.mode == CompareDisplayMode::MultiSplit;
+    let section_title = if multi_active {
+      format!(
+        "画布 · 多图对比 ({})",
+        self.sidebar.selected_ids.len()
+      )
+    } else if self.compare_view.is_compare_active() {
+      format!("画布 · {}对比", self.compare_view.mode_label())
+    } else {
+      "画布".into()
+    };
+    widgets::grouped_section(ui, &section_title, |ui| {
+      self.canvas_area_size = ui.available_size();
+      if multi_active {
+        let sources = self.selected_compare_sources();
+        if sources.len() < 2 {
+          ui.vertical_centered(|ui| {
+            ui.add_space(32.0);
+            ui.label(
+              RichText::new("请先在左侧勾选至少 2 张，再点常用栏左侧蓝色「批量对比」")
+                .color(theme::secondary_label(dark)),
+            );
+          });
+          return;
+        }
+        if sources.len() > MAX_MULTI_COMPARE_PANES {
+          widgets::error_banner(
+            ui,
+            &format!("最多同时并排对比 {MAX_MULTI_COMPARE_PANES} 张，请减少勾选数量"),
+          );
+          return;
+        }
+        self.compare_view.ui_multi(ui, ctx, &sources);
+        if let Some(name) = sources.first().map(|(_, _, label)| label.as_str()) {
+          ui.add_space(4.0);
+          ui.label(
+            RichText::new(format!("共 {} 张 · 首张 {}", sources.len(), name))
+              .size(12.0)
+              .color(theme::secondary_label(dark)),
+          );
+        }
+        return;
+      }
+
       if let Some(item) = self.current_item().cloned() {
         let thumb_path = crate::review::service::ThumbnailService::valid_cache_path(&item.file_path);
         let thumb_ref = thumb_path.as_deref();
@@ -1192,10 +1270,14 @@ impl ReviewPanel {
       ShortcutAction::StatusNeedsFix => self.set_current_status(ReviewStatus::NeedsFix),
       ShortcutAction::StatusRejected => self.set_current_status(ReviewStatus::Rejected),
       ShortcutAction::FitWindow => {
-        self.compare_view.fit_to_window(viewport_size(ctx));
+        self
+          .compare_view
+          .fit_to_window(self.canvas_size_for_view(ctx));
       }
       ShortcutAction::ActualSize => {
-        self.compare_view.set_zoom_100(viewport_size(ctx));
+        self
+          .compare_view
+          .set_zoom_100(self.canvas_size_for_view(ctx));
       }
       ShortcutAction::UndoAnnotation => {
         if let Some(id) = self.current_image {
@@ -1376,6 +1458,8 @@ impl ReviewPanel {
     // 缓存当前批次全部图片的标签用于列表色点
     let ids: Vec<i64> = self.images.iter().map(|i| i.id).collect();
     self.sidebar.image_tags = self.service.tags_for_images(&ids).unwrap_or_default();
+    let visible: std::collections::HashSet<i64> = self.images.iter().map(|i| i.id).collect();
+    self.sidebar.selected_ids.retain(|id| visible.contains(id));
     Ok(())
   }
 
@@ -1484,6 +1568,59 @@ fn viewport_size(ctx: &egui::Context) -> egui::Vec2 {
       .map(|r| r.size())
       .unwrap_or_else(|| ctx.screen_rect().size())
   })
+}
+
+impl ReviewPanel {
+  /// 按列表顺序返回已勾选图片（path, thumb, 显示名）。
+  fn selected_compare_sources(&self) -> Vec<(PathBuf, Option<PathBuf>, String)> {
+    self
+      .images
+      .iter()
+      .filter(|item| self.sidebar.selected_ids.contains(&item.id))
+      .map(|item| {
+        let label = item
+          .file_path
+          .file_name()
+          .map(|s| s.to_string_lossy().to_string())
+          .unwrap_or_else(|| item.file_path.display().to_string());
+        (
+          item.file_path.clone(),
+          crate::review::service::ThumbnailService::valid_cache_path(&item.file_path),
+          label,
+        )
+      })
+      .collect()
+  }
+
+  fn start_batch_compare(&mut self) {
+    let count = self.sidebar.selected_ids.len();
+    if count < 2 {
+      self.error = Some("请先在列表勾选至少 2 张图片".into());
+      return;
+    }
+    if count > MAX_MULTI_COMPARE_PANES {
+      self.error = Some(format!("最多同时并排对比 {MAX_MULTI_COMPARE_PANES} 张，请减少选择"));
+      return;
+    }
+    let sources = self.selected_compare_sources();
+    self.compare_view.prefetch_multi_thumbs(
+      &sources
+        .iter()
+        .map(|(path, thumb, _)| (path.clone(), thumb.clone()))
+        .collect::<Vec<_>>(),
+    );
+    self.compare_view.mode = CompareDisplayMode::MultiSplit;
+    self.error = None;
+    self.set_status(format!("已进入多图对比（{count} 张）"));
+  }
+
+  fn canvas_size_for_view(&self, ctx: &egui::Context) -> egui::Vec2 {
+    if self.canvas_area_size.x > 8.0 && self.canvas_area_size.y > 8.0 {
+      self.canvas_area_size
+    } else {
+      viewport_size(ctx)
+    }
+  }
 }
 
 fn batch_op_description(op: BatchOpKind) -> &'static str {

@@ -6,7 +6,11 @@ use std::path::{Path, PathBuf};
 use eframe::egui::{self, Context, TextureHandle};
 use image::GenericImageView;
 
+use crate::review::domain::coords::ViewportTransform;
 use crate::review::service::{AsyncImageLoader, DecodedImage, ImageLoadTier};
+
+/// 每帧最多上传的纹理数量，避免窗口缩放/列表展开时主线程卡顿。
+const MAX_TEXTURE_UPLOADS_PER_FRAME: usize = 2;
 
 /// 已缓存的图片纹理与原始尺寸。
 #[derive(Clone)]
@@ -66,11 +70,16 @@ impl ImageTextureCache {
   }
 
   /// 轮询后台解码结果并上传纹理。
-  pub fn poll(&mut self, ctx: &Context) {
-    let decoded = self.loader.poll();
-    for img in decoded {
+  pub fn poll(&mut self, ctx: &Context) -> bool {
+    let mut uploaded = false;
+    for _ in 0..MAX_TEXTURE_UPLOADS_PER_FRAME {
+      let Some(img) = self.loader.try_recv_one() else {
+        break;
+      };
       self.insert_decoded(ctx, img);
+      uploaded = true;
     }
+    uploaded
   }
 
   fn insert_decoded(&mut self, ctx: &Context, img: DecodedImage) {
@@ -145,16 +154,35 @@ impl ImageTextureCache {
       .prefetch_neighbors(paths, center, radius, thumb_paths);
   }
 
-  /// 缩放超过阈值时请求更高分辨率。
-  pub fn maybe_upgrade(&mut self, path: &Path, thumb: Option<&Path>, zoom: f32) {
-    let tier = if zoom >= 1.0 {
+  /// 批量预取缩略图（多图对比进入时调用）。
+  pub fn prefetch_thumbs(&mut self, items: &[(PathBuf, Option<PathBuf>)]) {
+    for (path, thumb) in items {
+      self.request(path, thumb.as_deref(), ImageLoadTier::Thumb);
+    }
+  }
+
+  pub fn ensure_capacity(&mut self, min_entries: usize) {
+    self.max_entries = self.max_entries.max(min_entries.max(4));
+  }
+
+  /// 按屏幕显示比例请求合适分辨率（避免 fit 视图误触发原图全量解码）。
+  pub fn maybe_upgrade(
+    &mut self,
+    path: &Path,
+    thumb: Option<&Path>,
+    viewport: ViewportTransform,
+    image_size: (u32, u32),
+    max_tier: ImageLoadTier,
+  ) {
+    let scale = effective_display_scale(viewport, image_size);
+    let tier = if scale >= 0.98 {
       ImageLoadTier::Full
-    } else if zoom >= 0.5 {
+    } else if scale >= 0.35 {
       ImageLoadTier::Preview
     } else {
       ImageLoadTier::Thumb
     };
-    self.request(path, thumb, tier);
+    self.request(path, thumb, tier.min(max_tier));
   }
 
   fn touch(&mut self, key: &str) {
@@ -172,6 +200,15 @@ impl ImageTextureCache {
       }
     }
   }
+}
+
+/// 屏幕像素 / 原图像素（取宽高较大比值）。
+fn effective_display_scale(viewport: ViewportTransform, image_size: (u32, u32)) -> f32 {
+  let iw = image_size.0.max(1) as f32;
+  let ih = image_size.1.max(1) as f32;
+  let displayed_w = viewport.image_rect.size.x * viewport.zoom;
+  let displayed_h = viewport.image_rect.size.y * viewport.zoom;
+  (displayed_w / iw).max(displayed_h / ih)
 }
 
 #[cfg(test)]

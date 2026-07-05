@@ -110,6 +110,11 @@ impl AsyncImageLoader {
     out
   }
 
+  /// 非阻塞取一条解码结果（用于限制每帧上传量）。
+  pub fn try_recv_one(&self) -> Option<DecodedImage> {
+    self.rx.try_recv().ok()
+  }
+
   pub fn prefetch_neighbors(
     &self,
     paths: &[PathBuf],
