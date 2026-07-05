@@ -1,5 +1,4 @@
-//! 平台主题：遵循 macOS 26 Liquid Glass HIG——
-//! 导航/控件层使用半透明材质，内容层保持扁平、少自定义背景。
+//! 平台主题：macOS 系统设置式分组列表风格（实色背景、适度圆角）。
 
 use std::sync::OnceLock;
 
@@ -7,12 +6,12 @@ use eframe::egui::{self, epaint::Shadow, Color32, CornerRadius, FontId, Stroke, 
 
 use crate::gui::macos::{self, AccessibilityPrefs};
 
-/// 控件圆角（macOS 26 控件更圆润，参考 NSGlassEffectView 16pt）。
-pub const CONTROL_RADIUS: u8 = 16;
+/// 控件圆角（接近 macOS 标准控件）。
+pub const CONTROL_RADIUS: u8 = 10;
 /// 分组内容区圆角。
-pub const GROUP_RADIUS: u8 = 16;
-/// 底部工具栏圆角（仅顶边）。
-pub const TOOLBAR_TOP_RADIUS: u8 = 20;
+pub const GROUP_RADIUS: u8 = 12;
+/// 底部工具栏顶边圆角。
+pub const TOOLBAR_TOP_RADIUS: u8 = 10;
 
 /// 内容区最大宽度（宽屏居中，不无限拉伸）。
 pub const CONTENT_MAX_WIDTH: f32 = 960.0;
@@ -95,31 +94,42 @@ pub fn log_fill(dark: bool) -> Color32 {
   }
 }
 
-/// Liquid Glass Regular 变体：仅用于工具栏、次要按钮等导航/控件层。
-pub fn glass_regular(dark: bool) -> Color32 {
-  if a11y().reduce_transparency {
-    return if dark {
-      Color32::from_rgb(38, 38, 40)
-    } else {
-      Color32::from_rgb(252, 252, 254)
-    };
-  }
-
+/// 输入框、次要按钮等控件背景（实色，避免 egui 半透明发脏）。
+pub fn control_fill(dark: bool) -> Color32 {
   if dark {
-    Color32::from_rgba_unmultiplied(58, 58, 60, 210)
+    Color32::from_rgb(50, 50, 52)
   } else {
-    Color32::from_rgba_unmultiplied(255, 255, 255, 215)
+    Color32::from_rgb(255, 255, 255)
   }
 }
 
-pub fn glass_stroke(dark: bool) -> Stroke {
-  let alpha = if a11y().increase_contrast { 90 } else { 40 };
+pub fn control_stroke(dark: bool) -> Stroke {
+  let alpha = if a11y().increase_contrast { 100 } else { 55 };
   let c = if dark {
     Color32::from_rgba_unmultiplied(255, 255, 255, alpha)
   } else {
     Color32::from_rgba_unmultiplied(60, 60, 67, alpha)
   };
   Stroke::new(1.0, c)
+}
+
+/// 底部操作栏背景。
+pub fn toolbar_fill(dark: bool) -> Color32 {
+  if dark {
+    Color32::from_rgb(36, 36, 38)
+  } else {
+    Color32::from_rgb(251, 251, 253)
+  }
+}
+
+/// 兼容旧名；与 [`control_fill`] 相同。
+pub fn glass_regular(dark: bool) -> Color32 {
+  control_fill(dark)
+}
+
+/// 兼容旧名；与 [`control_stroke`] 相同。
+pub fn glass_stroke(dark: bool) -> Stroke {
+  control_stroke(dark)
 }
 
 pub fn separator_stroke(dark: bool) -> Stroke {
@@ -132,20 +142,11 @@ pub fn separator_stroke(dark: bool) -> Stroke {
   Stroke::new(1.0, c)
 }
 
-pub fn toolbar_shadow(dark: bool) -> Shadow {
-  Shadow {
-    offset: [0, -2],
-    blur: 20,
-    spread: 0,
-    color: if dark {
-      Color32::from_black_alpha(100)
-    } else {
-      Color32::from_black_alpha(28)
-    },
-  }
+pub fn toolbar_shadow(_dark: bool) -> Shadow {
+  Shadow::NONE
 }
 
-/// 应用 macOS 26 风格视觉（浅色/深色随系统；尊重辅助功能偏好）。
+/// 应用 macOS 分组列表风格视觉（浅色/深色随系统；尊重辅助功能偏好）。
 pub fn apply(ctx: &egui::Context) {
   let _ = ACCESSIBILITY.set(macos::accessibility_prefs());
   let dark = ctx.style().visuals.dark_mode;
@@ -180,9 +181,9 @@ pub fn apply(ctx: &egui::Context) {
   visuals.selection.stroke = Stroke::new(1.5, accent_color);
   visuals.hyperlink_color = accent_color;
 
-  visuals.widgets.inactive.bg_fill = glass_regular(dark);
+  visuals.widgets.inactive.bg_fill = control_fill(dark);
   visuals.widgets.inactive.fg_stroke.color = primary_label(dark);
-  visuals.widgets.inactive.bg_stroke = glass_stroke(dark);
+  visuals.widgets.inactive.bg_stroke = control_stroke(dark);
 
   visuals.widgets.hovered.bg_fill = if dark {
     Color32::from_rgb(72, 72, 74)
@@ -198,7 +199,7 @@ pub fn apply(ctx: &egui::Context) {
 }
 
 pub fn title_font() -> FontId {
-  FontId::proportional(34.0)
+  FontId::proportional(28.0)
 }
 
 pub fn subtitle_font() -> FontId {

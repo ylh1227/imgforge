@@ -1,4 +1,4 @@
-//! 可复用 UI 组件（macOS 26 Liquid Glass 布局，随窗口自适应）。
+//! 可复用 UI 组件（macOS 分组列表布局，随窗口自适应）。
 
 use eframe::egui::{self, Button, Color32, CornerRadius, Frame, Layout, Margin, RichText, Stroke, TextEdit, Ui};
 
@@ -44,19 +44,14 @@ pub fn grouped_section<R>(ui: &mut Ui, title: &str, add_contents: impl FnOnce(&m
     .inner
 }
 
-/// 底部操作工具栏帧（Liquid Glass Regular 模拟层）。
+/// 底部操作工具栏帧（扁平实色底栏 + 顶部分割线）。
 pub fn glass_toolbar_frame(dark: bool) -> Frame {
   Frame::new()
-    .fill(theme::glass_regular(dark))
-    .stroke(theme::glass_stroke(dark))
+    .fill(theme::toolbar_fill(dark))
+    .stroke(theme::separator_stroke(dark))
     .shadow(theme::toolbar_shadow(dark))
-    .inner_margin(Margin::symmetric(20, 14))
-    .corner_radius(CornerRadius {
-      nw: theme::TOOLBAR_TOP_RADIUS,
-      ne: theme::TOOLBAR_TOP_RADIUS,
-      sw: 0,
-      se: 0,
-    })
+    .inner_margin(Margin::symmetric(20, 12))
+    .corner_radius(CornerRadius::same(theme::TOOLBAR_TOP_RADIUS))
 }
 
 /// egui 回退工具栏点击结果。
@@ -168,8 +163,8 @@ fn browse_button(ui: &mut Ui, enabled: bool, path: &mut String, dark: bool) {
     .add_enabled(
       enabled,
       Button::new(RichText::new("浏览…").size(13.0))
-        .fill(theme::glass_regular(dark))
-        .stroke(theme::glass_stroke(dark))
+        .fill(theme::control_fill(dark))
+        .stroke(theme::control_stroke(dark))
         .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS)),
     )
     .clicked()
@@ -197,8 +192,8 @@ pub fn primary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Response
 pub fn secondary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Response {
   let dark = ui.style().visuals.dark_mode;
   let btn = Button::new(RichText::new(label).size(14.0).color(theme::primary_label(dark)))
-    .fill(theme::glass_regular(dark))
-    .stroke(theme::glass_stroke(dark))
+    .fill(theme::control_fill(dark))
+    .stroke(theme::control_stroke(dark))
     .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
     .min_size(egui::vec2(96.0, 38.0));
   ui.add_enabled(enabled, btn)
@@ -216,8 +211,8 @@ pub fn quality_preset_chip(ui: &mut Ui, label: &str, value: u8, current: &mut u8
     )
   } else {
     (
-      theme::glass_regular(dark),
-      theme::glass_stroke(dark),
+      theme::control_fill(dark),
+      theme::control_stroke(dark),
       theme::primary_label(dark),
     )
   };
