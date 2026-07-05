@@ -176,6 +176,7 @@ async fn process_single_task(
   ctx.transform = config.transform;
   ctx.watermark = config.watermark.clone();
   ctx.dry_run = config.dry_run;
+  ctx.bayer_only = config.bayer_only;
 
   // CPU 密集流水线在阻塞线程池中执行，避免阻塞 tokio 运行时
   let result = tokio::task::spawn_blocking(move || {

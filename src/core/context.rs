@@ -28,6 +28,7 @@ pub struct ImageContext {
   pub source_size: u64,
   pub output_size: u64,
   pub dry_run: bool,
+  pub bayer_only: bool,
 }
 
 impl ImageContext {
@@ -60,6 +61,7 @@ impl ImageContext {
       source_size,
       output_size: 0,
       dry_run: false,
+      bayer_only: false,
     }
   }
 }

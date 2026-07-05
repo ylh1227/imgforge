@@ -43,6 +43,9 @@ pub struct AppConfig {
   /// 导出时叠加评审标注到输出图（需 review feature）。
   #[serde(default)]
   pub burn_review_annotations: bool,
+  /// 仅解 Bayer/RAW 马赛克：跳过缩放/锐化/水印等后处理。
+  #[serde(default)]
+  pub bayer_only: bool,
 }
 
 impl Default for AppConfig {
@@ -75,6 +78,7 @@ impl Default for AppConfig {
       thumbnails: Vec::new(),
       explicit_inputs: Vec::new(),
       burn_review_annotations: false,
+      bayer_only: false,
     }
   }
 }

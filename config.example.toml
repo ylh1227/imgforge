@@ -11,6 +11,8 @@ overwrite = false
 preserve_structure = true
 dry_run = false
 verbose = false
+# 仅解 Bayer/RAW 马赛克，跳过缩放/锐化/水印（需 --features bayer）
+bayer_only = false
 
 [resize]
 width = 1920

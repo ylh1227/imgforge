@@ -8,6 +8,16 @@ pub mod avif_codec;
 #[cfg(feature = "jpegxl")]
 pub mod jxl_codec;
 
+#[cfg(feature = "bayer")]
+pub mod bayer_codec;
+#[cfg(not(feature = "bayer"))]
+pub mod bayer_stub;
+
+#[cfg(feature = "bayer")]
+pub use bayer_codec::{decode_bayer_only, is_raw_camera_extension, is_raw_camera_path};
+#[cfg(not(feature = "bayer"))]
+pub use bayer_stub::{decode_bayer_only, is_raw_camera_extension, is_raw_camera_path};
+
 #[cfg(feature = "vips")]
 mod vips_backend;
 

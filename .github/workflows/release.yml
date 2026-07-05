@@ -10,7 +10,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  RELEASE_FEATURES: incremental,rename,thumbnails,watermark,jpegxl
+  RELEASE_FEATURES: incremental,rename,thumbnails,watermark,jpegxl,bayer
 
 jobs:
   build-cli:

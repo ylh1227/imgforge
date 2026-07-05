@@ -60,14 +60,16 @@ pub fn build_pipeline(config: &AppConfig) -> ProcessingPipeline {
 
   let mut pipeline = ProcessingPipeline::new()
     .add_step(DecodeStep)
-    .add_step(MetadataStep::read())
-    .add_step(ResizeStep)
-    .add_step(AdjustStep);
+    .add_step(MetadataStep::read());
 
-  #[cfg(feature = "watermark")]
-  if config.watermark.is_active() {
-    use crate::processing::steps::watermark_step::WatermarkStep;
-    pipeline = pipeline.add_step(WatermarkStep);
+  if !config.bayer_only {
+    pipeline = pipeline.add_step(ResizeStep).add_step(AdjustStep);
+
+    #[cfg(feature = "watermark")]
+    if config.watermark.is_active() {
+      use crate::processing::steps::watermark_step::WatermarkStep;
+      pipeline = pipeline.add_step(WatermarkStep);
+    }
   }
 
   pipeline

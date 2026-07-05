@@ -31,6 +31,7 @@ pub async fn run_batch(
       modified_before: None,
     },
     rename_template: config.rename_template.clone(),
+    bayer_only: config.bayer_only,
   };
 
   let mut tasks = if !config.explicit_inputs.is_empty() {
@@ -39,6 +40,7 @@ pub async fn run_batch(
       &config.output_dir,
       config.target_format,
       config.overwrite,
+      config.bayer_only,
     )?
   } else {
     crate::io::scanner::scan_inputs(&scan_options)?

@@ -152,6 +152,10 @@ pub struct Cli {
   #[arg(long, value_enum)]
   pub resize_mode: Option<imgforge::core::types::ResizeMode>,
 
+  /// 仅解 Bayer/RAW 马赛克（跳过缩放/锐化/水印；需 --features bayer）
+  #[arg(long, env = "IMGFORGE_BAYER_ONLY")]
+  pub bayer_only: bool,
+
   /// 水印位置
   #[arg(long, value_enum)]
   pub watermark_position: Option<imgforge::core::types::WatermarkPosition>,

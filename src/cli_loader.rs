@@ -149,6 +149,9 @@ fn apply_cli_overrides(config: &mut AppConfig, cli: &Cli) {
   if let Some(pos) = cli.watermark_position {
     config.watermark.position = pos;
   }
+  if cli.bayer_only {
+    config.bayer_only = true;
+  }
 
   config.verbose = cli.verbose;
 }

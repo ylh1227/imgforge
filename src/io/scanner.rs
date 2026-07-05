@@ -7,6 +7,7 @@ use jwalk::WalkDir;
 
 use crate::core::error::{AppError, AppResult};
 use crate::core::types::ImageFormat;
+use crate::processing::backends::is_raw_camera_extension;
 use crate::io::paths::{self, ensure_safe_relative};
 use crate::scheduler::task::ConversionTask;
 
@@ -29,6 +30,7 @@ pub struct ScanOptions {
   pub recursive: bool,
   pub preserve_structure: bool,
   pub overwrite: bool,
+  pub bayer_only: bool,
   pub filter: ScanFilter,
   pub rename_template: Option<String>,
 }
@@ -65,7 +67,11 @@ pub fn scan_inputs(options: &ScanOptions) -> AppResult<Vec<ConversionTask>> {
       .unwrap_or("")
       .to_ascii_lowercase();
 
-    if ImageFormat::from_extension(&ext).is_none() {
+    if options.bayer_only {
+      if !is_raw_camera_extension(&ext) {
+        continue;
+      }
+    } else if ImageFormat::from_extension(&ext).is_none() {
       continue;
     }
 
@@ -128,8 +134,13 @@ pub fn scan_inputs(options: &ScanOptions) -> AppResult<Vec<ConversionTask>> {
 
   if tasks.is_empty() {
     return Err(AppError::Config(format!(
-      "no image files found in '{}'. Check the folder path and supported formats (jpg, png, webp, …)",
-      options.input_dir.display()
+      "no image files found in '{}'. Check the folder path and supported formats ({})",
+      options.input_dir.display(),
+      if options.bayer_only {
+        "dng, cr2, cr3, nef, arw, raf, …"
+      } else {
+        "jpg, png, webp, …"
+      }
     )));
   }
 
@@ -142,6 +153,7 @@ pub fn tasks_from_paths(
   output_dir: &Path,
   target_format: ImageFormat,
   overwrite: bool,
+  bayer_only: bool,
 ) -> AppResult<Vec<ConversionTask>> {
   let output_root = paths::canonicalize(output_dir);
   let mut tasks = Vec::new();
@@ -154,7 +166,11 @@ pub fn tasks_from_paths(
       .and_then(|e| e.to_str())
       .unwrap_or("")
       .to_ascii_lowercase();
-    if ImageFormat::from_extension(&ext).is_none() {
+    if bayer_only {
+      if !is_raw_camera_extension(&ext) {
+        continue;
+      }
+    } else if ImageFormat::from_extension(&ext).is_none() {
       continue;
     }
     let size = std::fs::metadata(path)

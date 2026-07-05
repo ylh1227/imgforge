@@ -53,6 +53,13 @@ impl ImageBackend for NativeBackend {
         reason: "no raw bytes available".into(),
       })?;
 
+    if ctx.bayer_only || crate::processing::backends::is_raw_camera_path(&ctx.source_path) {
+      let image = crate::processing::backends::decode_bayer_only(bytes, &ctx.source_path)?;
+      ctx.source_format = None;
+      ctx.image = Some(image);
+      return Ok(());
+    }
+
     // AVIF / JPEG XL 优先走专用解码器
     #[cfg(feature = "avif")]
     if is_avif(bytes, &ctx.source_path) {

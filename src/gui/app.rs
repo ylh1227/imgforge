@@ -67,6 +67,7 @@ pub struct ImgforgeApp {
   preserve_structure: bool,
   overwrite: bool,
   strip_metadata: bool,
+  bayer_only: bool,
   status: String,
   log_lines: Vec<String>,
   state: RunState,
@@ -98,6 +99,7 @@ impl ImgforgeApp {
       preserve_structure: true,
       overwrite: false,
       strip_metadata: false,
+      bayer_only: false,
       status: String::from("选择输入文件夹，然后点击「开始转换」"),
       log_lines: Vec::new(),
       state: RunState::Idle,
@@ -155,6 +157,7 @@ impl ImgforgeApp {
       }
     }
     config.burn_review_annotations = self.burn_review_annotations;
+    config.bayer_only = self.bayer_only;
     config.validate().map_err(|e| e.to_string())?;
     Ok(config)
   }
@@ -284,6 +287,14 @@ impl ImgforgeApp {
       for (value, label) in options {
         ui.add_enabled(enabled, egui::Checkbox::new(value, label));
       }
+    }
+
+    #[cfg(feature = "bayer")]
+    {
+      ui.add_enabled(
+        enabled,
+        egui::Checkbox::new(&mut self.bayer_only, "仅解 Bayer/RAW（不做缩放锐化）"),
+      );
     }
   }
 }
