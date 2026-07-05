@@ -269,23 +269,9 @@ fn extract_jpeg_exif_segment(data: &[u8]) -> Option<Vec<u8>> {
   None
 }
 
-/// 对图像应用锐化滤镜（简单卷积核）。
+/// 对图像应用锐化（USM）。
 pub fn apply_sharpen(image: &mut DynamicImage, amount: f32) {
-  if amount <= 0.0 {
-    return;
-  }
-  let factor = amount.clamp(0.0, 2.0);
-  *image = image.filter3x3(&[
-    0.0,
-    -factor,
-    0.0,
-    -factor,
-    1.0 + 4.0 * factor,
-    -factor,
-    0.0,
-    -factor,
-    0.0,
-  ]);
+  crate::processing::image_quality::apply_sharpen(image, amount);
 }
 
 /// 亮度/对比度调整。
@@ -299,107 +285,12 @@ pub fn apply_brightness_contrast(image: &mut DynamicImage, brightness: f32, cont
   }
 }
 
-/// 高质量缩放。
+/// 高质量缩放（委托 image_quality 模块）。
 pub fn resize_image(
   image: &DynamicImage,
   width: Option<u32>,
   height: Option<u32>,
   mode: crate::core::types::ResizeMode,
 ) -> AppResult<DynamicImage> {
-  use crate::core::types::ResizeMode;
-  use fast_image_resize as fir;
-  use fast_image_resize::images::Image as FirImage;
-
-  let (src_w, src_h) = (image.width(), image.height());
-  let (target_w, target_h) = match (width, height) {
-    (Some(w), Some(h)) => (w, h),
-    (Some(w), None) => {
-      let ratio = w as f64 / src_w as f64;
-      (w, (src_h as f64 * ratio).round().max(1.0) as u32)
-    }
-    (None, Some(h)) => {
-      let ratio = h as f64 / src_h as f64;
-      ((src_w as f64 * ratio).round().max(1.0) as u32, h)
-    }
-    (None, None) => return Ok(image.clone()),
-  };
-
-  if target_w == src_w && target_h == src_h {
-    return Ok(image.clone());
-  }
-
-  let rgba = image.to_rgba8();
-  let src_image = FirImage::from_vec_u8(
-    src_w,
-    src_h,
-    rgba.into_raw(),
-    fir::PixelType::U8x4,
-  )
-  .map_err(|e| AppError::Pipeline {
-    step: "resize".into(),
-    reason: e.to_string(),
-  })?;
-
-  let (dst_w, dst_h) = match mode {
-    ResizeMode::Exact | ResizeMode::Fill => (target_w, target_h),
-    ResizeMode::Fit => {
-      let ratio_w = target_w as f64 / src_w as f64;
-      let ratio_h = target_h as f64 / src_h as f64;
-      let ratio = ratio_w.min(ratio_h);
-      (
-        (src_w as f64 * ratio).round().max(1.0) as u32,
-        (src_h as f64 * ratio).round().max(1.0) as u32,
-      )
-    }
-  };
-
-  let mut dst_image = FirImage::new(dst_w, dst_h, fir::PixelType::U8x4);
-  let scale = (dst_w as f32 / src_w as f32).min(dst_h as f32 / src_h as f32);
-  let resize_options = if scale < 0.5 {
-    fir::ResizeOptions::new().resize_alg(fir::ResizeAlg::SuperSampling(
-      fir::FilterType::Lanczos3,
-      2,
-    ))
-  } else {
-    fir::ResizeOptions::new().resize_alg(fir::ResizeAlg::Convolution(
-      fir::FilterType::Lanczos3,
-    ))
-  };
-  let mut resizer = fir::Resizer::new();
-  resizer
-    .resize(&src_image, &mut dst_image, &resize_options)
-    .map_err(|e| AppError::Pipeline {
-      step: "resize".into(),
-      reason: e.to_string(),
-    })?;
-
-  let mut result =
-    image::RgbaImage::from_raw(dst_w, dst_h, dst_image.into_vec()).ok_or_else(|| AppError::Pipeline {
-      step: "resize".into(),
-      reason: "failed to reconstruct image buffer".into(),
-    })?;
-
-  if mode == ResizeMode::Fill && (dst_w != target_w || dst_h != target_h) {
-    let x = (target_w.saturating_sub(dst_w)) / 2;
-    let y = (target_h.saturating_sub(dst_h)) / 2;
-    let mut canvas = image::RgbaImage::new(target_w, target_h);
-    image::imageops::overlay(&mut canvas, &result, i64::from(x), i64::from(y));
-    result = canvas;
-  }
-
-  let mut output = DynamicImage::ImageRgba8(result);
-  if scale < 0.75 {
-    apply_sharpen(&mut output, sharpen_amount_for_scale(scale));
-  }
-  Ok(output)
-}
-
-fn sharpen_amount_for_scale(scale: f32) -> f32 {
-  if scale < 0.25 {
-    0.35
-  } else if scale < 0.5 {
-    0.25
-  } else {
-    0.15
-  }
+  crate::processing::image_quality::resize_image(image, width, height, mode)
 }

@@ -2,8 +2,10 @@
 
 use std::path::{Path, PathBuf};
 
-use image::imageops::FilterType;
 use image::GenericImageView;
+
+use crate::processing::image_quality::resize_image;
+use crate::core::types::ResizeMode;
 
 use crate::review::error::{ReviewError, ReviewResult};
 use crate::review::storage::{thumbnail_cache_dir, SqliteReviewRepository};
@@ -51,10 +53,8 @@ fn resize_thumb(img: &image::DynamicImage) -> image::DynamicImage {
   if w <= THUMB_MAX && h <= THUMB_MAX {
     return img.clone();
   }
-  let scale = (THUMB_MAX as f32 / w as f32).min(THUMB_MAX as f32 / h as f32);
-  let nw = (w as f32 * scale).max(1.0) as u32;
-  let nh = (h as f32 * scale).max(1.0) as u32;
-  img.resize(nw, nh, FilterType::Triangle)
+  resize_image(img, Some(THUMB_MAX), Some(THUMB_MAX), ResizeMode::Fit)
+    .unwrap_or_else(|_| img.clone())
 }
 
 fn md5_path(path: &Path) -> u64 {
