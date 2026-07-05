@@ -128,7 +128,7 @@ pub struct AsyncThumbnailGenerator {
 
 impl AsyncThumbnailGenerator {
   pub fn new() -> Self {
-    use std::sync::mpsc::{self, TryRecvError};
+    use std::sync::mpsc;
     use std::thread;
     let (job_tx, job_rx) = mpsc::channel::<(i64, PathBuf)>();
     let (res_tx, res_rx) = mpsc::channel::<(i64, PathBuf)>();

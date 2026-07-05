@@ -25,8 +25,9 @@ use crate::review::service::ReviewModuleConfig;
 use crate::review::ui::properties_panel::{properties_panel_ui, PropertiesPanelState};
 use crate::review::ui::shortcut_panel::{shortcut_panel_ui, ShortcutPanelState};
 use crate::review::ui::sidebar::{
-  batch_list_ui, format_stats, image_list_ui, status_buttons, ListThumbnailCache, SidebarState,
+  batch_list_ui, format_stats, image_list_ui, status_buttons, SidebarState,
 };
+use crate::review::ui::ListThumbnailCache;
 use crate::review::{ReviewConversionBridge, ReviewService};
 
 /// 主应用向评审面板提供的上下文（评审模块不依赖 gui 内部实现）。
@@ -585,7 +586,7 @@ impl ReviewPanel {
             let row_selected = selected_ann == Some(ann.id);
             let label = format!("{}. {}", idx + 1, annotation_kind_label(ann.kind));
             let row_resp = ui.selectable_label(row_selected, label);
-            row_resp.on_hover_text("点击定位到画布");
+            row_resp.clone().on_hover_text("点击定位到画布");
             if row_resp.clicked() {
               focus_ann = Some(ann.id);
             }

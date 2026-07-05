@@ -456,7 +456,7 @@ pub fn image_list_ui(
                 hover = format!("{} · {}", hover, names.join("、"));
               }
             }
-            name_resp.on_hover_text(hover);
+            name_resp.clone().on_hover_text(hover);
             if name_resp.clicked() || thumb_resp.clicked() {
               picked = Some(img.id);
             }
