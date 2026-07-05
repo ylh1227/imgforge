@@ -32,6 +32,35 @@ impl ProcessReport {
     1.0 - (self.total_output_bytes as f64 / self.total_input_bytes as f64)
   }
 
+  pub fn print_preview_summary(preview: &crate::io::batch_preview::BatchPreview, format: &str) {
+    println!();
+    println!("═══════════════════════════════════════");
+    println!("  imgforge — Dry Run Preview");
+    println!("═══════════════════════════════════════");
+    for line in preview.summary_lines(format) {
+      println!("  {line}");
+    }
+    if !preview.samples.is_empty() {
+      println!();
+      println!("  Sample outputs:");
+      for s in &preview.samples {
+        println!(
+          "    {} → {}",
+          s.input.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+          s.output.display()
+        );
+      }
+    }
+    if !preview.conflict_examples.is_empty() {
+      println!();
+      println!("  Conflicts:");
+      for c in &preview.conflict_examples {
+        println!("    • {c}");
+      }
+    }
+    println!("═══════════════════════════════════════");
+  }
+
   pub fn print_summary(&self) {
     println!();
     println!("═══════════════════════════════════════");

@@ -186,14 +186,33 @@ async fn process_single_task(
   .await
   .map_err(|e| AppError::Other(e.to_string()))?;
 
-  let (pipeline_result, ctx) = result;
+  let (pipeline_result, mut ctx) = result;
   pipeline_result?;
 
-  let output_size = ctx.output_size;
+  if let Some(max_bytes) = config.target_max_bytes {
+    if let Some(ref image) = ctx.image {
+      if crate::processing::quality_fit::supports_quality_target(ctx.target_format) {
+        let fitted = crate::processing::quality_fit::fit_quality_to_max_bytes(
+          image,
+          ctx.target_format,
+          max_bytes,
+        )?;
+        let encoded = crate::processing::backends::native_backend::encode_dynamic_image(
+          image,
+          ctx.target_format,
+          fitted,
+        )?;
+        ctx.quality = fitted;
+        ctx.encoded_bytes = Some(encoded);
+      }
+    }
+  }
+
   let encoded = ctx.encoded_bytes.ok_or_else(|| AppError::Pipeline {
     step: "output".into(),
     reason: "no encoded bytes produced".into(),
   })?;
+  let output_size = encoded.len() as u64;
 
   if !config.dry_run {
     atomic_write(&task.output_path, &encoded).await?;

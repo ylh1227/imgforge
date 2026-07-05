@@ -4,7 +4,10 @@ mod app;
 mod fonts;
 mod macos;
 mod native;
+pub mod prefs;
+mod quality_preview;
 pub mod theme;
 pub mod widgets;
 
 pub use app::ImgforgeApp;
+pub use prefs::{ConvertPresetSnapshot, GuiPrefs, TaskHistoryEntry};

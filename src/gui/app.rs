@@ -9,9 +9,12 @@ use std::thread;
 use eframe::egui::{self, RichText, ScrollArea};
 
 use crate::config::AppConfig;
-use crate::core::types::{ImageFormat, MetadataPolicy, Quality};
+use crate::core::types::{ImageFormat, MetadataPolicy, Quality, ResizeOptions};
+use crate::gui::prefs::{self, ConvertPresetSnapshot, GuiPrefs, TaskHistoryEntry};
+use crate::gui::quality_preview::{self, QualityPreviewWorker, QualitySizeRow};
 use crate::gui::{fonts, native, theme, widgets};
-use crate::job::run_batch;
+use crate::io::batch_preview::BatchPreview;
+use crate::job::{preview_batch, run_batch};
 use crate::ui::progress::{GuiProgress, ProgressReporter};
 use crate::ui::report::ProcessReport;
 use crate::review::ui::ReviewPanelHost;
@@ -69,6 +72,18 @@ pub struct ImgforgeApp {
   overwrite: bool,
   strip_metadata: bool,
   bayer_only: bool,
+  rename_template: String,
+  use_target_max_bytes: bool,
+  target_max_kb: u32,
+  gui_prefs: GuiPrefs,
+  selected_preset: Option<usize>,
+  new_preset_name: String,
+  batch_preview: Option<BatchPreview>,
+  rename_preview: Vec<(String, String)>,
+  rename_preview_error: Option<String>,
+  quality_preview_rows: Vec<QualitySizeRow>,
+  quality_preview_error: Option<String>,
+  quality_preview_worker: Option<QualityPreviewWorker>,
   status: String,
   log_lines: Vec<String>,
   state: RunState,
@@ -83,6 +98,7 @@ impl ImgforgeApp {
 
     let formats = ImageFormat::all_supported();
     let review_panel = crate::review::ui::ReviewPanel::new().ok();
+    let gui_prefs = GuiPrefs::load();
     Self {
       mode: AppMode::Convert,
       review_panel,
@@ -102,6 +118,18 @@ impl ImgforgeApp {
       overwrite: false,
       strip_metadata: false,
       bayer_only: false,
+      rename_template: String::new(),
+      use_target_max_bytes: false,
+      target_max_kb: 500,
+      gui_prefs,
+      selected_preset: None,
+      new_preset_name: String::new(),
+      batch_preview: None,
+      rename_preview: Vec::new(),
+      rename_preview_error: None,
+      quality_preview_rows: Vec::new(),
+      quality_preview_error: None,
+      quality_preview_worker: None,
       status: String::from("选择输入文件夹，然后点击「开始转换」"),
       log_lines: Vec::new(),
       state: RunState::Idle,
@@ -137,7 +165,11 @@ impl ImgforgeApp {
     }
 
     let target_format = self.formats[self.format_index];
-    let quality = Quality::new(self.quality).map_err(|e| e.to_string())?;
+    let quality = if self.use_target_max_bytes {
+      Quality::DEFAULT
+    } else {
+      Quality::new(self.quality).map_err(|e| e.to_string())?
+    };
 
     let mut config = AppConfig::default();
     config.input_dir = input;
@@ -152,6 +184,12 @@ impl ImgforgeApp {
     } else {
       MetadataPolicy::Preserve
     };
+    if !self.rename_template.trim().is_empty() {
+      config.rename_template = Some(self.rename_template.trim().to_string());
+    }
+    if self.use_target_max_bytes {
+      config.target_max_bytes = Some(self.target_max_kb as u64 * 1024);
+    }
     if !self.review_queue.is_empty() {
       config.explicit_inputs = self.review_queue.clone();
       if let Some(parent) = self.review_queue[0].parent() {
@@ -165,10 +203,172 @@ impl ImgforgeApp {
     Ok(config)
   }
 
+  fn snapshot_from_ui(&self) -> ConvertPresetSnapshot {
+    ConvertPresetSnapshot {
+      format: self.formats[self.format_index],
+      quality: self.quality,
+      resize: ResizeOptions {
+        width: None,
+        height: None,
+        mode: crate::core::types::ResizeMode::Fit,
+      },
+      recursive: self.recursive,
+      preserve_structure: self.preserve_structure,
+      overwrite: self.overwrite,
+      strip_metadata: self.strip_metadata,
+      bayer_only: self.bayer_only,
+      rename_template: self.rename_template.clone(),
+      target_max_bytes: if self.use_target_max_bytes {
+        Some(self.target_max_kb as u64 * 1024)
+      } else {
+        None
+      },
+      use_target_max_bytes: self.use_target_max_bytes,
+    }
+  }
+
+  fn apply_snapshot(&mut self, snapshot: &ConvertPresetSnapshot) {
+    if let Some(idx) = self
+      .formats
+      .iter()
+      .position(|f| *f == snapshot.format)
+    {
+      self.format_index = idx;
+    }
+    self.quality = snapshot.quality;
+    self.recursive = snapshot.recursive;
+    self.preserve_structure = snapshot.preserve_structure;
+    self.overwrite = snapshot.overwrite;
+    self.strip_metadata = snapshot.strip_metadata;
+    self.bayer_only = snapshot.bayer_only;
+    self.rename_template = snapshot.rename_template.clone();
+    self.use_target_max_bytes = snapshot.use_target_max_bytes;
+    if let Some(bytes) = snapshot.target_max_bytes {
+      self.target_max_kb = (bytes / 1024).max(1) as u32;
+    }
+    self.refresh_previews();
+  }
+
+  fn refresh_previews(&mut self) {
+    self.batch_preview = None;
+    self.rename_preview.clear();
+    self.rename_preview_error = None;
+
+    if let Ok(config) = self.build_config() {
+      if let Ok(preview) = preview_batch(&config) {
+        self.batch_preview = Some(preview);
+      }
+    }
+
+    if !self.rename_template.trim().is_empty() && !self.input_dir.trim().is_empty() {
+      let input = PathBuf::from(&self.input_dir);
+      let output = PathBuf::from(&self.output_dir);
+      if input.exists() {
+        match crate::io::batch_preview::rename_preview_samples(
+          &input,
+          &output,
+          self.rename_template.trim(),
+          self.formats[self.format_index],
+          self.preserve_structure,
+          self.recursive,
+          5,
+        ) {
+          Ok(samples) => {
+            self.rename_preview = samples
+              .into_iter()
+              .map(|(path, name)| {
+                let stem = path
+                  .file_name()
+                  .and_then(|n| n.to_str())
+                  .unwrap_or("?")
+                  .to_string();
+                let out = name.unwrap_or_else(|e| format!("错误: {e}"));
+                (stem, out)
+              })
+              .collect();
+          }
+          Err(e) => self.rename_preview_error = Some(e.to_string()),
+        }
+      }
+    }
+  }
+
+  fn request_quality_preview(&mut self) {
+    self.quality_preview_rows.clear();
+    self.quality_preview_error = None;
+    self.quality_preview_worker = None;
+
+    if self.input_dir.trim().is_empty() {
+      return;
+    }
+    let input = PathBuf::from(&self.input_dir);
+    if !input.is_dir() {
+      return;
+    }
+
+    let sample = std::fs::read_dir(&input)
+      .ok()
+      .into_iter()
+      .flatten()
+      .filter_map(|e| e.ok())
+      .map(|e| e.path())
+      .find(|p| {
+        p.is_file()
+          && p.extension()
+            .and_then(|e| e.to_str())
+            .and_then(ImageFormat::from_extension)
+            .is_some()
+      });
+
+    let Some(sample) = sample else {
+      self.quality_preview_error = Some("输入文件夹中未找到可预览的图片".into());
+      return;
+    };
+
+    self.quality_preview_worker = Some(QualityPreviewWorker::spawn(
+      sample,
+      self.formats[self.format_index],
+    ));
+  }
+
+  fn poll_quality_preview(&mut self) {
+    let Some(worker) = &self.quality_preview_worker else {
+      return;
+    };
+    if let Some(msg) = worker.poll() {
+      self.quality_preview_worker = None;
+      match msg {
+        quality_preview::QualityPreviewMsg::Done(rows) => {
+          self.quality_preview_rows = rows;
+        }
+        quality_preview::QualityPreviewMsg::Failed(e) => {
+          self.quality_preview_error = Some(e);
+        }
+      }
+    }
+  }
+
+  fn record_history(&mut self, report: &ProcessReport) {
+    let entry = TaskHistoryEntry {
+      finished_at_unix: prefs::now_unix(),
+      input_dir: self.input_dir.clone(),
+      output_dir: self.output_dir.clone(),
+      successes: report.successes,
+      failures: report.failures.len(),
+      total: report.total,
+      elapsed_ms: report.elapsed.as_millis() as u64,
+      snapshot: self.snapshot_from_ui(),
+    };
+    self.gui_prefs.push_history(entry);
+    let _ = self.gui_prefs.save();
+  }
+
   fn start_conversion(&mut self) {
     if self.is_running() {
       return;
     }
+
+    self.refresh_previews();
 
     let config = match self.build_config() {
       Ok(c) => c,
@@ -178,6 +378,22 @@ impl ImgforgeApp {
         return;
       }
     };
+
+    if let Some(ref preview) = self.batch_preview {
+      if preview.output_conflicts > 0 {
+        self.status = format!(
+          "存在 {} 处输出路径冲突，请调整重命名模板",
+          preview.output_conflicts
+        );
+        self.push_log(self.status.clone());
+        return;
+      }
+      if preview.to_convert == 0 {
+        self.status = "没有需要转换的文件（可能均已存在且未勾选覆盖）".into();
+        self.push_log(self.status.clone());
+        return;
+      }
+    }
 
     let cancelled = Arc::new(AtomicBool::new(false));
     let progress: Arc<dyn ProgressReporter> = Arc::new(GuiProgress::new());
@@ -251,6 +467,7 @@ impl ImgforgeApp {
         for failure in &report.failures {
           self.push_log(format!("失败：{} — {}", failure.path.display(), failure.error));
         }
+        self.record_history(&report);
         self.state = RunState::Done(report);
       }
       WorkerMessage::Finished(Err(e)) => {
@@ -297,6 +514,7 @@ impl ImgforgeApp {
 impl eframe::App for ImgforgeApp {
   fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
     self.poll_worker();
+    self.poll_quality_preview();
 
     let running = self.is_running();
     let enabled = !running;
@@ -315,6 +533,7 @@ impl eframe::App for ImgforgeApp {
             if path.is_dir() {
               self.input_dir = path.display().to_string();
               self.status = format!("已拖入文件夹：{}", path.display());
+              self.refresh_previews();
               break;
             }
           }
@@ -488,10 +707,111 @@ impl eframe::App for ImgforgeApp {
               }
 
               widgets::grouped_section(ui, "文件夹", |ui| {
+                let prev_input = self.input_dir.clone();
                 widgets::folder_field(ui, "输入", &mut self.input_dir, enabled);
                 widgets::folder_field(ui, "输出", &mut self.output_dir, enabled);
+                if prev_input != self.input_dir {
+                  self.refresh_previews();
+                }
                 if self.input_dir.trim().is_empty() {
                   widgets::drop_hint(ui);
+                }
+              });
+
+              ui.add_space(16.0);
+
+              widgets::grouped_section(ui, "预设与历史", |ui| {
+                ui.horizontal_wrapped(|ui| {
+                  if !self.gui_prefs.presets.is_empty() {
+                    let labels: Vec<String> = self
+                      .gui_prefs
+                      .presets
+                      .iter()
+                      .map(|p| p.name.clone())
+                      .collect();
+                    let mut selected = self.selected_preset.unwrap_or(0).min(labels.len().saturating_sub(1));
+                    egui::ComboBox::from_id_salt("user_preset")
+                      .selected_text(labels.get(selected).cloned().unwrap_or_else(|| "选择预设".into()))
+                      .show_ui(ui, |ui| {
+                        for (i, name) in labels.iter().enumerate() {
+                          ui.selectable_value(&mut selected, i, name);
+                        }
+                      });
+                    self.selected_preset = Some(selected);
+                    if widgets::compact_secondary_button(ui, "套用", enabled).clicked() {
+                      if let Some(p) = self.gui_prefs.presets.get(selected).cloned() {
+                        let name = p.name.clone();
+                        self.apply_snapshot(&p.snapshot);
+                        self.status = format!("已套用预设「{name}」");
+                      }
+                    }
+                    if widgets::compact_secondary_button(ui, "删除", enabled).clicked() {
+                      if let Some(name) = labels.get(selected).cloned() {
+                        self.gui_prefs.delete_preset(&name);
+                        let _ = self.gui_prefs.save();
+                        self.selected_preset = None;
+                      }
+                    }
+                  } else {
+                    ui.label(
+                      RichText::new("暂无自定义预设")
+                        .size(12.0)
+                        .color(theme::secondary_label(dark)),
+                    );
+                  }
+                });
+                ui.horizontal(|ui| {
+                  ui.add_enabled_ui(enabled, |ui| {
+                    ui.add(
+                      egui::TextEdit::singleline(&mut self.new_preset_name)
+                        .desired_width(120.0)
+                        .hint_text("预设名称"),
+                    );
+                  });
+                  if widgets::compact_primary_button(ui, "保存当前为预设", enabled).clicked() {
+                    let name = self.new_preset_name.trim().to_string();
+                    if name.is_empty() {
+                      self.status = "请输入预设名称".into();
+                    } else {
+                      self
+                        .gui_prefs
+                        .upsert_preset(name.clone(), self.snapshot_from_ui());
+                      let _ = self.gui_prefs.save();
+                      self.status = format!("已保存预设「{name}」");
+                      self.new_preset_name.clear();
+                    }
+                  }
+                });
+
+                if !self.gui_prefs.history.is_empty() {
+                  widgets::inset_separator(ui);
+                  widgets::settings_subheading(ui, "最近任务");
+                  ui.add_space(4.0);
+                  let recent: Vec<_> = self.gui_prefs.history.iter().take(5).cloned().collect();
+                  for (i, entry) in recent.into_iter().enumerate() {
+                    ui.horizontal_wrapped(|ui| {
+                      ui.label(
+                        RichText::new(format!(
+                          "{} → {} · {}/{} 成功",
+                          entry.input_dir, entry.output_dir, entry.successes, entry.total
+                        ))
+                        .size(12.0)
+                        .color(theme::secondary_label(dark)),
+                      );
+                      if widgets::compact_secondary_button(ui, "重跑", enabled).clicked() {
+                        self.input_dir = entry.input_dir.clone();
+                        self.output_dir = entry.output_dir.clone();
+                        self.apply_snapshot(&entry.snapshot);
+                        self.status = format!("已载入历史任务 #{i}");
+                      }
+                      if widgets::compact_secondary_button(ui, "打开输出", true).clicked() {
+                        let path = PathBuf::from(&entry.output_dir);
+                        if path.exists() {
+                          let _ = open::that(&path);
+                        }
+                      }
+                    });
+                  }
                 }
               });
 
@@ -515,13 +835,125 @@ impl eframe::App for ImgforgeApp {
                 });
 
                 ui.add_space(6.0);
-                widgets::quality_slider_row(ui, &mut self.quality, enabled);
+                widgets::quality_slider_row(ui, &mut self.quality, enabled && !self.use_target_max_bytes);
 
                 ui.add_space(6.0);
-                widgets::quality_presets_row(ui, &mut self.quality, enabled);
+                widgets::quality_presets_row(ui, &mut self.quality, enabled && !self.use_target_max_bytes);
+
+                ui.add_space(6.0);
+                widgets::settings_labeled_row(ui, "目标体积", |ui| {
+                  ui.checkbox(&mut self.use_target_max_bytes, "限制单文件 ≤");
+                  ui.add_enabled_ui(enabled && self.use_target_max_bytes, |ui| {
+                    ui.add(
+                      egui::DragValue::new(&mut self.target_max_kb)
+                        .range(16..=20_480)
+                        .suffix(" KB"),
+                    );
+                  });
+                });
+                if self.use_target_max_bytes {
+                  ui.label(
+                    RichText::new("启用后将对 JPEG/WebP 等自动二分搜索质量以控制体积")
+                      .size(11.0)
+                      .color(theme::secondary_label(dark)),
+                  );
+                }
+
+                ui.add_space(6.0);
+                widgets::settings_labeled_row(ui, "重命名", |ui| {
+                  let response = ui.add_enabled_ui(enabled, |ui| {
+                    ui.add(
+                      egui::TextEdit::singleline(&mut self.rename_template)
+                        .desired_width(ui.available_width().min(280.0))
+                        .hint_text("{dir}_{stem}_{index}"),
+                    )
+                  });
+                  if response.response.changed() {
+                    self.refresh_previews();
+                  }
+                });
+                if let Some(err) = &self.rename_preview_error {
+                  ui.colored_label(theme::error_color(dark), err);
+                } else if !self.rename_preview.is_empty() {
+                  ui.label(
+                    RichText::new("预览输出名")
+                      .size(11.0)
+                      .color(theme::secondary_label(dark)),
+                  );
+                  for (src, out) in &self.rename_preview {
+                    ui.label(
+                      RichText::new(format!("{src} → {out}"))
+                        .size(11.0)
+                        .family(egui::FontFamily::Monospace),
+                    );
+                  }
+                }
 
                 widgets::inset_separator(ui);
                 self.settings_checkboxes(ui, enabled);
+              });
+
+              ui.add_space(16.0);
+
+              widgets::grouped_section(ui, "转换前摘要", |ui| {
+                ui.horizontal(|ui| {
+                  if widgets::compact_secondary_button(ui, "刷新预估", enabled).clicked() {
+                    self.refresh_previews();
+                  }
+                  if widgets::compact_secondary_button(ui, "质量体积预览", enabled).clicked() {
+                    self.request_quality_preview();
+                  }
+                });
+                if let Some(ref preview) = self.batch_preview {
+                  for line in preview.summary_lines(self.formats[self.format_index].extension()) {
+                    ui.label(RichText::new(line).size(12.0));
+                  }
+                  if !preview.samples.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(
+                      RichText::new("样例路径")
+                        .size(11.0)
+                        .color(theme::secondary_label(dark)),
+                    );
+                    for s in &preview.samples {
+                      ui.label(
+                        RichText::new(format!(
+                          "{} → {}",
+                          s.input.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                          s.output.file_name().and_then(|n| n.to_str()).unwrap_or("?")
+                        ))
+                        .size(11.0)
+                        .family(egui::FontFamily::Monospace),
+                      );
+                    }
+                  }
+                } else if !self.input_dir.trim().is_empty() {
+                  ui.label(
+                    RichText::new("点击「刷新预估」查看将转换的文件数")
+                      .size(12.0)
+                      .color(theme::secondary_label(dark)),
+                  );
+                }
+
+                if let Some(err) = &self.quality_preview_error {
+                  ui.colored_label(theme::error_color(dark), err);
+                } else if !self.quality_preview_rows.is_empty() {
+                  ui.add_space(6.0);
+                  ui.label(
+                    RichText::new("单图质量对比（首图采样）")
+                      .size(11.0)
+                      .color(theme::secondary_label(dark)),
+                  );
+                  for row in &self.quality_preview_rows {
+                    ui.label(format!(
+                      "质量 {} → {}",
+                      row.quality,
+                      quality_preview::format_bytes(row.bytes)
+                    ));
+                  }
+                } else if self.quality_preview_worker.is_some() {
+                  ui.label("正在计算质量体积预览…");
+                }
               });
 
               ui.add_space(16.0);
@@ -561,6 +993,7 @@ impl eframe::App for ImgforgeApp {
   }
 
   fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+    let _ = self.gui_prefs.save();
     if let Some(toolbar) = &mut self.native_toolbar {
       toolbar.teardown();
     }

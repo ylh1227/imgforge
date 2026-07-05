@@ -60,6 +60,11 @@ pub async fn run_batch(
   Ok(result.report)
 }
 
+/// 转换前扫描摘要（不执行编码）。
+pub fn preview_batch(config: &AppConfig) -> AppResult<crate::io::batch_preview::BatchPreview> {
+  crate::io::batch_preview::preview_batch(config)
+}
+
 /// 将评审标记的单图转换参数应用到对应任务（格式/质量/宽度覆盖）。
 fn apply_per_input_overrides(
   tasks: &mut [crate::scheduler::task::ConversionTask],

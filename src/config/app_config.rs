@@ -64,6 +64,9 @@ pub struct AppConfig {
   /// 仅解 Bayer/RAW 马赛克：跳过缩放/锐化/水印等后处理。
   #[serde(default)]
   pub bayer_only: bool,
+  /// 目标输出文件大小上限（字节）；启用后对 JPEG/WebP 等做质量二分拟合。
+  #[serde(default)]
+  pub target_max_bytes: Option<u64>,
 }
 
 impl Default for AppConfig {
@@ -98,6 +101,7 @@ impl Default for AppConfig {
       per_input_params: HashMap::new(),
       burn_review_annotations: false,
       bayer_only: false,
+      target_max_bytes: None,
     }
   }
 }

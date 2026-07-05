@@ -63,6 +63,15 @@ async fn main() -> eyre::Result<()> {
 
   if config.dry_run {
     tracing::info!("dry-run mode: no files will be written");
+    match imgforge::job::preview_batch(&config) {
+      Ok(preview) => {
+        ui::report::ProcessReport::print_preview_summary(
+          &preview,
+          config.target_format.extension(),
+        );
+      }
+      Err(e) => tracing::warn!(error = %e, "preview scan failed"),
+    }
   }
 
   let report = run_batch(config, cancelled, None)

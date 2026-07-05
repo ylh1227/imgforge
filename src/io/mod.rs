@@ -1,6 +1,7 @@
 //! IO 层：目录扫描、原子写入与增量处理。
 
 pub mod atomic_write;
+pub mod batch_preview;
 pub mod incremental;
 pub mod paths;
 pub mod scanner;
