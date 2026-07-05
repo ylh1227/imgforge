@@ -44,14 +44,14 @@ pub fn grouped_section<R>(ui: &mut Ui, title: &str, add_contents: impl FnOnce(&m
     .inner
 }
 
-/// 底部操作工具栏帧（扁平实色底栏 + 顶部分割线）。
+/// 底部操作工具栏帧（贴合窗口背景，仅按钮保持控件层级）。
 pub fn glass_toolbar_frame(dark: bool) -> Frame {
   Frame::new()
-    .fill(theme::toolbar_fill(dark))
-    .stroke(theme::separator_stroke(dark))
+    .fill(theme::window_fill(dark))
+    .stroke(Stroke::NONE)
     .shadow(theme::toolbar_shadow(dark))
-    .inner_margin(Margin::symmetric(20, 12))
-    .corner_radius(CornerRadius::same(theme::TOOLBAR_TOP_RADIUS))
+    .inner_margin(Margin::symmetric(20, 10))
+    .corner_radius(CornerRadius::ZERO)
 }
 
 /// egui 回退工具栏点击结果。

@@ -36,3 +36,13 @@ pub fn thumbnail_cache_dir() -> ReviewResult<PathBuf> {
 pub fn shortcuts_path() -> ReviewResult<PathBuf> {
   Ok(app_data_dir()?.join("review_shortcuts.json"))
 }
+
+/// 评审模块配置路径。
+pub fn review_config_path() -> ReviewResult<PathBuf> {
+  Ok(app_data_dir()?.join("review_config.json"))
+}
+
+/// 预览图缓存目录（1920px）。
+pub fn preview_cache_dir() -> ReviewResult<PathBuf> {
+  Ok(app_data_dir()?.join("previews"))
+}

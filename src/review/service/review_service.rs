@@ -3,7 +3,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::review::domain::annotation::{Annotation, AnnotationKind, AnnotationPosition, AnnotationStyle};
+use crate::review::domain::convert_params::ConvertParams;
 use crate::review::domain::image_item::{ImageFilter, ReviewImageItem, ReviewStatus};
+use crate::review::domain::metadata::{read_image_metadata, ImageMetadata};
 use crate::review::error::{ReviewError, ReviewResult};
 use crate::review::service::batch_operations::{
   BatchAnnotateRequest, BatchAnnotateResult, BatchOperations, BatchRemarkRequest,
@@ -27,6 +29,12 @@ impl ReviewService {
   pub fn open() -> ReviewResult<Self> {
     ensure_cache_dirs()?;
     let repo = SqliteReviewRepository::open()?;
+    if let Err(e) = crate::review::storage::consistency::repair(repo.connection()) {
+      tracing::warn!("review consistency repair: {e}");
+    }
+    if let Err(e) = crate::review::storage::backup::create_backup() {
+      tracing::debug!("review startup backup skipped: {e}");
+    }
     let shortcuts = ShortcutConfig::load().unwrap_or_default();
     Ok(Self { repo, shortcuts })
   }
@@ -35,6 +43,9 @@ impl ReviewService {
   pub fn with_connection(conn: rusqlite::Connection) -> ReviewResult<Self> {
     ensure_cache_dirs()?;
     let repo = SqliteReviewRepository::new(conn)?;
+    if let Err(e) = crate::review::storage::consistency::repair(repo.connection()) {
+      tracing::warn!("review consistency repair: {e}");
+    }
     let shortcuts = ShortcutConfig::load().unwrap_or_default();
     Ok(Self { repo, shortcuts })
   }
@@ -274,6 +285,44 @@ impl ReviewConversionBridge for ReviewService {
         output_dir: None,
       },
     )
+  }
+}
+
+impl ReviewService {
+  pub fn update_convert_params(&self, id: i64, params: &ConvertParams) -> ReviewResult<()> {
+    self.repo.update_convert_params(id, params)
+  }
+
+  pub fn load_metadata(&self, path: &Path) -> ReviewResult<ImageMetadata> {
+    read_image_metadata(path)
+  }
+
+  pub fn refresh_metadata_cache(&self, id: i64, path: &Path) -> ReviewResult<ImageMetadata> {
+    let meta = read_image_metadata(path)?;
+    self.repo.update_image_metadata(id, meta.file_size, meta.width, meta.height)?;
+    Ok(meta)
+  }
+
+  pub fn soft_delete_image(&self, id: i64) -> ReviewResult<()> {
+    self.repo.soft_delete_image(id)
+  }
+
+  pub fn restore_image(&self, id: i64) -> ReviewResult<()> {
+    self.repo.restore_image(id)
+  }
+
+  pub fn soft_delete_batch(&self, id: i64) -> ReviewResult<()> {
+    self.repo.soft_delete_batch(id)
+  }
+
+  pub fn list_deleted_images(&self, batch_id: i64) -> ReviewResult<Vec<ReviewImageItem>> {
+    self.repo.list_deleted_images(batch_id)
+  }
+
+  pub fn save_shortcuts(&mut self, config: &ShortcutConfig) -> ReviewResult<()> {
+    config.save()?;
+    self.shortcuts = config.clone();
+    Ok(())
   }
 }
 

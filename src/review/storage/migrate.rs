@@ -7,8 +7,8 @@ use crate::review::domain::annotation::AnnotationKind;
 use crate::review::domain::image_item::ReviewStatus;
 use crate::review::error::ReviewResult;
 
-/// 当前评审 schema 版本（独立于主库其它模块时可共用同一 `user_version`，此处仅管理评审表）。
-pub const REVIEW_SCHEMA_VERSION: i32 = 1;
+/// 当前评审 schema 版本。
+pub const REVIEW_SCHEMA_VERSION: i32 = 2;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS review_batch (
@@ -51,25 +51,96 @@ CREATE TABLE IF NOT EXISTS review_session (
 );
 "#;
 
+const SCHEMA_V2_EXTRA: &str = r#"
+CREATE TABLE IF NOT EXISTS review_custom_status (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  color TEXT NOT NULL,
+  maps_to TEXT,
+  convert_params TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_image_item_status ON review_image_item(status);
+CREATE INDEX IF NOT EXISTS idx_review_image_item_batch_status ON review_image_item(batch_id, status);
+CREATE INDEX IF NOT EXISTS idx_review_image_item_updated ON review_image_item(updated_at);
+CREATE INDEX IF NOT EXISTS idx_review_image_item_deleted ON review_image_item(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_review_annotation_z ON review_annotation(image_item_id, z_index);
+"#;
+
 /// 在已有连接上初始化/升级评审表结构。
 pub fn ensure_schema(conn: &Connection) -> ReviewResult<()> {
   conn.pragma_update(None, "foreign_keys", "ON")?;
-  let version: i32 = conn
+  let _ = conn.pragma_update(None, "journal_mode", "WAL");
+  let _ = conn.pragma_update(None, "synchronous", "NORMAL");
+
+  let mut version: i32 = conn
     .pragma_query_value(None, "user_version", |row| row.get(0))
     .unwrap_or(0);
 
-  if version >= REVIEW_SCHEMA_VERSION {
-    return Ok(());
+  if version == 0 {
+    if table_exists(conn, "review_batch")? && is_legacy_schema(conn)? {
+      migrate_v0_to_v1(conn)?;
+    } else {
+      conn.execute_batch(SCHEMA_V1)?;
+    }
+    version = 1;
   }
 
-  if table_exists(conn, "review_batch")? && is_legacy_schema(conn)? {
-    migrate_v0_to_v1(conn)?;
-  } else {
-    conn.execute_batch(SCHEMA_V1)?;
+  if version < 2 {
+    migrate_v1_to_v2(conn)?;
+    version = 2;
   }
 
   conn.pragma_update(None, "user_version", REVIEW_SCHEMA_VERSION)?;
   Ok(())
+}
+
+fn migrate_v1_to_v2(conn: &Connection) -> ReviewResult<()> {
+  add_column_if_missing(conn, "review_batch", "deleted_at", "INTEGER")?;
+  add_column_if_missing(conn, "review_image_item", "deleted_at", "INTEGER")?;
+  add_column_if_missing(conn, "review_image_item", "file_size", "INTEGER")?;
+  add_column_if_missing(conn, "review_image_item", "width", "INTEGER")?;
+  add_column_if_missing(conn, "review_image_item", "height", "INTEGER")?;
+  add_column_if_missing(conn, "review_image_item", "convert_format", "TEXT")?;
+  add_column_if_missing(conn, "review_image_item", "convert_quality", "INTEGER")?;
+  add_column_if_missing(conn, "review_image_item", "convert_width", "INTEGER")?;
+  add_column_if_missing(conn, "review_image_item", "annotation_count", "INTEGER DEFAULT 0")?;
+  add_column_if_missing(conn, "review_annotation", "locked", "INTEGER DEFAULT 0")?;
+  add_column_if_missing(conn, "review_annotation", "z_index", "INTEGER DEFAULT 0")?;
+  conn.execute_batch(SCHEMA_V2_EXTRA)?;
+  conn.execute(
+    "UPDATE review_image_item SET annotation_count = (
+       SELECT COUNT(*) FROM review_annotation WHERE image_item_id = review_image_item.id
+     ) WHERE annotation_count IS NULL OR annotation_count = 0",
+    [],
+  )?;
+  Ok(())
+}
+
+fn add_column_if_missing(
+  conn: &Connection,
+  table: &str,
+  column: &str,
+  col_type: &str,
+) -> ReviewResult<()> {
+  if column_exists(conn, table, column)? {
+    return Ok(());
+  }
+  let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {col_type}");
+  conn.execute(&sql, [])?;
+  Ok(())
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> ReviewResult<bool> {
+  let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+  let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+  for name in rows {
+    if name? == column {
+      return Ok(true);
+    }
+  }
+  Ok(false)
 }
 
 fn table_exists(conn: &Connection, name: &str) -> ReviewResult<bool> {
@@ -87,7 +158,7 @@ fn is_legacy_schema(conn: &Connection) -> ReviewResult<bool> {
   }
   let mut stmt = conn.prepare("PRAGMA table_info(review_image_item)")?;
   let rows = stmt.query_map([], |row| {
-  let col_name: String = row.get(1)?;
+    let col_name: String = row.get(1)?;
     let col_type: String = row.get(2)?;
     Ok((col_name, col_type))
   })?;
@@ -274,20 +345,13 @@ mod tests {
   use rusqlite::Connection;
 
   #[test]
-  fn fresh_db_gets_v1_schema() {
+  fn fresh_db_gets_v2_schema() {
     let conn = Connection::open_in_memory().unwrap();
     ensure_schema(&conn).unwrap();
     let version: i32 = conn
       .pragma_query_value(None, "user_version", |row| row.get(0))
       .unwrap();
     assert_eq!(version, REVIEW_SCHEMA_VERSION);
-    let ty: String = conn
-      .query_row(
-        "SELECT type FROM pragma_table_info('review_image_item') WHERE name = 'status'",
-        [],
-        |row| row.get(0),
-      )
-      .unwrap();
-    assert_eq!(ty, "TEXT");
+    assert!(column_exists(&conn, "review_image_item", "annotation_count").unwrap());
   }
 }

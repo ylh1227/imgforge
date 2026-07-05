@@ -3,7 +3,9 @@
 pub mod annotation_canvas;
 mod canvas;
 mod compare_view;
+mod properties_panel;
 mod review_panel;
+mod shortcut_panel;
 mod shortcuts;
 mod sidebar;
 mod texture_cache;

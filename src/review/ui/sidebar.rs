@@ -1,15 +1,18 @@
-//! 侧边栏：批次列表、图片列表、状态筛选。
+//! 侧边栏：批次列表、虚拟滚动图片列表、状态筛选与排序。
 
 use eframe::egui::{self, RichText, Ui};
 
 use crate::gui::{theme, widgets};
-use crate::review::domain::{BatchStats, ImageFilter, ReviewBatch, ReviewImageItem, ReviewStatus};
+use crate::review::domain::{BatchStats, ImageFilter, ImageSortKey, ReviewBatch, ReviewImageItem, ReviewStatus};
 use crate::review::error::ReviewResult;
+
+const ROW_HEIGHT: f32 = 28.0;
 
 pub struct SidebarState {
   pub filter: ImageFilter,
   pub selected_ids: Vec<i64>,
   pub batch_name_input: String,
+  pub show_recycle: bool,
 }
 
 impl Default for SidebarState {
@@ -18,6 +21,7 @@ impl Default for SidebarState {
       filter: ImageFilter::default(),
       selected_ids: Vec::new(),
       batch_name_input: String::from("新评审批次"),
+      show_recycle: false,
     }
   }
 }
@@ -63,14 +67,8 @@ pub fn batch_list_ui(
   picked
 }
 
-pub fn image_list_ui(
-  ui: &mut Ui,
-  images: &[ReviewImageItem],
-  current: Option<i64>,
-  sidebar: &mut SidebarState,
-) -> ImageListAction {
-  let dark = ui.style().visuals.dark_mode;
-
+pub fn filter_sort_ui(ui: &mut Ui, sidebar: &mut SidebarState) -> bool {
+  let mut changed = false;
   ui.horizontal(|ui| {
     widgets::section_label(ui, "筛选");
     egui::ComboBox::from_id_salt("status_filter")
@@ -87,21 +85,45 @@ pub fn image_list_ui(
           .clicked()
         {
           sidebar.filter.status = None;
+          changed = true;
         }
-        for s in [
-          ReviewStatus::Pending,
-          ReviewStatus::Approved,
-          ReviewStatus::NeedsFix,
-          ReviewStatus::Rejected,
-        ] {
+        for s in ReviewStatus::all() {
           if ui
             .selectable_label(sidebar.filter.status == Some(s), s.label())
             .clicked()
           {
             sidebar.filter.status = Some(s);
+            changed = true;
           }
         }
       });
+  });
+
+  ui.horizontal(|ui| {
+    widgets::section_label(ui, "排序");
+    egui::ComboBox::from_id_salt("sort_key")
+      .selected_text(sidebar.filter.sort_by.label())
+      .show_ui(ui, |ui| {
+        for key in [
+          ImageSortKey::FilePath,
+          ImageSortKey::Status,
+          ImageSortKey::UpdatedAt,
+          ImageSortKey::FileSize,
+          ImageSortKey::Resolution,
+          ImageSortKey::AnnotationCount,
+        ] {
+          if ui
+            .selectable_label(sidebar.filter.sort_by == key, key.label())
+            .clicked()
+          {
+            sidebar.filter.sort_by = key;
+            changed = true;
+          }
+        }
+      });
+    if ui.checkbox(&mut sidebar.filter.sort_asc, "升序").changed() {
+      changed = true;
+    }
   });
 
   ui.add(
@@ -109,27 +131,82 @@ pub fn image_list_ui(
       .hint_text("搜索文件名…")
       .margin(egui::vec2(12.0, 10.0)),
   );
-
-  let mut filter_changed = false;
-  if sidebar.filter.search.len() == 1 {
-    filter_changed = true;
+  ui.horizontal(|ui| {
+    ui.label("备注包含");
+    if ui
+      .text_edit_singleline(&mut sidebar.filter.remark_contains)
+      .changed()
+    {
+      changed = true;
+    }
+  });
+  ui.horizontal(|ui| {
+    ui.label("最少标注");
+    let mut min = sidebar.filter.min_annotations.unwrap_or(0);
+    if ui
+      .add(egui::DragValue::new(&mut min).range(0..=999))
+      .changed()
+    {
+      sidebar.filter.min_annotations = if min == 0 { None } else { Some(min) };
+      changed = true;
+    }
+  });
+  if ui.checkbox(&mut sidebar.show_recycle, "回收站").changed() {
+    changed = true;
   }
+  changed
+}
+
+pub fn image_list_ui(
+  ui: &mut Ui,
+  images: &[ReviewImageItem],
+  current: Option<i64>,
+  sidebar: &mut SidebarState,
+) -> ImageListAction {
+  let dark = ui.style().visuals.dark_mode;
+  let mut filter_changed = filter_sort_ui(ui, sidebar);
 
   ui.add_space(4.0);
   ui.separator();
   ui.add_space(4.0);
 
   let mut picked = None;
+  let total = images.len();
+  let scroll_id = ui.id().with("review_image_list");
+
   egui::ScrollArea::vertical()
-    .id_salt("review_image_list")
+    .id_salt(scroll_id)
     .show(ui, |ui| {
-      for img in images {
+      if images.is_empty() {
+        ui.label(
+          RichText::new("暂无图片")
+            .size(12.0)
+            .color(theme::secondary_label(dark)),
+        );
+        return;
+      }
+
+      let viewport = ui.clip_rect();
+      let scroll_off = ui.min_rect().min.y - viewport.min.y;
+      let first = ((scroll_off / ROW_HEIGHT).floor() as isize).max(0) as usize;
+      let visible = ((viewport.height() / ROW_HEIGHT).ceil() as usize).saturating_add(2);
+      let last = (first + visible).min(total);
+
+      ui.set_min_height(total as f32 * ROW_HEIGHT);
+      ui.add_space(first as f32 * ROW_HEIGHT);
+
+      for img in &images[first..last] {
         let name = img
           .file_path
           .file_name()
           .map(|s| s.to_string_lossy().to_string())
           .unwrap_or_else(|| img.file_path.display().to_string());
-        let row = format!("[{}] {}", img.status.label(), name);
+        let row = format!(
+          "[{}] {} ({})",
+          img.status.label(),
+          name,
+          img.annotation_count
+        );
         let multi = sidebar.selected_ids.contains(&img.id);
         ui.horizontal(|ui| {
           let mut checked = multi;
@@ -146,14 +223,14 @@ pub fn image_list_ui(
           }
         });
       }
-      if images.is_empty() {
-        ui.label(
-          RichText::new("暂无图片")
-            .size(12.0)
-            .color(theme::secondary_label(dark)),
-        );
-      }
+
+      ui.add_space((total.saturating_sub(last)) as f32 * ROW_HEIGHT);
     });
+
+  if sidebar.filter.search.len() == 1 {
+    filter_changed = true;
+  }
+
   ImageListAction {
     reload: filter_changed,
     selected: picked,
@@ -169,12 +246,7 @@ pub struct ImageListAction {
 pub fn status_buttons(ui: &mut Ui, current: Option<ReviewStatus>) -> Option<ReviewStatus> {
   let mut picked = None;
   ui.horizontal_wrapped(|ui| {
-    for s in [
-      ReviewStatus::Pending,
-      ReviewStatus::Approved,
-      ReviewStatus::NeedsFix,
-      ReviewStatus::Rejected,
-    ] {
+    for s in ReviewStatus::all() {
       if widgets::toggle_chip(ui, s.label(), current == Some(s), true) {
         picked = Some(s);
       }

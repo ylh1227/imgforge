@@ -20,6 +20,10 @@ use crate::review::RemarkWriteMode;
 use crate::review::ui::annotation_canvas::AnnotationCanvasEvent;
 use crate::review::ui::compare_view::CompareView;
 use crate::review::ui::shortcuts::handle_shortcuts;
+use crate::review::domain::image_item::next_image_id;
+use crate::review::service::ReviewModuleConfig;
+use crate::review::ui::properties_panel::{properties_panel_ui, PropertiesPanelState};
+use crate::review::ui::shortcut_panel::{shortcut_panel_ui, ShortcutPanelState};
 use crate::review::ui::sidebar::{
   batch_list_ui, format_stats, image_list_ui, status_buttons, SidebarState,
 };
@@ -64,6 +68,11 @@ pub struct ReviewPanel {
   batch_target_status: ReviewStatus,
   batch_remark_mode: RemarkWriteMode,
   last_batch_annotation_ids: Vec<i64>,
+  config: ReviewModuleConfig,
+  properties: PropertiesPanelState,
+  shortcut_panel: ShortcutPanelState,
+  show_shortcut_panel: bool,
+  last_backup_minute: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -87,6 +96,8 @@ enum BatchOpKind {
 impl ReviewPanel {
   pub fn new() -> ReviewResult<Self> {
     let service = ReviewService::open()?;
+    let shortcuts = service.shortcuts.clone();
+    let config = ReviewModuleConfig::load().unwrap_or_default();
     let mut panel = Self {
       service,
       batches: Vec::new(),
@@ -107,6 +118,11 @@ impl ReviewPanel {
       batch_target_status: ReviewStatus::Approved,
       batch_remark_mode: RemarkWriteMode::Overwrite,
       last_batch_annotation_ids: Vec::new(),
+      config,
+      properties: PropertiesPanelState::default(),
+      shortcut_panel: ShortcutPanelState::new(&shortcuts),
+      show_shortcut_panel: false,
+      last_backup_minute: 0,
     };
     panel.reload_batches()?;
     if let Ok((batch, image)) = panel.service.restore_session() {
@@ -139,6 +155,7 @@ impl ReviewPanel {
     self.process_pending_import();
     self.handle_shortcut_actions(ctx);
     self.show_dialogs(ctx);
+    self.maybe_scheduled_backup();
 
     let dark = ui.style().visuals.dark_mode;
     let narrow = ui.available_width() < theme::REVIEW_NARROW_BREAKPOINT;
@@ -159,6 +176,16 @@ impl ReviewPanel {
 
     widgets::status_banner(ui, &self.status_message(dark), false);
     ui.add_space(16.0);
+
+    if self.show_shortcut_panel {
+      widgets::grouped_section(ui, "快捷键", |ui| {
+        if shortcut_panel_ui(ui, &mut self.shortcut_panel) {
+          let _ = self.service.save_shortcuts(&self.shortcut_panel.draft);
+          self.set_status("快捷键已更新");
+        }
+      });
+      ui.add_space(16.0);
+    }
 
     if narrow {
       self.layout_stacked(ui, ctx, host, dark);
@@ -228,6 +255,16 @@ impl ReviewPanel {
       }
 
       ui.separator();
+
+      if widgets::compact_secondary_button(ui, "快捷键", true).clicked() {
+        self.show_shortcut_panel = !self.show_shortcut_panel;
+      }
+      if widgets::compact_secondary_button(ui, "备份数据库", true).clicked() {
+        match crate::review::storage::create_backup() {
+          Ok(p) => self.set_status(format!("已备份：{}", p.display())),
+          Err(e) => self.error = Some(e.to_string()),
+        }
+      }
 
       let approved = self
         .current_batch
@@ -381,6 +418,22 @@ impl ReviewPanel {
   }
 
   fn right_column(&mut self, ui: &mut egui::Ui, dark: bool) {
+    widgets::grouped_section(ui, "属性", |ui| {
+      let item = self.current_item().cloned();
+      if properties_panel_ui(ui, &mut self.properties, item.as_ref()) {
+        if let Some(id) = self.current_image {
+          if let Err(e) = self
+            .service
+            .update_convert_params(id, &self.properties.convert_draft)
+          {
+            self.error = Some(e.to_string());
+          }
+        }
+      }
+    });
+
+    ui.add_space(16.0);
+
     widgets::grouped_section(ui, "当前图片", |ui| {
       let current_status = self.current_item().map(|item| item.status);
       if let Some(status) = status_buttons(ui, current_status) {
@@ -418,6 +471,17 @@ impl ReviewPanel {
           .size(12.0)
           .color(theme::secondary_label(dark)),
         );
+      }
+
+      ui.add_space(8.0);
+      if ui
+        .checkbox(
+          &mut self.config.auto_advance_on_status,
+          "切换状态后跳下一张未评审",
+        )
+        .changed()
+      {
+        let _ = self.config.save();
       }
     });
 
@@ -785,11 +849,25 @@ impl ReviewPanel {
     self.current_image = Some(id);
     if let Some(item) = self.images.iter().find(|i| i.id == id) {
       self.remark_buf = item.remark.clone();
+      self.properties.sync_item(item, None);
+      if let Ok(meta) = self.service.refresh_metadata_cache(item.id, &item.file_path) {
+        self.properties.sync_item(item, Some(meta));
+      }
     }
     if let (Some(batch), Some(image)) = (self.current_batch, self.current_image) {
       let _ = self.service.save_session(batch, image);
     }
     self.load_current_annotations();
+    if let (Some(idx), Some(batch_id)) = (self.current_index(), self.current_batch) {
+      let paths: Vec<_> = self.images.iter().map(|i| i.file_path.clone()).collect();
+      let thumbs: Vec<_> = self.images.iter().map(|i| i.thumbnail_path.clone()).collect();
+      self.compare_view.prefetch_neighbors(
+        &paths,
+        idx,
+        self.config.prefetch_neighbors,
+        &thumbs,
+      );
+    }
   }
 
   fn select_relative(&mut self, delta: isize) {
@@ -814,6 +892,15 @@ impl ReviewPanel {
         let _ = self.reload_images();
         let _ = self.reload_batches();
         self.set_status(format!("已设为「{}」", status.label()));
+        if self.config.auto_advance_on_status {
+          if let Some(next) = next_image_id(
+            &self.images,
+            id,
+            self.config.auto_advance_target,
+          ) {
+            self.select_image(next);
+          }
+        }
       }
       Err(e) => self.error = Some(e.to_string()),
     }
@@ -901,10 +988,28 @@ impl ReviewPanel {
       self.images.clear();
       return Ok(());
     };
-    self.images = self
-      .service
-      .list_images(batch_id, &self.sidebar.filter)?;
+    if self.sidebar.show_recycle {
+      self.images = self.service.list_deleted_images(batch_id)?;
+    } else {
+      self.images = self
+        .service
+        .list_images(batch_id, &self.sidebar.filter)?;
+    }
     Ok(())
+  }
+
+  fn maybe_scheduled_backup(&mut self) {
+    if self.config.backup_interval_minutes == 0 {
+      return;
+    }
+    let minute = chrono::Utc::now().timestamp() as u64 / 60;
+    if minute.saturating_sub(self.last_backup_minute)
+      >= self.config.backup_interval_minutes as u64
+    {
+      if crate::review::storage::create_backup().is_ok() {
+        self.last_backup_minute = minute;
+      }
+    }
   }
 
   fn create_batch_from_folder(&mut self, folder: &Path) {

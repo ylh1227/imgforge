@@ -76,14 +76,22 @@ impl SqliteReviewRepository {
     batch_id: i64,
     filter: &ImageFilter,
   ) -> ReviewResult<Vec<ReviewImageItem>> {
-    ReviewRepository::list_image_items(self, batch_id, ItemFilter::from(filter))
+    let mut items =
+      ReviewRepository::list_image_items(self, batch_id, ItemFilter::from(filter))?;
+    if !filter.include_deleted {
+      items.retain(|i| !i.is_deleted());
+    }
+    filter.apply_in_memory(&mut items);
+    Ok(items)
   }
 
   pub fn get_image(&self, id: i64) -> ReviewResult<ReviewImageItem> {
     self
       .conn
       .query_row(
-        "SELECT id, batch_id, file_path, status, remark, thumbnail_path, created_at, updated_at
+        "SELECT id, batch_id, file_path, status, remark, thumbnail_path, created_at, updated_at,
+                deleted_at, file_size, width, height, convert_format, convert_quality, convert_width,
+                annotation_count
          FROM review_image_item WHERE id = ?1",
         [id],
         map_image_row,
@@ -209,6 +217,9 @@ impl SqliteReviewRepository {
     template: &crate::review::storage::traits::AnnotationTemplate,
     image_ids: &[i64],
   ) -> ReviewResult<Vec<i64>> {
+    if image_ids.is_empty() {
+      return Ok(Vec::new());
+    }
     let ann = Annotation {
       id: 0,
       image_item_id: 0,
@@ -217,11 +228,39 @@ impl SqliteReviewRepository {
       style: template.style.clone(),
       content: template.content.clone(),
       created_at: Utc::now(),
+      locked: false,
+      z_index: 0,
     };
+    let tx = self.conn.unchecked_transaction()?;
     let mut inserted = Vec::with_capacity(image_ids.len());
     for image_id in image_ids {
-      inserted.push(ReviewRepository::add_annotation(self, *image_id, &ann)?);
+      let pos = serde_json::to_string(&ann.position)?;
+      let style = serde_json::to_string(&ann.style)?;
+      tx.execute(
+        "INSERT INTO review_annotation
+         (image_item_id, anno_type, position, style, content, created_at, locked, z_index)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, 0)",
+        params![
+          image_id,
+          ann.kind.to_sql(),
+          pos,
+          style,
+          if ann.content.is_empty() {
+            None::<String>
+          } else {
+            Some(ann.content.clone())
+          },
+          ann.created_at.timestamp(),
+        ],
+      )?;
+      let id = tx.last_insert_rowid();
+      tx.execute(
+        "UPDATE review_image_item SET annotation_count = annotation_count + 1 WHERE id = ?1",
+        [image_id],
+      )?;
+      inserted.push(id);
     }
+    tx.commit()?;
     Ok(inserted)
   }
 
@@ -391,6 +430,97 @@ impl SqliteReviewRepository {
       image.and_then(|s| s.parse().ok()),
     ))
   }
+
+  pub fn soft_delete_image(&self, id: i64) -> ReviewResult<()> {
+    let now = now_ts();
+    let n = self.conn.execute(
+      "UPDATE review_image_item SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+      params![now, id],
+    )?;
+    if n == 0 {
+      return Err(ReviewError::NotFound {
+        entity: "review_image_item",
+        id,
+      });
+    }
+    Ok(())
+  }
+
+  pub fn restore_image(&self, id: i64) -> ReviewResult<()> {
+    let now = now_ts();
+    self.conn.execute(
+      "UPDATE review_image_item SET deleted_at = NULL, updated_at = ?1 WHERE id = ?2",
+      params![now, id],
+    )?;
+    Ok(())
+  }
+
+  pub fn soft_delete_batch(&self, id: i64) -> ReviewResult<()> {
+    let now = now_ts();
+    let tx = self.conn.unchecked_transaction()?;
+    tx.execute(
+      "UPDATE review_batch SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2",
+      params![now, id],
+    )?;
+    tx.execute(
+      "UPDATE review_image_item SET deleted_at = ?1, updated_at = ?1 WHERE batch_id = ?2",
+      params![now, id],
+    )?;
+    tx.commit()?;
+    Ok(())
+  }
+
+  pub fn list_deleted_images(&self, batch_id: i64) -> ReviewResult<Vec<ReviewImageItem>> {
+    let mut stmt = self.conn.prepare(
+      "SELECT id, batch_id, file_path, status, remark, thumbnail_path, created_at, updated_at,
+              deleted_at, file_size, width, height, convert_format, convert_quality, convert_width,
+              annotation_count
+       FROM review_image_item WHERE batch_id = ?1 AND deleted_at IS NOT NULL
+       ORDER BY deleted_at DESC",
+    )?;
+    let rows = stmt.query_map([batch_id], map_image_row)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(ReviewError::from)
+  }
+
+  pub fn update_convert_params(
+    &self,
+    id: i64,
+    params: &crate::review::domain::convert_params::ConvertParams,
+  ) -> ReviewResult<()> {
+    let format = params.format.map(|f| f.extension().to_string());
+    self.conn.execute(
+      "UPDATE review_image_item SET convert_format = ?1, convert_quality = ?2,
+       convert_width = ?3, updated_at = ?4 WHERE id = ?5",
+      params![
+        format,
+        params.quality.map(i64::from),
+        params.width.map(|w| w as i64),
+        now_ts(),
+        id,
+      ],
+    )?;
+    Ok(())
+  }
+
+  pub fn update_image_metadata(
+    &self,
+    id: i64,
+    file_size: Option<u64>,
+    width: Option<u32>,
+    height: Option<u32>,
+  ) -> ReviewResult<()> {
+    self.conn.execute(
+      "UPDATE review_image_item SET file_size = ?1, width = ?2, height = ?3, updated_at = ?4 WHERE id = ?5",
+      params![
+        file_size.map(|v| v as i64),
+        width.map(|v| v as i64),
+        height.map(|v| v as i64),
+        now_ts(),
+        id,
+      ],
+    )?;
+    Ok(())
+  }
 }
 
 impl ReviewRepository for SqliteReviewRepository {
@@ -407,7 +537,7 @@ impl ReviewRepository for SqliteReviewRepository {
   fn list_batches(&self) -> Result<Vec<ReviewBatch>, ReviewError> {
     let mut stmt = self.conn.prepare(
       "SELECT id, name, total_count, created_at, updated_at
-       FROM review_batch ORDER BY updated_at DESC",
+       FROM review_batch WHERE deleted_at IS NULL ORDER BY updated_at DESC",
     )?;
     let rows = stmt.query_map([], map_batch_row)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(ReviewError::from)
@@ -498,8 +628,10 @@ impl ReviewRepository for SqliteReviewRepository {
     filter: ItemFilter,
   ) -> Result<Vec<ReviewImageItem>, ReviewError> {
     let mut sql = String::from(
-      "SELECT id, batch_id, file_path, status, remark, thumbnail_path, created_at, updated_at
-       FROM review_image_item WHERE batch_id = ?1",
+      "SELECT id, batch_id, file_path, status, remark, thumbnail_path, created_at, updated_at,
+              deleted_at, file_size, width, height, convert_format, convert_quality, convert_width,
+              annotation_count
+       FROM review_image_item WHERE batch_id = ?1 AND deleted_at IS NULL",
     );
     let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(batch_id)];
     if let Some(status) = filter.status {
@@ -552,8 +684,8 @@ impl ReviewRepository for SqliteReviewRepository {
 
   fn list_annotations(&self, image_item_id: i64) -> Result<Vec<Annotation>, ReviewError> {
     let mut stmt = self.conn.prepare(
-      "SELECT id, image_item_id, anno_type, position, style, content, created_at
-       FROM review_annotation WHERE image_item_id = ?1 ORDER BY id ASC",
+      "SELECT id, image_item_id, anno_type, position, style, content, created_at, locked, z_index
+       FROM review_annotation WHERE image_item_id = ?1 ORDER BY z_index ASC, id ASC",
     )?;
     let rows = stmt.query_map([image_item_id], map_annotation_row)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(ReviewError::from)
@@ -569,8 +701,8 @@ impl ReviewRepository for SqliteReviewRepository {
     let created_at = annotation.created_at.timestamp();
     self.conn.execute(
       "INSERT INTO review_annotation
-       (image_item_id, anno_type, position, style, content, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+       (image_item_id, anno_type, position, style, content, created_at, locked, z_index)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
       params![
         image_item_id,
         annotation.kind.to_sql(),
@@ -582,9 +714,16 @@ impl ReviewRepository for SqliteReviewRepository {
           Some(annotation.content.clone())
         },
         created_at,
+        i32::from(annotation.locked),
+        annotation.z_index,
       ],
     )?;
-    Ok(self.conn.last_insert_rowid())
+    let id = self.conn.last_insert_rowid();
+    let _ = self.conn.execute(
+      "UPDATE review_image_item SET annotation_count = annotation_count + 1 WHERE id = ?1",
+      [image_item_id],
+    );
+    Ok(id)
   }
 
   fn delete_annotation(&self, annotation_id: i64) -> Result<(), ReviewError> {
@@ -754,7 +893,19 @@ fn map_batch_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewBatch> {
 }
 
 fn map_image_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewImageItem> {
+  use crate::core::types::ImageFormat;
+  use crate::review::domain::convert_params::ConvertParams;
+
   let status_raw: String = row.get(3)?;
+  let convert_format: Option<String> = row.get(12)?;
+  let convert_quality: Option<i32> = row.get(13)?;
+  let convert_width: Option<i32> = row.get(14)?;
+  let format = convert_format.and_then(|s| ImageFormat::from_extension(&s.to_ascii_lowercase()));
+  let convert_params = ConvertParams {
+    format,
+    quality: convert_quality.map(|q| q.clamp(1, 100) as u8),
+    width: convert_width.map(|w| w.max(0) as u32).filter(|&w| w > 0),
+  };
   Ok(ReviewImageItem {
     id: row.get(0)?,
     batch_id: row.get(1)?,
@@ -764,6 +915,14 @@ fn map_image_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewImageItem> {
     thumbnail_path: row.get::<_, Option<String>>(5)?.map(PathBuf::from),
     created_at: ts_to_dt(row.get(6)?),
     updated_at: ts_to_dt(row.get(7)?),
+    deleted_at: row
+      .get::<_, Option<i64>>(8)?
+      .and_then(|ts| DateTime::from_timestamp(ts, 0)),
+    file_size: row.get::<_, Option<i64>>(9)?.map(|v| v.max(0) as u64),
+    width: row.get::<_, Option<i32>>(10)?.map(|v| v.max(0) as u32),
+    height: row.get::<_, Option<i32>>(11)?.map(|v| v.max(0) as u32),
+    convert_params,
+    annotation_count: row.get::<_, Option<i32>>(15)?.unwrap_or(0),
   })
 }
 
@@ -776,6 +935,8 @@ fn map_annotation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Annotation> {
     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
   let style: AnnotationStyle = serde_json::from_str(&style_str)
     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+  let locked: i32 = row.get::<_, Option<i32>>(7)?.unwrap_or(0);
+  let z_index: i32 = row.get::<_, Option<i32>>(8)?.unwrap_or(0);
   Ok(Annotation {
     id: row.get(0)?,
     image_item_id: row.get(1)?,
@@ -784,6 +945,8 @@ fn map_annotation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Annotation> {
     style,
     content: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
     created_at: ts_to_dt(row.get(6)?),
+    locked: locked != 0,
+    z_index,
   })
 }
 

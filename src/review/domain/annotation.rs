@@ -102,6 +102,8 @@ pub struct Annotation {
   pub style: AnnotationStyle,
   pub content: String,
   pub created_at: DateTime<Utc>,
+  pub locked: bool,
+  pub z_index: i32,
 }
 
 impl Annotation {
@@ -120,6 +122,8 @@ impl Annotation {
       style,
       content,
       created_at: chrono::Utc::now(),
+      locked: false,
+      z_index: 0,
     }
   }
 }

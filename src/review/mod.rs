@@ -13,7 +13,9 @@ pub use service::{
   BatchAnnotateRequest, BatchAnnotateResult, BatchItemFailure, BatchJsonExportRequest,
   BatchOperations, BatchRemarkRequest, BatchRemarkResult, BatchStatusRequest,
   BatchStatusResult, CsvExportRequest, CsvExportResult, ExportService, JsonSidecarRequest,
-  ReviewConversionBridge, ReviewQueueItem, ReviewService, ShortcutAction, ShortcutConfig,
-  StatusTransitionWarning, is_irreversible_transition,
+  ReviewConversionBridge, ReviewModuleConfig, ReviewQueueItem, ReviewService, ShortcutAction,
+  ShortcutConfig, StatusTransitionWarning, is_irreversible_transition, save_custom_binding,
 };
 pub use storage::traits::{AnnotationTemplate, RemarkWriteMode, ReviewExportRow, ReviewStorage};
+pub use storage::{create_backup, list_backups, restore_backup};
+pub use domain::{ConvertParams, CustomStatusLabel, ImageMetadata, ImageSortKey};

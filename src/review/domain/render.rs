@@ -70,9 +70,17 @@ pub fn render_cache_key(path: &str, annotations: &[Annotation]) -> u64 {
   h.finish()
 }
 
-/// 占位：UI 层主要用 egui 绘制；此函数供离线路径复用同一套归一化数据。
-pub fn render_annotations_overlay(_annotations: &[Annotation]) -> Option<RgbaImage> {
-  None
+/// 占位：UI 层主要用 egui 绘制；离屏缓存供纹理复用。
+pub fn render_annotations_overlay(
+  size: (u32, u32),
+  annotations: &[Annotation],
+) -> Option<image::RgbaImage> {
+  if annotations.is_empty() || size.0 == 0 || size.1 == 0 {
+    return None;
+  }
+  let mut overlay = image::RgbaImage::new(size.0, size.1);
+  burn_annotations_onto(&mut overlay, annotations);
+  Some(overlay)
 }
 
 fn norm_rect_to_pixel_rect(r: &RectanglePosition, size: (u32, u32)) -> Rect {

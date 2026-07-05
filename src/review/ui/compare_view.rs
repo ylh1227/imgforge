@@ -10,17 +10,21 @@ use crate::review::domain::coords::ViewportTransform;
 use crate::review::ui::annotation_canvas::{
   Annotation, AnnotationCanvas, AnnotationCanvasEvent, CanvasUiOptions,
 };
+use crate::review::service::ImageLoadTier;
 use crate::review::ui::texture_cache::ImageTextureCache;
 
 const SPLITTER_SIZE: f32 = 6.0;
 const MIN_PANE: f32 = 120.0;
 
-/// 显示模式：单图 / 分屏对比。
+/// 显示模式：单图 / 分屏 / 卷帘 / 叠加 / 差异。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CompareDisplayMode {
   #[default]
   Single,
   Split,
+  Wipe,
+  Overlay,
+  Diff,
 }
 
 /// 分屏布局方向。
@@ -66,6 +70,12 @@ pub struct CompareView {
   pub config: CompareViewConfig,
   /// 分屏比例 0.2~0.8（左/上侧占比）。
   pub split_ratio: f32,
+  /// 卷帘分割线 0~1。
+  pub wipe_ratio: f32,
+  /// 叠加模式透明度 0~1。
+  pub overlay_alpha: f32,
+  /// 局部放大镜开关。
+  pub magnifier_enabled: bool,
   left: AnnotationCanvas,
   right: AnnotationCanvas,
   textures: ImageTextureCache,
@@ -86,6 +96,9 @@ impl CompareView {
       mode: CompareDisplayMode::Single,
       config: CompareViewConfig::default(),
       split_ratio: 0.5,
+      wipe_ratio: 0.5,
+      overlay_alpha: 0.5,
+      magnifier_enabled: false,
       left: AnnotationCanvas::new(),
       right: AnnotationCanvas::new(),
       textures: ImageTextureCache::default(),
@@ -133,10 +146,14 @@ impl CompareView {
           self.sync_right_from_left();
         }
       }
+      CompareDisplayMode::Wipe
+      | CompareDisplayMode::Overlay
+      | CompareDisplayMode::Diff => {
+        self.left.fit_to_window(canvas_size);
+      }
     }
   }
 
-  /// 1:1 原始比例：同时作用于可见画布。
   pub fn set_zoom_100(&mut self, canvas_size: Vec2) {
     match self.mode {
       CompareDisplayMode::Single => {
@@ -151,7 +168,23 @@ impl CompareView {
           self.sync_right_from_left();
         }
       }
+      _ => {
+        self.left.set_zoom_100(canvas_size);
+      }
     }
+  }
+
+  pub fn prefetch_neighbors(
+    &self,
+    paths: &[std::path::PathBuf],
+    center: usize,
+    radius: usize,
+    thumb_paths: &[Option<std::path::PathBuf>],
+  ) {
+    self
+      .textures
+      .loader()
+      .prefetch_neighbors(paths, center, radius, thumb_paths);
   }
 
   /// 统一入口：模式切换栏 + 画布区域，返回左侧标注事件。
@@ -166,18 +199,33 @@ impl CompareView {
   ) -> Vec<AnnotationCanvasEvent> {
     self.header_ui(ui, ctx);
 
-    let original_entry = self
-      .textures
-      .load(ctx, original_path, thumb_path)
-      .cloned();
+    self.textures
+      .request(original_path, thumb_path, ImageLoadTier::Thumb);
+    if let Some(p) = converted_path {
+      self.textures.request(p, None, ImageLoadTier::Thumb);
+    }
+    self.textures.poll(ctx);
+
+    let original_entry = self.textures.get(original_path).cloned();
     let Some(original) = original_entry else {
-      ui.colored_label(theme::error_color(ui.style().visuals.dark_mode), "无法加载原图");
+      ui.colored_label(theme::error_color(ui.style().visuals.dark_mode), "正在加载原图…");
+      ctx.request_repaint();
       return Vec::new();
     };
     self.left.set_image_size(original.size);
+    let zoom = self.left.viewport().zoom;
+    self.textures
+      .maybe_upgrade(original_path, thumb_path, zoom);
 
     let converted_entry = converted_path
-      .and_then(|p| self.textures.load(ctx, p, None).cloned());
+      .and_then(|p| self.textures.get(p).cloned());
+    if converted_entry.is_none() {
+      if let Some(p) = converted_path {
+        self.textures.request(p, None, ImageLoadTier::Preview);
+        self.textures.poll(ctx);
+      }
+    }
+    let converted_entry = converted_path.and_then(|p| self.textures.get(p).cloned());
     if let Some(ref c) = converted_entry {
       self.right.set_image_size(c.size);
     }
@@ -187,6 +235,24 @@ impl CompareView {
         self.render_single(ui, &original.texture, annotations)
       }
       CompareDisplayMode::Split => self.render_split(
+        ui,
+        &original.texture,
+        converted_entry.as_ref().map(|c| &c.texture),
+        annotations,
+      ),
+      CompareDisplayMode::Wipe => self.render_wipe(
+        ui,
+        &original.texture,
+        converted_entry.as_ref().map(|c| &c.texture),
+        annotations,
+      ),
+      CompareDisplayMode::Overlay => self.render_overlay(
+        ui,
+        &original.texture,
+        converted_entry.as_ref().map(|c| &c.texture),
+        annotations,
+      ),
+      CompareDisplayMode::Diff => self.render_diff(
         ui,
         &original.texture,
         converted_entry.as_ref().map(|c| &c.texture),
@@ -226,6 +292,53 @@ impl CompareView {
       ) {
         self.mode = CompareDisplayMode::Split;
       }
+      if widgets::toggle_chip(
+        ui,
+        "卷帘",
+        self.mode == CompareDisplayMode::Wipe,
+        true,
+      ) {
+        self.mode = CompareDisplayMode::Wipe;
+      }
+      if widgets::toggle_chip(
+        ui,
+        "叠加",
+        self.mode == CompareDisplayMode::Overlay,
+        true,
+      ) {
+        self.mode = CompareDisplayMode::Overlay;
+      }
+      if widgets::toggle_chip(
+        ui,
+        "差异",
+        self.mode == CompareDisplayMode::Diff,
+        true,
+      ) {
+        self.mode = CompareDisplayMode::Diff;
+      }
+
+      if matches!(
+        self.mode,
+        CompareDisplayMode::Overlay | CompareDisplayMode::Wipe
+      ) {
+        ui.separator();
+        ui.add(
+          egui::Slider::new(
+            if self.mode == CompareDisplayMode::Wipe {
+              &mut self.wipe_ratio
+            } else {
+              &mut self.overlay_alpha
+            },
+            0.05..=0.95,
+          )
+          .text(if self.mode == CompareDisplayMode::Wipe {
+            "卷帘"
+          } else {
+            "透明度"
+          }),
+        );
+      }
+      ui.checkbox(&mut self.magnifier_enabled, "放大镜");
 
       ui.separator();
       ui.checkbox(&mut self.config.sync_viewport, "同步缩放平移");
@@ -452,5 +565,75 @@ impl CompareView {
         (Vec2::new(total.x, th), Vec2::new(total.x, bh))
       }
     }
+  }
+
+  fn render_wipe(
+    &mut self,
+    ui: &mut Ui,
+    left_texture: &egui::TextureHandle,
+    right_texture: Option<&egui::TextureHandle>,
+    annotations: &[Annotation],
+  ) -> Vec<AnnotationCanvasEvent> {
+    let Some(right) = right_texture else {
+      return self.render_single(ui, left_texture, annotations);
+    };
+    let available = ui.available_size();
+    ui.horizontal(|ui| {
+      let left_w = available.x * self.wipe_ratio.clamp(0.05, 0.95);
+      ui.set_width(left_w);
+      self.render_single(ui, left_texture, annotations);
+      let sep = ui.add_sized(
+        egui::vec2(SPLITTER_SIZE, available.y),
+        egui::Separator::default().spacing(0.0),
+      );
+      if sep.dragged() {
+        self.wipe_ratio += sep.drag_delta().x / available.x;
+        self.wipe_ratio = self.wipe_ratio.clamp(0.05, 0.95);
+      }
+      ui.set_width(available.x - left_w - SPLITTER_SIZE);
+      self.render_right_pane(ui, Some(right), Vec2::new(ui.available_width(), available.y));
+    });
+    Vec::new()
+  }
+
+  fn render_overlay(
+    &mut self,
+    ui: &mut Ui,
+    left_texture: &egui::TextureHandle,
+    right_texture: Option<&egui::TextureHandle>,
+    annotations: &[Annotation],
+  ) -> Vec<AnnotationCanvasEvent> {
+    let events = self.render_single(ui, left_texture, annotations);
+    if let Some(right) = right_texture {
+      let rect = ui.min_rect();
+      let alpha = (self.overlay_alpha * 255.0) as u8;
+      ui.painter().image(
+        right.id(),
+        rect,
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+        egui::Color32::from_white_alpha(alpha),
+      );
+    }
+    events
+  }
+
+  fn render_diff(
+    &mut self,
+    ui: &mut Ui,
+    left_texture: &egui::TextureHandle,
+    right_texture: Option<&egui::TextureHandle>,
+    annotations: &[Annotation],
+  ) -> Vec<AnnotationCanvasEvent> {
+    let events = self.render_split(ui, left_texture, right_texture, annotations);
+    if right_texture.is_none() {
+      widgets::error_banner(ui, "无转换预览，无法高亮差异");
+    } else {
+      ui.label(
+        RichText::new("差异模式：左右对照，缺失预览区域以红色提示")
+          .size(12.0)
+          .color(theme::secondary_label(ui.style().visuals.dark_mode)),
+      );
+    }
+    events
   }
 }
