@@ -3,4 +3,4 @@
 pub mod app_config;
 pub mod presets;
 
-pub use app_config::AppConfig;
+pub use app_config::{AppConfig, ConvertOverride};

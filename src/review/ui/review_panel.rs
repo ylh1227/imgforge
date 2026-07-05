@@ -42,6 +42,8 @@ pub trait ReviewPanelHost {
 pub struct ReviewPanelOutput {
   /// 将「通过」的图片路径加入格式转换队列。
   pub enqueue_approved: Vec<PathBuf>,
+  /// 单图转换参数覆盖（评审标记带入队列），与 `enqueue_approved` 对应。
+  pub enqueue_params: Vec<crate::review::ConversionTaskParams>,
   pub status_message: String,
   /// 请求主应用切回格式转换 Tab。
   pub switch_to_convert: bool,
@@ -73,6 +75,36 @@ pub struct ReviewPanel {
   shortcut_panel: ShortcutPanelState,
   show_shortcut_panel: bool,
   last_backup_minute: u64,
+  right_tab: RightTab,
+  all_tags: Vec<crate::review::ReviewTag>,
+  current_image_tags: Vec<i64>,
+  new_tag_name: String,
+  new_tag_color_idx: usize,
+  renaming_tag: Option<(i64, String)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum RightTab {
+  #[default]
+  Review,
+  Info,
+  Annotations,
+  Tags,
+}
+
+impl RightTab {
+  fn label(self) -> &'static str {
+    match self {
+      Self::Review => "评审属性",
+      Self::Info => "图片信息",
+      Self::Annotations => "标注列表",
+      Self::Tags => "标签",
+    }
+  }
+
+  fn all() -> [Self; 4] {
+    [Self::Review, Self::Info, Self::Annotations, Self::Tags]
+  }
 }
 
 #[derive(Debug, Clone)]
@@ -123,7 +155,14 @@ impl ReviewPanel {
       shortcut_panel: ShortcutPanelState::new(&shortcuts),
       show_shortcut_panel: false,
       last_backup_minute: 0,
+      right_tab: RightTab::default(),
+      all_tags: Vec::new(),
+      current_image_tags: Vec::new(),
+      new_tag_name: String::new(),
+      new_tag_color_idx: 0,
+      renaming_tag: None,
     };
+    let _ = panel.reload_tags();
     panel.reload_batches()?;
     if let Ok((batch, image)) = panel.service.restore_session() {
       panel.current_batch = batch;
@@ -154,6 +193,10 @@ impl ReviewPanel {
   ) {
     self.process_pending_import();
     self.handle_shortcut_actions(ctx);
+    // 切换对比模式下：空格键手动翻转原图/转换后
+    if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+      self.compare_view.toggle_flip();
+    }
     self.show_dialogs(ctx);
     self.maybe_scheduled_backup();
 
@@ -262,6 +305,15 @@ impl ReviewPanel {
       if widgets::compact_secondary_button(ui, "备份数据库", true).clicked() {
         match crate::review::storage::create_backup() {
           Ok(p) => self.set_status(format!("已备份：{}", p.display())),
+          Err(e) => self.error = Some(e.to_string()),
+        }
+      }
+      if widgets::compact_secondary_button(ui, "对比模式", true).clicked() {
+        self.compare_view.cycle_compare_mode();
+      }
+      if widgets::compact_secondary_button(ui, "清理缩略图缓存", true).clicked() {
+        match crate::review::service::ThumbnailService::clear_cache() {
+          Ok(n) => self.set_status(format!("已清理 {n} 个缩略图缓存")),
           Err(e) => self.error = Some(e.to_string()),
         }
       }
@@ -417,73 +469,292 @@ impl ReviewPanel {
     });
   }
 
-  fn right_column(&mut self, ui: &mut egui::Ui, dark: bool) {
-    widgets::grouped_section(ui, "属性", |ui| {
-      let item = self.current_item().cloned();
-      if properties_panel_ui(ui, &mut self.properties, item.as_ref()) {
-        if let Some(id) = self.current_image {
-          if let Err(e) = self
-            .service
-            .update_convert_params(id, &self.properties.convert_draft)
-          {
-            self.error = Some(e.to_string());
-          }
+  fn tab_review(&mut self, ui: &mut egui::Ui, dark: bool) {
+    let current_status = self.current_item().map(|item| item.status);
+    if let Some(status) = status_buttons(ui, current_status) {
+      if let Some(id) = self.current_image {
+        self.set_image_status(id, status);
+      }
+    }
+
+    ui.add_space(8.0);
+    widgets::section_label(ui, "备注");
+    if ui
+      .add(
+        egui::TextEdit::multiline(&mut self.remark_buf)
+          .margin(egui::vec2(12.0, 10.0))
+          .desired_rows(4),
+      )
+      .changed()
+    {
+      if let Some(id) = self.current_image {
+        let remark = self.remark_buf.clone();
+        if let Err(e) = self.service.set_remark(id, &remark) {
+          self.error = Some(e.to_string());
         }
       }
-    });
+    }
 
-    ui.add_space(16.0);
-
-    widgets::grouped_section(ui, "当前图片", |ui| {
-      let current_status = self.current_item().map(|item| item.status);
-      if let Some(status) = status_buttons(ui, current_status) {
-        if let Some(id) = self.current_image {
-          self.set_image_status(id, status);
-        }
-      }
-
-      ui.add_space(8.0);
-      widgets::section_label(ui, "备注");
-      if ui
-        .add(
-          egui::TextEdit::multiline(&mut self.remark_buf)
-            .margin(egui::vec2(12.0, 10.0))
-            .desired_rows(4),
-        )
-        .changed()
-      {
-        if let Some(id) = self.current_image {
-          let remark = self.remark_buf.clone();
-          if let Err(e) = self.service.set_remark(id, &remark) {
-            self.error = Some(e.to_string());
-          }
-        }
-      }
-
-      if let Some(item) = self.current_item() {
-        ui.add_space(6.0);
-        ui.label(
-          RichText::new(format!(
-            "标注 {} 条 · {}",
-            self.current_annotations.len(),
-            item.status.label()
-          ))
+    if let Some(item) = self.current_item() {
+      ui.add_space(6.0);
+      ui.label(
+        RichText::new(format!(
+          "标注 {} 条 · {}",
+          self.current_annotations.len(),
+          item.status.label()
+        ))
+        .size(12.0)
+        .color(theme::secondary_label(dark)),
+      );
+      ui.label(
+        RichText::new(format!("评审时间：{}", item.updated_at.format("%Y-%m-%d %H:%M")))
           .size(12.0)
           .color(theme::secondary_label(dark)),
-        );
-      }
+      );
+    }
 
-      ui.add_space(8.0);
-      if ui
-        .checkbox(
-          &mut self.config.auto_advance_on_status,
-          "切换状态后跳下一张未评审",
-        )
-        .changed()
-      {
-        let _ = self.config.save();
+    ui.add_space(8.0);
+    if ui
+      .checkbox(
+        &mut self.config.auto_advance_on_status,
+        "切换状态后跳下一张未评审",
+      )
+      .changed()
+    {
+      let _ = self.config.save();
+    }
+  }
+
+  fn tab_info(&mut self, ui: &mut egui::Ui) {
+    let item = self.current_item().cloned();
+    if properties_panel_ui(ui, &mut self.properties, item.as_ref()) {
+      if let Some(id) = self.current_image {
+        if let Err(e) = self
+          .service
+          .update_convert_params(id, &self.properties.convert_draft)
+        {
+          self.error = Some(e.to_string());
+        }
+      }
+    }
+  }
+
+  fn tab_annotations(&mut self, ui: &mut egui::Ui, dark: bool) {
+    if self.current_image.is_none() {
+      ui.label(RichText::new("选择图片以查看标注").color(theme::secondary_label(dark)));
+      return;
+    }
+    if self.current_annotations.is_empty() {
+      ui.label(RichText::new("暂无标注").color(theme::secondary_label(dark)));
+      return;
+    }
+    let mut clear_all = false;
+    ui.horizontal(|ui| {
+      ui.label(format!("共 {} 条标注", self.current_annotations.len()));
+      if widgets::compact_secondary_button(ui, "清空全部", true).clicked() {
+        clear_all = true;
       }
     });
+    ui.add_space(6.0);
+
+    let mut delete_id: Option<i64> = None;
+    egui::ScrollArea::vertical()
+      .id_salt("annotation_list_tab")
+      .max_height(260.0)
+      .show(ui, |ui| {
+        for (idx, ann) in self.current_annotations.iter().enumerate() {
+          ui.horizontal(|ui| {
+            let dot = ann.style.color;
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+            ui.painter().circle_filled(
+              rect.center(),
+              5.0,
+              egui::Color32::from_rgba_unmultiplied(dot[0], dot[1], dot[2], dot[3]),
+            );
+            ui.label(format!("{}. {}", idx + 1, annotation_kind_label(ann.kind)));
+            if !ann.content.is_empty() {
+              ui.label(
+                RichText::new(truncate_text(&ann.content, 16))
+                  .size(12.0)
+                  .color(theme::secondary_label(dark)),
+              );
+            }
+            if widgets::compact_secondary_button(ui, "删除", true).clicked() {
+              delete_id = Some(ann.id);
+            }
+          });
+        }
+      });
+
+    if clear_all {
+      let ids: Vec<i64> = self.current_annotations.iter().map(|a| a.id).collect();
+      match self.service.batch_clear_annotations(&ids) {
+        Ok(()) => {
+          self.load_current_annotations();
+          let _ = self.reload_images();
+          self.set_status("已清空标注");
+        }
+        Err(e) => self.error = Some(e.to_string()),
+      }
+    } else if let Some(aid) = delete_id {
+      match self.service.remove_annotation(aid) {
+        Ok(()) => {
+          self.load_current_annotations();
+          let _ = self.reload_images();
+          self.set_status("已删除标注");
+        }
+        Err(e) => self.error = Some(e.to_string()),
+      }
+    }
+  }
+
+  fn tab_tags(&mut self, ui: &mut egui::Ui, dark: bool) {
+    // 新建标签
+    ui.horizontal(|ui| {
+      let palette = crate::review::ReviewTag::palette();
+      let color = palette[self.new_tag_color_idx % palette.len()];
+      let (rect, resp) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::click());
+      ui.painter().rect_filled(
+        rect,
+        4.0,
+        egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], color[3]),
+      );
+      if resp.clicked() {
+        self.new_tag_color_idx = (self.new_tag_color_idx + 1) % palette.len();
+      }
+      resp.on_hover_text("点击切换颜色");
+      ui.add(
+        egui::TextEdit::singleline(&mut self.new_tag_name)
+          .hint_text("新标签名…")
+          .desired_width(120.0),
+      );
+      if widgets::compact_secondary_button(ui, "添加", !self.new_tag_name.trim().is_empty())
+        .clicked()
+      {
+        let name = self.new_tag_name.trim().to_string();
+        match self.service.create_tag(&name, color) {
+          Ok(_) => {
+            self.new_tag_name.clear();
+            self.new_tag_color_idx = (self.new_tag_color_idx + 1) % palette.len();
+            let _ = self.reload_tags();
+          }
+          Err(e) => self.error = Some(e.to_string()),
+        }
+      }
+    });
+    ui.add_space(8.0);
+
+    if self.all_tags.is_empty() {
+      ui.label(RichText::new("暂无标签，先添加一个").color(theme::secondary_label(dark)));
+      return;
+    }
+
+    let has_image = self.current_image.is_some();
+    let mut toggles: Vec<(i64, bool)> = Vec::new();
+    let mut delete_id: Option<i64> = None;
+    let mut rename_commit: Option<(i64, String)> = None;
+
+    egui::ScrollArea::vertical()
+      .id_salt("tags_tab")
+      .max_height(300.0)
+      .show(ui, |ui| {
+        let tags = self.all_tags.clone();
+        for tag in &tags {
+          ui.horizontal(|ui| {
+            let c = tag.color;
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+            ui.painter().circle_filled(
+              rect.center(),
+              6.0,
+              egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]),
+            );
+
+            if let Some((rid, buf)) = self.renaming_tag.as_mut() {
+              if *rid == tag.id {
+                let resp = ui.add(egui::TextEdit::singleline(buf).desired_width(110.0));
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                  rename_commit = Some((tag.id, buf.clone()));
+                }
+                if widgets::compact_secondary_button(ui, "确定", true).clicked() {
+                  rename_commit = Some((tag.id, buf.clone()));
+                }
+                return;
+              }
+            }
+
+            let mut on = self.current_image_tags.contains(&tag.id);
+            if ui.add_enabled(has_image, egui::Checkbox::new(&mut on, &tag.name)).changed() {
+              toggles.push((tag.id, on));
+            }
+            if widgets::compact_secondary_button(ui, "改名", true).clicked() {
+              self.renaming_tag = Some((tag.id, tag.name.clone()));
+            }
+            if widgets::compact_secondary_button(ui, "删除", true).clicked() {
+              delete_id = Some(tag.id);
+            }
+          });
+        }
+      });
+
+    let had_toggles = !toggles.is_empty();
+    for (tag_id, on) in toggles {
+      if let Some(image_id) = self.current_image {
+        if let Err(e) = self.service.set_image_tag(image_id, tag_id, on) {
+          self.error = Some(e.to_string());
+        }
+      }
+    }
+    if had_toggles {
+      self.reload_current_image_tags();
+    }
+    if let Some((tag_id, name)) = rename_commit {
+      let name = name.trim().to_string();
+      if !name.is_empty() {
+        let _ = self.service.rename_tag(tag_id, &name);
+      }
+      self.renaming_tag = None;
+      let _ = self.reload_tags();
+    }
+    if let Some(tag_id) = delete_id {
+      if let Err(e) = self.service.delete_tag(tag_id) {
+        self.error = Some(e.to_string());
+      }
+      self.reload_current_image_tags();
+      let _ = self.reload_tags();
+    }
+  }
+
+  fn reload_tags(&mut self) -> ReviewResult<()> {
+    self.all_tags = self.service.list_tags()?;
+    self.sidebar.available_tags = self.all_tags.clone();
+    Ok(())
+  }
+
+  fn reload_current_image_tags(&mut self) {
+    if let Some(id) = self.current_image {
+      self.current_image_tags = self.service.tags_for_image(id).unwrap_or_default();
+    } else {
+      self.current_image_tags.clear();
+    }
+  }
+
+  fn right_column(&mut self, ui: &mut egui::Ui, dark: bool) {
+    // 顶部 Tab 切换：评审属性 / 图片信息 / 标注列表 / 标签
+    ui.horizontal_wrapped(|ui| {
+      for tab in RightTab::all() {
+        if widgets::toggle_chip(ui, tab.label(), self.right_tab == tab, true) {
+          self.right_tab = tab;
+        }
+      }
+    });
+    ui.add_space(10.0);
+
+    match self.right_tab {
+      RightTab::Review => self.tab_review(ui, dark),
+      RightTab::Info => self.tab_info(ui),
+      RightTab::Annotations => self.tab_annotations(ui, dark),
+      RightTab::Tags => self.tab_tags(ui, dark),
+    }
 
     ui.add_space(16.0);
 
@@ -791,10 +1062,12 @@ impl ReviewPanel {
       self.error = Some("请先选择评审批次".into());
       return;
     };
-    match self.service.approved_paths(batch_id) {
-      Ok(paths) => {
-        let n = paths.len();
-        self.output.enqueue_approved = paths;
+    use crate::review::ReviewConversionBridge;
+    match self.service.approved_with_params(batch_id) {
+      Ok(items) => {
+        let n = items.len();
+        self.output.enqueue_approved = items.iter().map(|i| i.path.clone()).collect();
+        self.output.enqueue_params = items;
         self.output.switch_to_convert = true;
         self.output.status_message =
           format!("已将 {n} 张「通过」图片加入转换队列，请切换至格式转换页");
@@ -858,6 +1131,7 @@ impl ReviewPanel {
       let _ = self.service.save_session(batch, image);
     }
     self.load_current_annotations();
+    self.reload_current_image_tags();
     if let (Some(idx), Some(batch_id)) = (self.current_index(), self.current_batch) {
       let paths: Vec<_> = self.images.iter().map(|i| i.file_path.clone()).collect();
       let thumbs: Vec<_> = self.images.iter().map(|i| i.thumbnail_path.clone()).collect();
@@ -893,12 +1167,9 @@ impl ReviewPanel {
         let _ = self.reload_batches();
         self.set_status(format!("已设为「{}」", status.label()));
         if self.config.auto_advance_on_status {
-          if let Some(next) = next_image_id(
-            &self.images,
-            id,
-            self.config.auto_advance_target,
-          ) {
-            self.select_image(next);
+          match next_image_id(&self.images, id, self.config.auto_advance_target) {
+            Some(next) => self.select_image(next),
+            None => self.set_status("已完成全部评审"),
           }
         }
       }
@@ -994,7 +1265,17 @@ impl ReviewPanel {
       self.images = self
         .service
         .list_images(batch_id, &self.sidebar.filter)?;
+      // 标签维度筛选（需图片-标签映射，故在此叠加）
+      if !self.sidebar.filter.tag_ids.is_empty() {
+        let ids: Vec<i64> = self.images.iter().map(|i| i.id).collect();
+        let map = self.service.tags_for_images(&ids).unwrap_or_default();
+        let filter = self.sidebar.filter.clone();
+        filter.retain_by_tags(&mut self.images, &map);
+      }
     }
+    // 缓存当前批次全部图片的标签用于列表色点
+    let ids: Vec<i64> = self.images.iter().map(|i| i.id).collect();
+    self.sidebar.image_tags = self.service.tags_for_images(&ids).unwrap_or_default();
     Ok(())
   }
 
@@ -1111,5 +1392,23 @@ fn batch_op_description(op: BatchOpKind) -> &'static str {
     BatchOpKind::ClearAnnotations => "将清空所选图片的全部标注，是否继续？",
     BatchOpKind::AddRemark => "将对所选图片批量写入备注，是否继续？",
     BatchOpKind::CopyCurrentAnnotations => "将把当前图片的首条标注复制到所选图片，是否继续？",
+  }
+}
+
+fn annotation_kind_label(kind: crate::review::domain::AnnotationKind) -> &'static str {
+  use crate::review::domain::AnnotationKind;
+  match kind {
+    AnnotationKind::Rectangle => "矩形",
+    AnnotationKind::Arrow => "箭头",
+    AnnotationKind::Text => "文字",
+  }
+}
+
+fn truncate_text(text: &str, max_chars: usize) -> String {
+  let chars: Vec<char> = text.chars().collect();
+  if chars.len() <= max_chars {
+    text.to_string()
+  } else {
+    format!("{}…", chars[..max_chars].iter().collect::<String>())
   }
 }

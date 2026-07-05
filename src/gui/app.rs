@@ -57,6 +57,7 @@ pub struct ImgforgeApp {
   mode: AppMode,
   review_panel: Option<crate::review::ui::ReviewPanel>,
   review_queue: Vec<PathBuf>,
+  review_queue_params: std::collections::HashMap<PathBuf, crate::config::ConvertOverride>,
   burn_review_annotations: bool,
   input_dir: String,
   output_dir: String,
@@ -86,6 +87,7 @@ impl ImgforgeApp {
       mode: AppMode::Convert,
       review_panel,
       review_queue: Vec::new(),
+      review_queue_params: std::collections::HashMap::new(),
       burn_review_annotations: false,
       input_dir: String::new(),
       output_dir: String::from("./output"),
@@ -155,6 +157,7 @@ impl ImgforgeApp {
       if let Some(parent) = self.review_queue[0].parent() {
         config.input_dir = parent.to_path_buf();
       }
+      config.per_input_params = self.review_queue_params.clone();
     }
     config.burn_review_annotations = self.burn_review_annotations;
     config.bayer_only = self.bayer_only;
@@ -393,6 +396,21 @@ impl eframe::App for ImgforgeApp {
             let output = panel.take_output();
             if !output.enqueue_approved.is_empty() {
               self.review_queue = output.enqueue_approved;
+              self.review_queue_params = output
+                .enqueue_params
+                .iter()
+                .filter(|i| !i.params.is_empty())
+                .map(|i| {
+                  (
+                    i.path.clone(),
+                    crate::config::ConvertOverride {
+                      format: i.params.format,
+                      quality: i.params.quality.and_then(|q| crate::core::types::Quality::new(q).ok()),
+                      width: i.params.width,
+                    },
+                  )
+                })
+                .collect();
               self.mode = AppMode::Convert;
               self.status = format!(
                 "已从评审导入 {} 张「通过」图片，可开始转换",
@@ -446,6 +464,7 @@ impl eframe::App for ImgforgeApp {
                     ui.add_enabled(enabled, egui::Checkbox::new(&mut self.burn_review_annotations, "导出时叠加标注"));
                     if widgets::secondary_button(ui, "清空评审队列", enabled).clicked() {
                       self.review_queue.clear();
+                      self.review_queue_params.clear();
                       self.status = "已清空评审导入队列".into();
                     }
                     if widgets::compact_primary_button(ui, "发送到评审", enabled && !self.review_queue.is_empty())

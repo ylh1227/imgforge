@@ -25,6 +25,8 @@ pub enum CompareDisplayMode {
   Wipe,
   Overlay,
   Diff,
+  /// 切换对比：同位置叠加，快速在原图/转换后之间切换以发现像素级差异。
+  Toggle,
 }
 
 /// 分屏布局方向。
@@ -76,6 +78,14 @@ pub struct CompareView {
   pub overlay_alpha: f32,
   /// 局部放大镜开关。
   pub magnifier_enabled: bool,
+  /// 切换对比：当前是否显示转换后图（false=原图）。
+  pub toggle_show_converted: bool,
+  /// 切换对比：自动切换开关。
+  pub toggle_auto: bool,
+  /// 切换对比：自动切换间隔（秒，0.2~2.0）。
+  pub toggle_interval: f32,
+  /// 上次自动切换时间戳（秒）。
+  toggle_last_flip: f64,
   left: AnnotationCanvas,
   right: AnnotationCanvas,
   textures: ImageTextureCache,
@@ -99,6 +109,10 @@ impl CompareView {
       wipe_ratio: 0.5,
       overlay_alpha: 0.5,
       magnifier_enabled: false,
+      toggle_show_converted: false,
+      toggle_auto: false,
+      toggle_interval: 0.5,
+      toggle_last_flip: 0.0,
       left: AnnotationCanvas::new(),
       right: AnnotationCanvas::new(),
       textures: ImageTextureCache::default(),
@@ -111,6 +125,23 @@ impl CompareView {
         crate::review::domain::coords::Vec2::new(1.0, 1.0),
         (1, 1),
       ),
+    }
+  }
+
+  /// 循环切换对比模式：并排 → 卷帘 → 切换 → 并排。
+  pub fn cycle_compare_mode(&mut self) {
+    self.mode = match self.mode {
+      CompareDisplayMode::Split => CompareDisplayMode::Wipe,
+      CompareDisplayMode::Wipe => CompareDisplayMode::Toggle,
+      CompareDisplayMode::Toggle => CompareDisplayMode::Split,
+      _ => CompareDisplayMode::Split,
+    };
+  }
+
+  /// 切换对比：手动翻转显示原图/转换后。
+  pub fn toggle_flip(&mut self) {
+    if self.mode == CompareDisplayMode::Toggle {
+      self.toggle_show_converted = !self.toggle_show_converted;
     }
   }
 
@@ -148,7 +179,8 @@ impl CompareView {
       }
       CompareDisplayMode::Wipe
       | CompareDisplayMode::Overlay
-      | CompareDisplayMode::Diff => {
+      | CompareDisplayMode::Diff
+      | CompareDisplayMode::Toggle => {
         self.left.fit_to_window(canvas_size);
       }
     }
@@ -258,6 +290,13 @@ impl CompareView {
         converted_entry.as_ref().map(|c| &c.texture),
         annotations,
       ),
+      CompareDisplayMode::Toggle => self.render_toggle(
+        ui,
+        ctx,
+        &original.texture,
+        converted_entry.as_ref().map(|c| &c.texture),
+        annotations,
+      ),
     };
 
     // 状态变更：根据本帧视口变化执行同步
@@ -315,6 +354,29 @@ impl CompareView {
         true,
       ) {
         self.mode = CompareDisplayMode::Diff;
+      }
+      if widgets::toggle_chip(
+        ui,
+        "切换",
+        self.mode == CompareDisplayMode::Toggle,
+        true,
+      ) {
+        self.mode = CompareDisplayMode::Toggle;
+      }
+
+      if self.mode == CompareDisplayMode::Toggle {
+        ui.separator();
+        if widgets::compact_secondary_button(ui, "翻转 (空格)", true).clicked() {
+          self.toggle_show_converted = !self.toggle_show_converted;
+        }
+        ui.checkbox(&mut self.toggle_auto, "自动切换");
+        if self.toggle_auto {
+          ui.add(
+            egui::Slider::new(&mut self.toggle_interval, 0.2..=2.0)
+              .suffix("s")
+              .text("间隔"),
+          );
+        }
       }
 
       if matches!(
@@ -633,6 +695,56 @@ impl CompareView {
           .size(12.0)
           .color(theme::secondary_label(ui.style().visuals.dark_mode)),
       );
+    }
+    events
+  }
+
+  fn render_toggle(
+    &mut self,
+    ui: &mut Ui,
+    ctx: &Context,
+    left_texture: &egui::TextureHandle,
+    right_texture: Option<&egui::TextureHandle>,
+    annotations: &[Annotation],
+  ) -> Vec<AnnotationCanvasEvent> {
+    // 自动切换：按间隔翻转，视口保持不变
+    if self.toggle_auto && right_texture.is_some() {
+      let now = ctx.input(|i| i.time);
+      let interval = self.toggle_interval.clamp(0.2, 2.0) as f64;
+      if now - self.toggle_last_flip >= interval {
+        self.toggle_show_converted = !self.toggle_show_converted;
+        self.toggle_last_flip = now;
+      }
+      ctx.request_repaint_after(std::time::Duration::from_secs_f32(
+        self.toggle_interval.clamp(0.2, 2.0),
+      ));
+    }
+
+    let show_converted = self.toggle_show_converted && right_texture.is_some();
+    let label = if show_converted { "转换后" } else { "原图" };
+    ui.label(egui::RichText::new(label).strong());
+
+    // 始终用左画布的视口渲染，确保切换过程中缩放/平移一致
+    let texture = if show_converted {
+      right_texture.unwrap_or(left_texture)
+    } else {
+      left_texture
+    };
+    let before = self.left.viewport();
+    let events = self.left.ui_with_options(
+      ui,
+      texture,
+      annotations,
+      CanvasUiOptions {
+        show_toolbar: false,
+        ..CanvasUiOptions::default()
+      },
+    );
+    if self.left.viewport() != before {
+      self.last_viewport_source = ViewportSource::Left;
+    }
+    if right_texture.is_none() {
+      widgets::error_banner(ui, "无转换预览，无法切换对比");
     }
     events
   }

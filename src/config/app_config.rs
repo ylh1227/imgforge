@@ -1,5 +1,6 @@
 //! 核心应用配置结构体。
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -8,6 +9,20 @@ use crate::core::types::{
   AdjustOptions, Concurrency, ImageFormat, MetadataPolicy, Quality, ResizeOptions, ThumbnailSpec,
   Transform, WatermarkOptions,
 };
+
+/// 单文件转换参数覆盖（评审标记联动带入队列）。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ConvertOverride {
+  pub format: Option<ImageFormat>,
+  pub quality: Option<Quality>,
+  pub width: Option<u32>,
+}
+
+impl ConvertOverride {
+  pub fn is_empty(&self) -> bool {
+    self.format.is_none() && self.quality.is_none() && self.width.is_none()
+  }
+}
 
 /// 应用运行时配置，可由 CLI / 环境变量 / TOML 合并而来。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +55,9 @@ pub struct AppConfig {
   /// 若非空，仅转换这些文件（评审联动队列），跳过目录扫描。
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub explicit_inputs: Vec<PathBuf>,
+  /// 单文件转换参数覆盖（评审标记带入队列），按输入路径匹配。
+  #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+  pub per_input_params: HashMap<PathBuf, ConvertOverride>,
   /// 导出时叠加评审标注到输出图（需 review feature）。
   #[serde(default)]
   pub burn_review_annotations: bool,
@@ -77,6 +95,7 @@ impl Default for AppConfig {
       watermark: WatermarkOptions::default(),
       thumbnails: Vec::new(),
       explicit_inputs: Vec::new(),
+      per_input_params: HashMap::new(),
       burn_review_annotations: false,
       bayer_only: false,
     }

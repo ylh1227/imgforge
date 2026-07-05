@@ -8,7 +8,7 @@ use crate::review::domain::image_item::ReviewStatus;
 use crate::review::error::ReviewResult;
 
 /// 当前评审 schema 版本。
-pub const REVIEW_SCHEMA_VERSION: i32 = 2;
+pub const REVIEW_SCHEMA_VERSION: i32 = 3;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS review_batch (
@@ -68,6 +68,24 @@ CREATE INDEX IF NOT EXISTS idx_review_image_item_deleted ON review_image_item(de
 CREATE INDEX IF NOT EXISTS idx_review_annotation_z ON review_annotation(image_item_id, z_index);
 "#;
 
+const SCHEMA_V3_EXTRA: &str = r#"
+CREATE TABLE IF NOT EXISTS review_tag (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  color TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS review_image_tag (
+  image_item_id INTEGER NOT NULL,
+  tag_id INTEGER NOT NULL,
+  PRIMARY KEY (image_item_id, tag_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_image_tag_image ON review_image_tag(image_item_id);
+CREATE INDEX IF NOT EXISTS idx_review_image_tag_tag ON review_image_tag(tag_id);
+"#;
+
 /// 在已有连接上初始化/升级评审表结构。
 pub fn ensure_schema(conn: &Connection) -> ReviewResult<()> {
   conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -92,7 +110,18 @@ pub fn ensure_schema(conn: &Connection) -> ReviewResult<()> {
     version = 2;
   }
 
+  if version < 3 {
+    migrate_v2_to_v3(conn)?;
+    version = 3;
+  }
+
+  let _ = version;
   conn.pragma_update(None, "user_version", REVIEW_SCHEMA_VERSION)?;
+  Ok(())
+}
+
+fn migrate_v2_to_v3(conn: &Connection) -> ReviewResult<()> {
+  conn.execute_batch(SCHEMA_V3_EXTRA)?;
   Ok(())
 }
 
@@ -345,7 +374,7 @@ mod tests {
   use rusqlite::Connection;
 
   #[test]
-  fn fresh_db_gets_v2_schema() {
+  fn fresh_db_gets_latest_schema() {
     let conn = Connection::open_in_memory().unwrap();
     ensure_schema(&conn).unwrap();
     let version: i32 = conn
@@ -353,5 +382,7 @@ mod tests {
       .unwrap();
     assert_eq!(version, REVIEW_SCHEMA_VERSION);
     assert!(column_exists(&conn, "review_image_item", "annotation_count").unwrap());
+    assert!(table_exists(&conn, "review_tag").unwrap());
+    assert!(table_exists(&conn, "review_image_tag").unwrap());
   }
 }

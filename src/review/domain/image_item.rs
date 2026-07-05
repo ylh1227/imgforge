@@ -61,6 +61,16 @@ impl ReviewStatus {
     }
   }
 
+  /// 全局统一状态色值（RGBA）：灰/绿/橙/红。
+  pub fn color_rgba(self) -> [u8; 4] {
+    match self {
+      Self::Pending => [142, 142, 147, 255],
+      Self::Approved => [52, 199, 89, 255],
+      Self::NeedsFix => [255, 149, 0, 255],
+      Self::Rejected => [255, 59, 48, 255],
+    }
+  }
+
   pub fn shortcut_digit(self) -> Option<u8> {
     match self {
       Self::Pending => Some(0),
@@ -115,6 +125,27 @@ impl ImageSortKey {
   }
 }
 
+/// 标注数量筛选维度。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AnnotationFilter {
+  #[default]
+  Any,
+  None,
+  Has,
+  AtLeast,
+}
+
+impl AnnotationFilter {
+  pub fn label(self) -> &'static str {
+    match self {
+      Self::Any => "不限",
+      Self::None => "无标注",
+      Self::Has => "有标注",
+      Self::AtLeast => "≥ N 个",
+    }
+  }
+}
+
 /// 列表筛选与排序条件。
 #[derive(Debug, Clone, Default)]
 pub struct ImageFilter {
@@ -125,9 +156,54 @@ pub struct ImageFilter {
   pub min_annotations: Option<i32>,
   pub remark_contains: String,
   pub include_deleted: bool,
+  /// 标注数量筛选模式。
+  pub annotation_filter: AnnotationFilter,
+  /// 分辨率下限（宽或高的像素总面积近似，单位百万像素×100 简化为像素宽）。
+  pub min_width: Option<u32>,
+  pub max_width: Option<u32>,
+  /// 文件大小下限/上限（字节）。
+  pub min_file_size: Option<u64>,
+  pub max_file_size: Option<u64>,
+  /// 需包含的标签 id（按 tag_mode 组合）。
+  pub tag_ids: Vec<i64>,
+  pub tag_mode: crate::review::domain::tag::TagFilterMode,
 }
 
 impl ImageFilter {
+  /// 重置为默认筛选（保留排序键）。
+  pub fn reset_filters(&mut self) {
+    let sort_by = self.sort_by;
+    let sort_asc = self.sort_asc;
+    *self = Self::default();
+    self.sort_by = sort_by;
+    self.sort_asc = sort_asc;
+  }
+
+  /// 按标签维度过滤（需图片-标签映射）。
+  pub fn retain_by_tags(
+    &self,
+    items: &mut Vec<ReviewImageItem>,
+    image_tags: &std::collections::HashMap<i64, Vec<i64>>,
+  ) {
+    if self.tag_ids.is_empty() {
+      return;
+    }
+    let wanted = &self.tag_ids;
+    let mode = self.tag_mode;
+    items.retain(|i| {
+      let empty = Vec::new();
+      let tags = image_tags.get(&i.id).unwrap_or(&empty);
+      match mode {
+        crate::review::domain::tag::TagFilterMode::Any => {
+          wanted.iter().any(|t| tags.contains(t))
+        }
+        crate::review::domain::tag::TagFilterMode::All => {
+          wanted.iter().all(|t| tags.contains(t))
+        }
+      }
+    });
+  }
+
   pub fn apply_in_memory(&self, items: &mut Vec<ReviewImageItem>) {
     let search = self.search.trim().to_ascii_lowercase();
     let remark = self.remark_contains.trim().to_ascii_lowercase();
@@ -152,8 +228,50 @@ impl ImageFilter {
       if !remark.is_empty() && !i.remark.to_ascii_lowercase().contains(&remark) {
         return false;
       }
-      if let Some(min) = self.min_annotations {
-        if i.annotation_count < min {
+      match self.annotation_filter {
+        AnnotationFilter::Any => {}
+        AnnotationFilter::None => {
+          if i.annotation_count > 0 {
+            return false;
+          }
+        }
+        AnnotationFilter::Has => {
+          if i.annotation_count == 0 {
+            return false;
+          }
+        }
+        AnnotationFilter::AtLeast => {
+          if let Some(min) = self.min_annotations {
+            if i.annotation_count < min {
+              return false;
+            }
+          }
+        }
+      }
+      if self.annotation_filter != AnnotationFilter::AtLeast {
+        if let Some(min) = self.min_annotations {
+          if i.annotation_count < min {
+            return false;
+          }
+        }
+      }
+      if let Some(minw) = self.min_width {
+        if i.width.unwrap_or(0) < minw {
+          return false;
+        }
+      }
+      if let Some(maxw) = self.max_width {
+        if i.width.unwrap_or(u32::MAX) > maxw {
+          return false;
+        }
+      }
+      if let Some(mins) = self.min_file_size {
+        if i.file_size.unwrap_or(0) < mins {
+          return false;
+        }
+      }
+      if let Some(maxs) = self.max_file_size {
+        if i.file_size.unwrap_or(u64::MAX) > maxs {
           return false;
         }
       }

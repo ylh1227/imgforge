@@ -51,7 +51,52 @@ pub async fn run_batch(
     tasks = crate::io::thumbnails::expand_thumbnail_tasks(tasks, &config.thumbnails);
   }
 
+  if !config.per_input_params.is_empty() {
+    apply_per_input_overrides(&mut tasks, &config);
+  }
+
   let executor = Executor::new(config, cancelled);
   let result = executor.run(tasks, progress).await?;
   Ok(result.report)
+}
+
+/// 将评审标记的单图转换参数应用到对应任务（格式/质量/宽度覆盖）。
+fn apply_per_input_overrides(
+  tasks: &mut [crate::scheduler::task::ConversionTask],
+  config: &AppConfig,
+) {
+  use crate::core::types::ResizeMode;
+  use crate::io::paths;
+
+  let by_canon: std::collections::HashMap<std::path::PathBuf, &crate::config::ConvertOverride> =
+    config
+      .per_input_params
+      .iter()
+      .map(|(k, v)| (paths::canonicalize(k), v))
+      .collect();
+
+  for task in tasks.iter_mut() {
+    let Some(ov) = by_canon.get(&task.input_path).copied() else {
+      continue;
+    };
+    if ov.is_empty() {
+      continue;
+    }
+    if let Some(fmt) = ov.format {
+      task.format_override = Some(fmt);
+      // 输出扩展名跟随目标格式
+      task.output_path.set_extension(fmt.extension());
+    }
+    if let Some(q) = ov.quality {
+      task.quality_override = Some(q);
+    }
+    if let Some(w) = ov.width {
+      let mut resize = task.resize_override.unwrap_or(config.resize);
+      resize.width = Some(w);
+      if resize.mode == ResizeMode::default() {
+        resize.mode = ResizeMode::Fit;
+      }
+      task.resize_override = Some(resize);
+    }
+  }
 }

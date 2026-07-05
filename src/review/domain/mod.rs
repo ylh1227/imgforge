@@ -8,6 +8,7 @@ pub(crate) mod custom_status;
 pub(crate) mod image_item;
 pub(crate) mod metadata;
 pub(crate) mod render;
+pub(crate) mod tag;
 
 pub use annotation::{
   Annotation, AnnotationKind, AnnotationPosition, AnnotationStyle, ArrowPosition,
@@ -20,6 +21,9 @@ pub use coords::{
   screen_to_norm, NormPoint, NormRect, PixelPoint, PixelRect, ScreenPoint, ViewportTransform,
 };
 pub use custom_status::CustomStatusLabel;
-pub use image_item::{ImageFilter, ImageSortKey, ReviewImageItem, ReviewStatus};
+pub use image_item::{
+  AnnotationFilter, ImageFilter, ImageSortKey, ReviewImageItem, ReviewStatus,
+};
 pub use metadata::{format_bytes, read_image_metadata, ImageMetadata};
 pub use render::{burn_annotations_onto, render_annotations_overlay, render_cache_key};
+pub use tag::{ReviewTag, TagFilterMode};

@@ -163,8 +163,8 @@ async fn process_single_task(
   let mut ctx = ImageContext::new(
     task.input_path.clone(),
     task.output_path.clone(),
-    config.target_format,
-    config.quality,
+    task.format_override.unwrap_or(config.target_format),
+    task.quality_override.unwrap_or(config.quality),
     task.input_size,
   );
   ctx.raw_bytes = Some(raw_bytes);

@@ -225,6 +225,25 @@ impl ReviewConversionBridge for ReviewService {
     self.repo.approved_paths_in_batch(batch_id)
   }
 
+  fn approved_with_params(
+    &self,
+    batch_id: i64,
+  ) -> ReviewResult<Vec<crate::review::service::conversion_bridge::ConversionTaskParams>> {
+    Ok(
+      self
+        .repo
+        .approved_items_with_params_in_batch(batch_id)?
+        .into_iter()
+        .map(
+          |(path, params)| crate::review::service::conversion_bridge::ConversionTaskParams {
+            path,
+            params,
+          },
+        )
+        .collect(),
+    )
+  }
+
   fn status_for_path(&self, path: &Path) -> ReviewResult<Option<ReviewStatus>> {
     self.repo.status_for_path(path)
   }
@@ -291,6 +310,39 @@ impl ReviewConversionBridge for ReviewService {
 impl ReviewService {
   pub fn update_convert_params(&self, id: i64, params: &ConvertParams) -> ReviewResult<()> {
     self.repo.update_convert_params(id, params)
+  }
+
+  // ── 自定义标签 ────────────────────────────────────────
+
+  pub fn list_tags(&self) -> ReviewResult<Vec<crate::review::domain::ReviewTag>> {
+    self.repo.list_tags()
+  }
+
+  pub fn create_tag(&self, name: &str, color: [u8; 4]) -> ReviewResult<i64> {
+    self.repo.create_tag(name, color)
+  }
+
+  pub fn rename_tag(&self, id: i64, name: &str) -> ReviewResult<()> {
+    self.repo.rename_tag(id, name)
+  }
+
+  pub fn delete_tag(&self, id: i64) -> ReviewResult<()> {
+    self.repo.delete_tag(id)
+  }
+
+  pub fn tags_for_image(&self, image_id: i64) -> ReviewResult<Vec<i64>> {
+    self.repo.tags_for_image(image_id)
+  }
+
+  pub fn set_image_tag(&self, image_id: i64, tag_id: i64, on: bool) -> ReviewResult<()> {
+    self.repo.set_image_tag(image_id, tag_id, on)
+  }
+
+  pub fn tags_for_images(
+    &self,
+    image_ids: &[i64],
+  ) -> ReviewResult<std::collections::HashMap<i64, Vec<i64>>> {
+    self.repo.tags_for_images(image_ids)
   }
 
   pub fn load_metadata(&self, path: &Path) -> ReviewResult<ImageMetadata> {

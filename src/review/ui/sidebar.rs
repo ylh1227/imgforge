@@ -3,7 +3,10 @@
 use eframe::egui::{self, RichText, Ui};
 
 use crate::gui::{theme, widgets};
-use crate::review::domain::{BatchStats, ImageFilter, ImageSortKey, ReviewBatch, ReviewImageItem, ReviewStatus};
+use crate::review::domain::{
+  AnnotationFilter, BatchStats, ImageFilter, ImageSortKey, ReviewBatch, ReviewImageItem,
+  ReviewStatus, TagFilterMode,
+};
 use crate::review::error::ReviewResult;
 
 const ROW_HEIGHT: f32 = 28.0;
@@ -13,6 +16,12 @@ pub struct SidebarState {
   pub selected_ids: Vec<i64>,
   pub batch_name_input: String,
   pub show_recycle: bool,
+  /// 可选标签（供筛选栏下拉）。
+  pub available_tags: Vec<crate::review::ReviewTag>,
+  /// 当前列表图片-标签映射（列表色点渲染）。
+  pub image_tags: std::collections::HashMap<i64, Vec<i64>>,
+  /// 筛选栏展开状态。
+  pub filter_expanded: bool,
 }
 
 impl Default for SidebarState {
@@ -22,6 +31,9 @@ impl Default for SidebarState {
       selected_ids: Vec::new(),
       batch_name_input: String::from("新评审批次"),
       show_recycle: false,
+      available_tags: Vec::new(),
+      image_tags: std::collections::HashMap::new(),
+      filter_expanded: false,
     }
   }
 }
@@ -140,20 +152,159 @@ pub fn filter_sort_ui(ui: &mut Ui, sidebar: &mut SidebarState) -> bool {
       changed = true;
     }
   });
+  // 快捷键：仅显示未评审 / 重置
   ui.horizontal(|ui| {
-    ui.label("最少标注");
-    let mut min = sidebar.filter.min_annotations.unwrap_or(0);
-    if ui
-      .add(egui::DragValue::new(&mut min).range(0..=999))
-      .changed()
-    {
-      sidebar.filter.min_annotations = if min == 0 { None } else { Some(min) };
+    if widgets::compact_secondary_button(ui, "仅显示未评审", true).clicked() {
+      sidebar.filter.status = Some(ReviewStatus::Pending);
       changed = true;
     }
+    if widgets::compact_secondary_button(ui, "重置筛选", true).clicked() {
+      sidebar.filter.reset_filters();
+      sidebar.show_recycle = false;
+      changed = true;
+    }
+    let arrow = if sidebar.filter_expanded { "收起 ▲" } else { "更多筛选 ▼" };
+    if widgets::compact_secondary_button(ui, arrow, true).clicked() {
+      sidebar.filter_expanded = !sidebar.filter_expanded;
+    }
   });
+
+  if sidebar.filter_expanded {
+    if filter_advanced_ui(ui, sidebar) {
+      changed = true;
+    }
+  }
+
   if ui.checkbox(&mut sidebar.show_recycle, "回收站").changed() {
     changed = true;
   }
+  changed
+}
+
+/// 高级组合筛选：标注数量 / 分辨率 / 文件大小 / 标签。
+fn filter_advanced_ui(ui: &mut Ui, sidebar: &mut SidebarState) -> bool {
+  let mut changed = false;
+
+  // 标注数量
+  ui.horizontal(|ui| {
+    ui.label("标注");
+    egui::ComboBox::from_id_salt("anno_filter")
+      .selected_text(sidebar.filter.annotation_filter.label())
+      .show_ui(ui, |ui| {
+        for f in [
+          AnnotationFilter::Any,
+          AnnotationFilter::None,
+          AnnotationFilter::Has,
+          AnnotationFilter::AtLeast,
+        ] {
+          if ui
+            .selectable_label(sidebar.filter.annotation_filter == f, f.label())
+            .clicked()
+          {
+            sidebar.filter.annotation_filter = f;
+            changed = true;
+          }
+        }
+      });
+    if sidebar.filter.annotation_filter == AnnotationFilter::AtLeast {
+      let mut min = sidebar.filter.min_annotations.unwrap_or(1);
+      if ui
+        .add(egui::DragValue::new(&mut min).range(1..=999))
+        .changed()
+      {
+        sidebar.filter.min_annotations = Some(min);
+        changed = true;
+      }
+    }
+  });
+
+  // 分辨率（宽度像素）
+  ui.horizontal(|ui| {
+    ui.label("宽度 ≥");
+    let mut minw = sidebar.filter.min_width.unwrap_or(0) as i32;
+    if ui
+      .add(egui::DragValue::new(&mut minw).range(0..=100000).suffix("px"))
+      .changed()
+    {
+      sidebar.filter.min_width = if minw <= 0 { None } else { Some(minw as u32) };
+      changed = true;
+    }
+    ui.label("≤");
+    let mut maxw = sidebar.filter.max_width.unwrap_or(0) as i32;
+    if ui
+      .add(egui::DragValue::new(&mut maxw).range(0..=100000).suffix("px"))
+      .changed()
+    {
+      sidebar.filter.max_width = if maxw <= 0 { None } else { Some(maxw as u32) };
+      changed = true;
+    }
+  });
+
+  // 文件大小（MB）
+  ui.horizontal(|ui| {
+    ui.label("大小 ≥");
+    let mut min_mb = sidebar
+      .filter
+      .min_file_size
+      .map(|b| (b as f64 / (1024.0 * 1024.0)) as f32)
+      .unwrap_or(0.0);
+    if ui
+      .add(egui::DragValue::new(&mut min_mb).range(0.0..=100000.0).suffix("MB").speed(0.5))
+      .changed()
+    {
+      sidebar.filter.min_file_size = if min_mb <= 0.0 {
+        None
+      } else {
+        Some((min_mb as f64 * 1024.0 * 1024.0) as u64)
+      };
+      changed = true;
+    }
+    ui.label("≤");
+    let mut max_mb = sidebar
+      .filter
+      .max_file_size
+      .map(|b| (b as f64 / (1024.0 * 1024.0)) as f32)
+      .unwrap_or(0.0);
+    if ui
+      .add(egui::DragValue::new(&mut max_mb).range(0.0..=100000.0).suffix("MB").speed(0.5))
+      .changed()
+    {
+      sidebar.filter.max_file_size = if max_mb <= 0.0 {
+        None
+      } else {
+        Some((max_mb as f64 * 1024.0 * 1024.0) as u64)
+      };
+      changed = true;
+    }
+  });
+
+  // 标签多选
+  if !sidebar.available_tags.is_empty() {
+    ui.horizontal(|ui| {
+      ui.label("标签模式");
+      for m in [TagFilterMode::Any, TagFilterMode::All] {
+        if widgets::toggle_chip(ui, m.label(), sidebar.filter.tag_mode == m, true) {
+          sidebar.filter.tag_mode = m;
+          changed = true;
+        }
+      }
+    });
+    let tags = sidebar.available_tags.clone();
+    ui.horizontal_wrapped(|ui| {
+      for tag in &tags {
+        let on = sidebar.filter.tag_ids.contains(&tag.id);
+        if widgets::colored_toggle_chip(ui, &tag.name, tag.color, on, true) {
+          if on {
+            sidebar.filter.tag_ids.retain(|t| *t != tag.id);
+          } else {
+            sidebar.filter.tag_ids.push(tag.id);
+          }
+          changed = true;
+        }
+      }
+    });
+  }
+
   changed
 }
 
@@ -201,12 +352,12 @@ pub fn image_list_ui(
           .file_name()
           .map(|s| s.to_string_lossy().to_string())
           .unwrap_or_else(|| img.file_path.display().to_string());
-        let row = format!(
-          "[{}] {} ({})",
-          img.status.label(),
-          name,
-          img.annotation_count
-        );
+        let anno = if img.annotation_count > 0 {
+          format!(" ({})", img.annotation_count)
+        } else {
+          String::new()
+        };
+        let row = format!("{name}{anno}");
         let multi = sidebar.selected_ids.contains(&img.id);
         ui.horizontal(|ui| {
           let mut checked = multi;
@@ -217,9 +368,45 @@ pub fn image_list_ui(
               sidebar.selected_ids.retain(|id| *id != img.id);
             }
           }
+          // 状态色点：无需看文字即可识别状态
+          let (dot_rect, _) =
+            ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
+          widgets::status_dot(ui, dot_rect.center(), img.status.color_rgba(), 5.0);
           let selected = current == Some(img.id);
-          if ui.selectable_label(selected, row).clicked() {
+          let resp = ui.selectable_label(selected, row);
+          resp.clone().on_hover_text(img.status.label());
+          if resp.clicked() {
             picked = Some(img.id);
+          }
+          // 标签色点：最多 3 个，hover 显示标签名
+          if let Some(tag_ids) = sidebar.image_tags.get(&img.id) {
+            let mut names: Vec<&str> = Vec::new();
+            for tid in tag_ids.iter().take(3) {
+              if let Some(tag) = sidebar.available_tags.iter().find(|t| t.id == *tid) {
+                let (r, _) =
+                  ui.allocate_exact_size(egui::vec2(10.0, 12.0), egui::Sense::hover());
+                let c = tag.color;
+                ui.painter().circle_filled(
+                  r.center(),
+                  4.0,
+                  egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]),
+                );
+                names.push(&tag.name);
+              }
+            }
+            if !names.is_empty() {
+              let all_names: Vec<String> = tag_ids
+                .iter()
+                .filter_map(|tid| {
+                  sidebar
+                    .available_tags
+                    .iter()
+                    .find(|t| t.id == *tid)
+                    .map(|t| t.name.clone())
+                })
+                .collect();
+              resp.on_hover_text(all_names.join("、"));
+            }
           }
         });
       }
@@ -247,7 +434,7 @@ pub fn status_buttons(ui: &mut Ui, current: Option<ReviewStatus>) -> Option<Revi
   let mut picked = None;
   ui.horizontal_wrapped(|ui| {
     for s in ReviewStatus::all() {
-      if widgets::toggle_chip(ui, s.label(), current == Some(s), true) {
+      if widgets::colored_toggle_chip(ui, s.label(), s.color_rgba(), current == Some(s), true) {
         picked = Some(s);
       }
     }

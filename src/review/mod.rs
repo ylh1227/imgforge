@@ -12,10 +12,11 @@ pub use error::{ReviewError, ReviewResult};
 pub use service::{
   BatchAnnotateRequest, BatchAnnotateResult, BatchItemFailure, BatchJsonExportRequest,
   BatchOperations, BatchRemarkRequest, BatchRemarkResult, BatchStatusRequest,
-  BatchStatusResult, CsvExportRequest, CsvExportResult, ExportService, JsonSidecarRequest,
-  ReviewConversionBridge, ReviewModuleConfig, ReviewQueueItem, ReviewService, ShortcutAction,
-  ShortcutConfig, StatusTransitionWarning, is_irreversible_transition, save_custom_binding,
+  BatchStatusResult, ConversionTaskParams, CsvExportRequest, CsvExportResult, ExportService,
+  JsonSidecarRequest, ReviewConversionBridge, ReviewModuleConfig, ReviewQueueItem, ReviewService,
+  ShortcutAction, ShortcutConfig, StatusTransitionWarning, is_irreversible_transition,
+  save_custom_binding,
 };
 pub use storage::traits::{AnnotationTemplate, RemarkWriteMode, ReviewExportRow, ReviewStorage};
 pub use storage::{create_backup, list_backups, restore_backup};
-pub use domain::{ConvertParams, CustomStatusLabel, ImageMetadata, ImageSortKey};
+pub use domain::{ConvertParams, CustomStatusLabel, ImageMetadata, ImageSortKey, ReviewTag, TagFilterMode};

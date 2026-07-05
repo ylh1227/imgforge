@@ -252,6 +252,41 @@ pub fn toggle_chip(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> b
   ui.add_enabled(enabled, btn).clicked()
 }
 
+/// 带固定色的可选中芯片：选中时用该色填充，未选中显示描边点。
+pub fn colored_toggle_chip(
+  ui: &mut Ui,
+  label: &str,
+  rgba: [u8; 4],
+  selected: bool,
+  enabled: bool,
+) -> bool {
+  let dark = ui.style().visuals.dark_mode;
+  let color = Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]);
+  let (fill, stroke, fg) = if selected {
+    (color, Stroke::new(1.5, color), Color32::WHITE)
+  } else {
+    (
+      color.linear_multiply(0.14),
+      Stroke::new(1.0, color.linear_multiply(0.6)),
+      theme::primary_label(dark),
+    )
+  };
+  let btn = Button::new(RichText::new(label).size(13.0).color(fg))
+    .fill(fill)
+    .stroke(stroke)
+    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
+    .min_size(egui::vec2(56.0, 32.0));
+  ui.add_enabled(enabled, btn).clicked()
+}
+
+/// 在指定矩形右下角绘制状态色小圆点（叠加到缩略图/行）。
+pub fn status_dot(ui: &Ui, center: egui::Pos2, rgba: [u8; 4], radius: f32) {
+  let color = Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]);
+  let painter = ui.painter();
+  painter.circle_filled(center, radius, color);
+  painter.circle_stroke(center, radius, Stroke::new(1.0, Color32::from_white_alpha(180)));
+}
+
 /// 顶部模式切换条：紧凑横向分段，宽度随内容收缩（不撑满父级）。
 pub fn mode_tab_bar<T: PartialEq + Copy>(
   ui: &mut Ui,

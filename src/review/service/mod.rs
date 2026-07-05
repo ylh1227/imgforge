@@ -17,7 +17,7 @@ pub use batch_operations::{
 };
 pub use batch_service::BatchService;
 pub use config::ReviewModuleConfig;
-pub use conversion_bridge::{ReviewConversionBridge, ReviewQueueItem};
+pub use conversion_bridge::{ConversionTaskParams, ReviewConversionBridge, ReviewQueueItem};
 pub use export_service::{
   BatchJsonExportRequest, CsvExportRequest, CsvExportResult, ExportService,
   JsonSidecarRequest,

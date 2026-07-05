@@ -344,6 +344,39 @@ impl SqliteReviewRepository {
     rows.collect::<Result<Vec<_>, _>>().map_err(ReviewError::from)
   }
 
+  /// 批次内「通过」图片及其单图转换参数（供联动带参入队）。
+  pub fn approved_items_with_params_in_batch(
+    &self,
+    batch_id: i64,
+  ) -> ReviewResult<Vec<(PathBuf, crate::review::domain::ConvertParams)>> {
+    let mut stmt = self.conn.prepare(
+      "SELECT file_path, convert_format, convert_quality, convert_width
+       FROM review_image_item
+       WHERE batch_id = ?1 AND status = ?2 AND deleted_at IS NULL
+       ORDER BY file_path",
+    )?;
+    let rows = stmt.query_map(
+      params![batch_id, ReviewStatus::Approved.to_sql()],
+      |row| {
+        let path = PathBuf::from(row.get::<_, String>(0)?);
+        let format = row
+          .get::<_, Option<String>>(1)?
+          .and_then(|s| crate::core::types::ImageFormat::from_extension(&s));
+        let quality = row.get::<_, Option<i64>>(2)?.map(|q| q as u8);
+        let width = row.get::<_, Option<i64>>(3)?.map(|w| w as u32);
+        Ok((
+          path,
+          crate::review::domain::ConvertParams {
+            format,
+            quality,
+            width,
+          },
+        ))
+      },
+    )?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(ReviewError::from)
+  }
+
   pub fn status_for_path(&self, path: &Path) -> ReviewResult<Option<ReviewStatus>> {
     let p = path.to_string_lossy();
     let status: Option<String> = self
@@ -520,6 +553,95 @@ impl SqliteReviewRepository {
       ],
     )?;
     Ok(())
+  }
+
+  // ── 自定义标签（P1）────────────────────────────────────
+
+  pub fn list_tags(&self) -> ReviewResult<Vec<crate::review::domain::ReviewTag>> {
+    let mut stmt = self
+      .conn
+      .prepare("SELECT id, name, color, created_at FROM review_tag ORDER BY name ASC")?;
+    let rows = stmt.query_map([], map_tag_row)?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(ReviewError::from)
+  }
+
+  pub fn create_tag(&self, name: &str, color: [u8; 4]) -> ReviewResult<i64> {
+    let color_hex = color_to_hex(color);
+    self.conn.execute(
+      "INSERT INTO review_tag (name, color, created_at) VALUES (?1, ?2, ?3)
+       ON CONFLICT(name) DO UPDATE SET color = excluded.color",
+      params![name, color_hex, now_ts()],
+    )?;
+    let id: i64 = self.conn.query_row(
+      "SELECT id FROM review_tag WHERE name = ?1",
+      [name],
+      |row| row.get(0),
+    )?;
+    Ok(id)
+  }
+
+  pub fn rename_tag(&self, id: i64, name: &str) -> ReviewResult<()> {
+    self.conn.execute(
+      "UPDATE review_tag SET name = ?1 WHERE id = ?2",
+      params![name, id],
+    )?;
+    Ok(())
+  }
+
+  pub fn delete_tag(&self, id: i64) -> ReviewResult<()> {
+    let tx = self.conn.unchecked_transaction()?;
+    tx.execute("DELETE FROM review_image_tag WHERE tag_id = ?1", [id])?;
+    tx.execute("DELETE FROM review_tag WHERE id = ?1", [id])?;
+    tx.commit()?;
+    Ok(())
+  }
+
+  pub fn tags_for_image(&self, image_id: i64) -> ReviewResult<Vec<i64>> {
+    let mut stmt = self
+      .conn
+      .prepare("SELECT tag_id FROM review_image_tag WHERE image_item_id = ?1")?;
+    let rows = stmt.query_map([image_id], |row| row.get::<_, i64>(0))?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(ReviewError::from)
+  }
+
+  pub fn set_image_tag(&self, image_id: i64, tag_id: i64, on: bool) -> ReviewResult<()> {
+    if on {
+      self.conn.execute(
+        "INSERT OR IGNORE INTO review_image_tag (image_item_id, tag_id) VALUES (?1, ?2)",
+        params![image_id, tag_id],
+      )?;
+    } else {
+      self.conn.execute(
+        "DELETE FROM review_image_tag WHERE image_item_id = ?1 AND tag_id = ?2",
+        params![image_id, tag_id],
+      )?;
+    }
+    Ok(())
+  }
+
+  /// 批量取图片的标签 id（用于列表色点渲染），返回 (image_id, tag_ids)。
+  pub fn tags_for_images(
+    &self,
+    image_ids: &[i64],
+  ) -> ReviewResult<std::collections::HashMap<i64, Vec<i64>>> {
+    let mut map: std::collections::HashMap<i64, Vec<i64>> = std::collections::HashMap::new();
+    if image_ids.is_empty() {
+      return Ok(map);
+    }
+    let mut stmt = self
+      .conn
+      .prepare("SELECT image_item_id, tag_id FROM review_image_tag")?;
+    let rows = stmt.query_map([], |row| {
+      Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    let wanted: std::collections::HashSet<i64> = image_ids.iter().copied().collect();
+    for row in rows {
+      let (image_id, tag_id) = row?;
+      if wanted.contains(&image_id) {
+        map.entry(image_id).or_default().push(tag_id);
+      }
+    }
+    Ok(map)
   }
 }
 
@@ -880,6 +1002,33 @@ fn now_ts() -> i64 {
 
 fn ts_to_dt(ts: i64) -> DateTime<Utc> {
   DateTime::from_timestamp(ts, 0).unwrap_or_else(Utc::now)
+}
+
+fn color_to_hex(color: [u8; 4]) -> String {
+  format!(
+    "#{:02X}{:02X}{:02X}{:02X}",
+    color[0], color[1], color[2], color[3]
+  )
+}
+
+fn hex_to_color(hex: &str) -> [u8; 4] {
+  let s = hex.trim_start_matches('#');
+  let parse = |i: usize| u8::from_str_radix(s.get(i..i + 2).unwrap_or("00"), 16).unwrap_or(0);
+  match s.len() {
+    8 => [parse(0), parse(2), parse(4), parse(6)],
+    6 => [parse(0), parse(2), parse(4), 255],
+    _ => [142, 142, 147, 255],
+  }
+}
+
+fn map_tag_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<crate::review::domain::ReviewTag> {
+  let color_hex: String = row.get(2)?;
+  Ok(crate::review::domain::ReviewTag {
+    id: row.get(0)?,
+    name: row.get(1)?,
+    color: hex_to_color(&color_hex),
+    created_at: ts_to_dt(row.get(3)?),
+  })
 }
 
 fn map_batch_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewBatch> {

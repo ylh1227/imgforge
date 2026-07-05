@@ -13,6 +13,10 @@ pub struct ConversionTask {
   pub source_format: Option<ImageFormat>,
   /// 任务级缩放覆盖（缩略图等场景）。
   pub resize_override: Option<ResizeOptions>,
+  /// 任务级目标格式覆盖（评审标记的单图参数）。
+  pub format_override: Option<ImageFormat>,
+  /// 任务级质量覆盖（评审标记的单图参数）。
+  pub quality_override: Option<crate::core::types::Quality>,
 }
 
 impl ConversionTask {
@@ -27,6 +31,8 @@ impl ConversionTask {
       input_size,
       source_format,
       resize_override: None,
+      format_override: None,
+      quality_override: None,
     }
   }
 }
