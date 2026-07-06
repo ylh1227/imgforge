@@ -2317,7 +2317,7 @@ dependencies = [
 
 [[package]]
 name = "imgforge"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "ab_glyph",
  "avif-decode",

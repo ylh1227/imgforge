@@ -12,7 +12,8 @@ pub use contact_sheet::{
   FrameProvider, GridLayout,
 };
 pub use grid_video::{
-  max_export_duration_ms, GridVideoExportRequest, GridVideoExportResult, GridVideoExportService,
+  compute_quality_cell_size, max_export_duration_ms, GridVideoExportQuality,
+  GridVideoExportRequest, GridVideoExportResult, GridVideoExportService,
   DEFAULT_CLIP_DURATION_MS, DEFAULT_CELL_HEIGHT, DEFAULT_CELL_WIDTH,
 };
 pub use export_service::{

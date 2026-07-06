@@ -13,7 +13,9 @@ use crate::review::domain::image_item::ReviewStatus;
 use crate::video_review::error::{VideoReviewError, VideoReviewResult};
 use crate::video_review::service::contact_sheet::{ContactSheetResult, FrameProvider};
 use crate::video_review::service::export_service::{ContactSheetExportRequest, VideoExportService};
-use crate::video_review::service::grid_video::{GridVideoExportRequest, GridVideoExportResult};
+use crate::video_review::service::grid_video::{
+  GridVideoExportQuality, GridVideoExportRequest, GridVideoExportResult,
+};
 use crate::video_review::service::ffmpeg_backend::{FfmpegAvailability, FfmpegBackend, VideoBackend};
 use crate::video_review::service::frame_cache::{FrameCache, FrameCacheStats};
 use crate::video_review::storage::{NewVideoItem, SqliteVideoRepository, VideoRepository};
@@ -243,13 +245,17 @@ impl VideoReviewService {
     start_time_ms: u64,
     duration_ms: u64,
     dest: PathBuf,
+    quality: GridVideoExportQuality,
   ) -> VideoReviewResult<GridVideoExportResult> {
-    VideoExportService::export_grid_video(&GridVideoExportRequest::new(
-      videos.to_vec(),
+    VideoExportService::export_grid_video(&GridVideoExportRequest {
+      videos: videos.to_vec(),
       start_time_ms,
       duration_ms,
       dest,
-    ))
+      cell_width: 0,
+      cell_height: 0,
+      quality,
+    })
   }
 
   pub fn batch_update_status(&self, ids: &[i64], status: ReviewStatus) -> VideoReviewResult<()> {

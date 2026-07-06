@@ -12,8 +12,8 @@ use crate::video_review::domain::{
   MarkerKind, VideoBatch, VideoItem, VideoMarker, VideoSegment, VideoTag,
 };
 use crate::video_review::service::{
-  compute_layout, grid_dimensions, max_export_duration_ms, VideoExportRequest, VideoExportService,
-  VideoReviewService, DEFAULT_CELL_HEIGHT, DEFAULT_CELL_WIDTH,
+  compute_layout, compute_quality_cell_size, grid_dimensions, max_export_duration_ms,
+  GridVideoExportQuality, VideoExportRequest, VideoExportService, VideoReviewService,
 };
 use crate::video_review::ui::hover_preview::HoverPreviewController;
 use crate::video_review::ui::multi_compare::{format_ms, MultiVideoCompare, MAX_COMPARE_VIDEOS};
@@ -58,6 +58,7 @@ pub struct VideoReviewPanel {
   compare_mode: bool,
   export_success: Option<String>,
   export_clip_secs: f32,
+  export_lossless: bool,
   batch_remark_buf: String,
   batch_tag_ids: Vec<i64>,
   pending_delete_marker: Option<i64>,
@@ -111,6 +112,7 @@ impl VideoReviewPanel {
       compare_mode: false,
       export_success: None,
       export_clip_secs: 10.0,
+      export_lossless: false,
       batch_remark_buf: String::new(),
       batch_tag_ids: Vec::new(),
       pending_delete_marker: None,
@@ -711,12 +713,20 @@ impl VideoReviewPanel {
       let (rows, cols) = grid_dimensions(n);
       let max_clip_ms = self.max_export_clip_ms();
       let max_clip_secs = max_clip_ms as f32 / 1000.0;
+      let videos: Vec<VideoItem> = self
+        .selected_ids
+        .iter()
+        .filter_map(|id| self.videos.iter().find(|v| v.id == *id).cloned())
+        .collect();
+      let (cell_w, cell_h) = compute_quality_cell_size(&videos);
       ui.label(format!(
-        "布局 {}×{} · 输出 {}×{} px · 从 {} 起",
+        "布局 {}×{} · 输出 {}×{} px（单格 {}×{}，源分辨率）· 从 {} 起",
         rows,
         cols,
-        cols as u32 * DEFAULT_CELL_WIDTH,
-        rows as u32 * DEFAULT_CELL_HEIGHT,
+        cols as u32 * cell_w,
+        rows as u32 * cell_h,
+        cell_w,
+        cell_h,
         format_ms(time_ms)
       ));
       ui.horizontal(|ui| {
@@ -727,6 +737,16 @@ impl VideoReviewPanel {
             .smart_aim(true),
         );
       });
+      ui.horizontal(|ui| {
+        ui.checkbox(&mut self.export_lossless, "无损导出");
+        if self.export_lossless {
+          ui.label(
+            RichText::new("（CRF 0，文件较大，音轨直接复制）")
+              .weak()
+              .size(11.0),
+          );
+        }
+      });
       ui.label(
         RichText::new(format!(
           "最长可导出 {:.1}s（受最短素材剩余时长限制）",
@@ -735,11 +755,12 @@ impl VideoReviewPanel {
         .weak()
         .size(11.0),
       );
-      ui.label(
-        RichText::new("同步偏移、宫格拼接；音轨取自第一个视频")
-          .weak()
-          .size(11.0),
-      );
+      let quality_hint = if self.export_lossless {
+        "无损模式：源分辨率拼格，H.264 CRF 0，尽量保持清晰度与色彩"
+      } else {
+        "高质量模式：源分辨率拼格，不放大；仅必要时 Lanczos 缩小，CRF 17"
+      };
+      ui.label(RichText::new(quality_hint).weak().size(11.0));
     } else {
       ui.label(RichText::new("勾选 2–6 个视频后可导出拼接视频").weak());
     }
@@ -894,21 +915,38 @@ impl VideoReviewPanel {
     }
     if let Some(path) = rfd::FileDialog::new()
       .add_filter("MP4 视频", &["mp4"])
-      .set_file_name("video_compare_grid.mp4")
+      .set_file_name(if self.export_lossless {
+        "video_compare_grid_lossless.mp4"
+      } else {
+        "video_compare_grid.mp4"
+      })
       .save_file()
     {
+      let quality = if self.export_lossless {
+        GridVideoExportQuality::Lossless
+      } else {
+        GridVideoExportQuality::High
+      };
       match self.service.export_compare_grid_video(
         &videos,
         start_ms,
         duration_ms,
         path.clone(),
+        quality,
       ) {
         Ok(r) => {
           let msg = format!(
-            "已导出拼接视频 {}×{} · {:.1}s（{} 路）→ {}",
+            "已导出{}拼接视频 {}×{} · {:.1}s（单格 {}×{}，{} 路）→ {}",
+            if r.quality == GridVideoExportQuality::Lossless {
+              "无损"
+            } else {
+              ""
+            },
             r.width,
             r.height,
             r.duration_ms as f64 / 1000.0,
+            r.cell_width,
+            r.cell_height,
             r.video_count,
             r.dest.display()
           );
