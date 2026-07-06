@@ -131,24 +131,19 @@ impl VideoReviewPanel {
     self.show_ffmpeg_banner(ui);
 
     let avail = ui.available_size();
-    let left_w = 260.0_f32.min(avail.x * 0.28);
-    let right_w = 280.0_f32.min(avail.x * 0.3);
-    let center_w = (avail.x - left_w - right_w - 16.0).max(200.0);
+    const LEFT_W: f32 = 260.0;
+    const COL_GAP: f32 = 8.0;
+    let main_w = (avail.x - LEFT_W - COL_GAP).max(180.0);
 
     ui.horizontal_top(|ui| {
       ui.vertical(|ui| {
-        ui.set_width(left_w);
+        ui.set_width(LEFT_W);
         self.left_sidebar_ui(ctx, ui);
       });
-      ui.add_space(8.0);
+      ui.add_space(COL_GAP);
       ui.vertical(|ui| {
-        ui.set_width(center_w);
-        self.center_ui(ctx, ui, egui::vec2(center_w, avail.y - 8.0));
-      });
-      ui.add_space(8.0);
-      ui.vertical(|ui| {
-        ui.set_width(right_w);
-        self.right_panel_ui(ui);
+        ui.set_width(main_w);
+        self.center_ui(ctx, ui, egui::vec2(main_w, avail.y - 8.0));
       });
     });
   }
@@ -266,6 +261,9 @@ impl VideoReviewPanel {
   }
 
   fn center_ui(&mut self, ctx: &Context, ui: &mut egui::Ui, area: egui::Vec2) {
+    self.attribute_panel_ui(ui);
+    ui.add_space(8.0);
+
     widgets::grouped_section(ui, if self.compare_mode { "多视频对比" } else { "时间轴" }, |ui| {
       if self.compare_mode {
         let ffmpeg_ok = self.service.availability().ffmpeg_ok;
@@ -312,7 +310,7 @@ impl VideoReviewPanel {
       }
 
       ui.add_space(6.0);
-      let view_h = area.y - 120.0;
+      let view_h = ui.available_height().max(120.0);
       if self.compare_mode && self.selected_ids.len() >= 2 {
         self.compare.ui(ctx, ui, &self.service, &self.videos, egui::vec2(area.x, view_h.max(120.0)));
       } else if let Some(video) = self.current_video_item().cloned() {
@@ -335,7 +333,7 @@ impl VideoReviewPanel {
 
   fn draw_timeline_strip(&mut self, ctx: &Context, ui: &mut egui::Ui, video: &VideoItem) {
     if self.timeline_thumbs.is_empty() {
-      if let Ok(thumbs) = self.service.timeline_thumbs(video, 12) {
+      if let Ok(thumbs) = self.service.timeline_thumbs(video, 10) {
         self.timeline_thumbs = thumbs;
       }
     }
@@ -347,7 +345,7 @@ impl VideoReviewPanel {
           if let Some(p) = path {
             if let Some(tex) = self.load_thumb(ctx, p) {
               let resp = ui.add(
-                egui::ImageButton::new((tex.id(), egui::vec2(64.0, 36.0)))
+                egui::ImageButton::new((tex.id(), egui::vec2(56.0, 32.0)))
                   .selected(selected),
               );
               if resp.clicked() {
@@ -361,29 +359,37 @@ impl VideoReviewPanel {
     });
   }
 
-  fn right_panel_ui(&mut self, ui: &mut egui::Ui) {
-    ui.horizontal_wrapped(|ui| {
-      for (tab, label) in [
-        (RightTab::Review, "评审"),
-        (RightTab::Info, "信息"),
-        (RightTab::Markers, "标记"),
-        (RightTab::Tags, "标签"),
-        (RightTab::Export, "导出"),
-      ] {
-        if widgets::toggle_chip(ui, label, self.right_tab == tab, true) {
-          self.right_tab = tab;
-        }
-      }
+  fn attribute_panel_ui(&mut self, ui: &mut egui::Ui) {
+    let tabs = [
+      (RightTab::Review, "评审"),
+      (RightTab::Info, "信息"),
+      (RightTab::Markers, "标记"),
+      (RightTab::Tags, "标签"),
+      (RightTab::Export, "导出"),
+    ];
+
+    // 标题与「时间轴」左对齐；Tab 横排与「评审」芯片左缘对齐，放在圆角框外避免裁切。
+    widgets::section_header(ui, "属性");
+    ui.add_space(6.0);
+    let mut picked = self.right_tab;
+    widgets::tab_selector_row(ui, "video_attr_tab", &tabs, self.right_tab, |tab| {
+      picked = tab;
     });
+    self.right_tab = picked;
     ui.add_space(8.0);
-    ScrollArea::vertical()
-      .id_salt("video_review_right_panel")
-      .show(ui, |ui| match self.right_tab {
-      RightTab::Review => self.review_tab_ui(ui),
-      RightTab::Info => self.info_tab_ui(ui),
-      RightTab::Markers => self.markers_tab_ui(ui),
-      RightTab::Tags => self.tags_tab_ui(ui),
-      RightTab::Export => self.export_tab_ui(ui),
+
+    const ATTR_PANEL_MAX_H: f32 = 220.0;
+    widgets::grouped_section_frame(ui, |ui| {
+      ScrollArea::vertical()
+        .id_salt("video_review_attr_panel")
+        .max_height(ATTR_PANEL_MAX_H)
+        .show(ui, |ui| match self.right_tab {
+          RightTab::Review => self.review_tab_ui(ui),
+          RightTab::Info => self.info_tab_ui(ui),
+          RightTab::Markers => self.markers_tab_ui(ui),
+          RightTab::Tags => self.tags_tab_ui(ui),
+          RightTab::Export => self.export_tab_ui(ui),
+        });
     });
   }
 

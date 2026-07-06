@@ -49,17 +49,23 @@ pub fn video_list_toolbar_ui(
   selected_count: usize,
   action: &mut VideoListAction,
 ) {
-  ui.horizontal(|ui| {
+  let dark = ui.style().visuals.dark_mode;
+
+  widgets::toolbar_row(ui, |ui| {
     for mode in [VideoListMode::List, VideoListMode::Card] {
       if widgets::toggle_chip(ui, mode.label(), state.mode == mode, true) {
         state.mode = mode;
       }
     }
   });
-  ui.add_space(4.0);
-  ui.horizontal(|ui| {
-    ui.label("搜索");
-    if ui.text_edit_singleline(&mut state.search_buf).changed() {
+
+  ui.add_space(6.0);
+
+  widgets::toolbar_row(ui, |ui| {
+    widgets::toolbar_field_label(ui, "搜索", dark);
+    let reset_w = widgets::toolbar_control_width(ui, "重置");
+    let field_w = (ui.available_width() - reset_w - 6.0).max(48.0);
+    if widgets::toolbar_search_edit(ui, &mut state.search_buf, "文件名…", field_w).changed() {
       state.filter.search = state.search_buf.clone();
       action.reload_videos = true;
     }
@@ -69,13 +75,16 @@ pub fn video_list_toolbar_ui(
       action.reload_videos = true;
     }
   });
-  ui.horizontal(|ui| {
+
+  ui.add_space(6.0);
+
+  widgets::toolbar_row(ui, |ui| {
     let selected = state
       .filter
       .status
       .map(|s| s.label())
       .unwrap_or("全部");
-    widgets::toolbar_combo_box(ui, "video_status_filter", selected, 96.0, |ui| {
+    widgets::toolbar_combo_box(ui, "video_status_filter", selected, 72.0, |ui| {
       if ui
         .selectable_label(state.filter.status.is_none(), "全部")
         .clicked()
@@ -93,8 +102,9 @@ pub fn video_list_toolbar_ui(
         }
       }
     });
-  });
-  ui.horizontal(|ui| {
+
+    ui.add_space(6.0);
+
     let compare_label = format!("对比 ({selected_count})");
     let compare_clicked = if selected_count >= 2 {
       widgets::compact_primary_button(ui, &compare_label, true).clicked()

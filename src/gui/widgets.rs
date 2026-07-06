@@ -33,6 +33,26 @@ fn toolbar_button_width(ui: &Ui, label: &str) -> f32 {
   (toolbar_text_width(ui, label) + TOOLBAR_BUTTON_PADDING.x * 2.0).max(56.0)
 }
 
+/// 工具栏按钮预估宽度（用于行内剩余空间计算）。
+pub fn toolbar_control_width(ui: &Ui, label: &str) -> f32 {
+  toolbar_button_width(ui, label)
+}
+
+/// 工具栏单行搜索框（与 compact 按钮同高、垂直居中）。
+pub fn toolbar_search_edit(
+  ui: &mut Ui,
+  text: &mut String,
+  hint: &str,
+  width: f32,
+) -> egui::Response {
+  ui.add_sized(
+    egui::vec2(width, TOOLBAR_ROW_HEIGHT),
+    TextEdit::singleline(text)
+      .hint_text(hint)
+      .margin(egui::vec2(8.0, 7.0)),
+  )
+}
+
 /// 常用栏左区宽度：三行左组对齐（导航 / 对比模式 / 视图）。
 pub fn workflow_left_zone_width(ui: &Ui, page_label: Option<&str>) -> f32 {
   let spacing = 6.0;
@@ -166,8 +186,8 @@ pub fn navigation_header(ui: &mut Ui, subtitle: &str) {
   });
 }
 
-/// 内容层分组（inset grouped list），宽度随父级拉伸。
-pub fn grouped_section<R>(ui: &mut Ui, title: &str, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+/// 分组标题（与 `grouped_section` 标题样式一致）。
+pub fn section_header(ui: &mut Ui, title: &str) {
   let dark = ui.style().visuals.dark_mode;
   ui.label(
     RichText::new(title)
@@ -175,8 +195,11 @@ pub fn grouped_section<R>(ui: &mut Ui, title: &str, add_contents: impl FnOnce(&m
       .strong()
       .color(theme::secondary_label(dark)),
   );
-  ui.add_space(6.0);
+}
 
+/// 分组内容框（无标题），与 `grouped_section` 内框样式一致。
+pub fn grouped_section_frame<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+  let dark = ui.style().visuals.dark_mode;
   Frame::new()
     .fill(theme::grouped_fill(dark))
     .corner_radius(CornerRadius::same(theme::GROUP_RADIUS))
@@ -186,6 +209,13 @@ pub fn grouped_section<R>(ui: &mut Ui, title: &str, add_contents: impl FnOnce(&m
       add_contents(ui)
     })
     .inner
+}
+
+/// 内容层分组（inset grouped list），宽度随父级拉伸。
+pub fn grouped_section<R>(ui: &mut Ui, title: &str, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+  section_header(ui, title);
+  ui.add_space(6.0);
+  grouped_section_frame(ui, add_contents)
 }
 
 /// 底部操作工具栏帧（贴合窗口背景，仅按钮保持控件层级）。
@@ -401,6 +431,142 @@ pub fn toggle_chip(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> b
     .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS));
 
   add_toolbar_sized_button(ui, egui::vec2(56.0, TOOLBAR_ROW_HEIGHT), enabled, btn).clicked()
+}
+
+/// 侧栏 Tab 芯片（宽度随文案，避免固定 56px 挤压）。
+pub fn tab_chip(ui: &mut Ui, label: &str, selected: bool, enabled: bool) -> bool {
+  let dark = ui.style().visuals.dark_mode;
+  let accent = theme::accent(dark);
+  let (fill, stroke, fg) = if selected {
+    (
+      accent.linear_multiply(0.22),
+      Stroke::new(1.5, accent),
+      accent,
+    )
+  } else {
+    (
+      theme::control_fill(dark),
+      theme::control_stroke(dark),
+      theme::primary_label(dark),
+    )
+  };
+
+  let w = toolbar_button_width(ui, label).clamp(40.0, 68.0);
+  let btn = Button::new(RichText::new(label).size(13.0).color(fg))
+    .fill(fill)
+    .stroke(stroke)
+    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS));
+
+  add_toolbar_sized_button(ui, egui::vec2(w, TOOLBAR_ROW_HEIGHT), enabled, btn).clicked()
+}
+
+/// 侧栏 Tab 芯片（指定宽度，用于网格布局）。
+pub fn tab_chip_sized(
+  ui: &mut Ui,
+  label: &str,
+  width: f32,
+  selected: bool,
+  enabled: bool,
+) -> bool {
+  let dark = ui.style().visuals.dark_mode;
+  let accent = theme::accent(dark);
+  let (fill, stroke, fg) = if selected {
+    (
+      accent.linear_multiply(0.22),
+      Stroke::new(1.5, accent),
+      accent,
+    )
+  } else {
+    (
+      theme::control_fill(dark),
+      theme::control_stroke(dark),
+      theme::primary_label(dark),
+    )
+  };
+
+  let w = width.max(40.0);
+  let btn = Button::new(RichText::new(label).size(13.0).color(fg))
+    .fill(fill)
+    .stroke(stroke)
+    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS));
+
+  add_toolbar_sized_button(ui, egui::vec2(w, TOOLBAR_ROW_HEIGHT), enabled, btn).clicked()
+}
+
+/// 多 Tab 网格选择（2 列等宽，在分组框外使用，避免圆角裁切）。
+pub fn tab_grid_selector<R>(
+  ui: &mut Ui,
+  id_salt: impl std::hash::Hash,
+  tabs: &[(R, &str)],
+  current: R,
+  mut on_select: impl FnMut(R),
+) where
+  R: Copy + PartialEq,
+{
+  const COLS: usize = 2;
+  let gap = 6.0;
+  let avail = (ui.available_width() - 2.0).max(128.0);
+  let cell_w = ((avail - gap * (COLS as f32 - 1.0)) / COLS as f32).max(64.0);
+
+  for (row_idx, chunk) in tabs.chunks(COLS).enumerate() {
+    ui.horizontal(|ui| {
+      ui.spacing_mut().item_spacing.x = gap;
+      for (tab, label) in chunk {
+        if tab_chip_sized(ui, label, cell_w, current == *tab, true) {
+          on_select(*tab);
+        }
+      }
+    });
+    if row_idx + 1 < tabs.len().div_ceil(COLS) {
+      ui.add_space(gap);
+    }
+  }
+  let _ = id_salt;
+}
+
+/// 多 Tab 选择行：宽度不足时自动换行，极窄时退化为下拉框。
+pub fn tab_selector_row<R>(
+  ui: &mut Ui,
+  id_salt: impl std::hash::Hash,
+  tabs: &[(R, &str)],
+  current: R,
+  mut on_select: impl FnMut(R),
+) where
+  R: Copy + PartialEq,
+{
+  let avail = ui.available_width();
+  let gap = 4.0;
+  let chips_w = tabs
+    .iter()
+    .map(|(_, label)| toolbar_button_width(ui, label).clamp(40.0, 68.0) + gap)
+    .sum::<f32>()
+    - gap;
+
+  if avail < chips_w {
+    let selected = tabs
+      .iter()
+      .find(|(tab, _)| *tab == current)
+      .map(|(_, label)| *label)
+      .unwrap_or(tabs[0].1);
+    toolbar_combo_box(ui, id_salt, selected, avail, |ui| {
+      for (tab, label) in tabs {
+        if ui.selectable_label(current == *tab, *label).clicked() {
+          on_select(*tab);
+        }
+      }
+    });
+    return;
+  }
+
+  ui.horizontal_wrapped(|ui| {
+    ui.set_width(avail);
+    ui.spacing_mut().item_spacing = egui::vec2(gap, gap);
+    for (tab, label) in tabs {
+      if tab_chip(ui, label, current == *tab, true) {
+        on_select(*tab);
+      }
+    }
+  });
 }
 
 /// 带固定色的可选中芯片：选中时用该色填充，未选中显示描边点。
