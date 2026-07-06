@@ -18,3 +18,4 @@ pub use compare_view::{
 };
 pub use list_thumbnail_cache::ListThumbnailCache;
 pub use review_panel::{ReviewPanel, ReviewPanelHost, ReviewPanelOutput};
+pub use sidebar::status_buttons;

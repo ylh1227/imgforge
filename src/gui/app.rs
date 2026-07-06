@@ -53,12 +53,17 @@ enum WorkerMessage {
 enum AppMode {
   Convert,
   Review,
+  VideoReview,
 }
 
 /// 主窗口应用。
 pub struct ImgforgeApp {
   mode: AppMode,
   review_panel: Option<crate::review::ui::ReviewPanel>,
+  #[cfg(feature = "video-review")]
+  video_review_panel: Option<crate::video_review::ui::VideoReviewPanel>,
+  #[cfg(feature = "video-review")]
+  video_review_init_error: Option<String>,
   review_queue: Vec<PathBuf>,
   review_queue_params: std::collections::HashMap<PathBuf, crate::config::ConvertOverride>,
   burn_review_annotations: bool,
@@ -98,10 +103,20 @@ impl ImgforgeApp {
 
     let formats = ImageFormat::all_supported();
     let review_panel = crate::review::ui::ReviewPanel::new().ok();
+    #[cfg(feature = "video-review")]
+    let (video_review_panel, video_review_init_error) =
+      match crate::video_review::ui::VideoReviewPanel::new() {
+        Ok(panel) => (Some(panel), None),
+        Err(e) => (None, Some(e)),
+      };
     let gui_prefs = GuiPrefs::load();
     Self {
       mode: AppMode::Convert,
       review_panel,
+      #[cfg(feature = "video-review")]
+      video_review_panel,
+      #[cfg(feature = "video-review")]
+      video_review_init_error,
       review_queue: Vec::new(),
       review_queue_params: std::collections::HashMap::new(),
       burn_review_annotations: false,
@@ -592,15 +607,16 @@ impl eframe::App for ImgforgeApp {
         ui.add_space(theme::macos_titlebar_inset(ctx));
 
         ui.horizontal(|ui| {
-          if self.review_panel.is_some() {
-            widgets::mode_tab_bar(
-              ui,
-              &mut self.mode,
-              &[
-                (AppMode::Convert, "格式转换"),
-                (AppMode::Review, "图片评审"),
-              ],
-            );
+          let show_tabs = self.review_panel.is_some()
+            || cfg!(feature = "video-review");
+          if show_tabs {
+            let mut tabs = vec![(AppMode::Convert, "格式转换")];
+            if self.review_panel.is_some() {
+              tabs.push((AppMode::Review, "图片评审"));
+            }
+            #[cfg(feature = "video-review")]
+            tabs.push((AppMode::VideoReview, "视频评审"));
+            widgets::mode_tab_bar(ui, &mut self.mode, &tabs);
           }
         });
         ui.add_space(8.0);
@@ -645,6 +661,31 @@ impl eframe::App for ImgforgeApp {
           } else {
             ui.label("评审模块初始化失败");
           }
+          return;
+        }
+
+        if self.mode == AppMode::VideoReview {
+          #[cfg(feature = "video-review")]
+          if let Some(panel) = &mut self.video_review_panel {
+            panel.ui(ctx, ui);
+            let output = panel.take_output();
+            if !output.status_message.is_empty() {
+              self.status = output.status_message;
+            }
+          } else {
+            ui.vertical_centered(|ui| {
+              ui.add_space(40.0);
+              ui.heading("视频评审");
+              ui.add_space(12.0);
+              let msg = self
+                .video_review_init_error
+                .as_deref()
+                .unwrap_or("视频评审模块初始化失败");
+              ui.colored_label(egui::Color32::from_rgb(255, 149, 0), msg);
+            });
+          }
+          #[cfg(not(feature = "video-review"))]
+          ui.label("视频评审未编译（需启用 video-review feature）");
           return;
         }
 

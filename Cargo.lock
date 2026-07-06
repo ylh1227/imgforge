@@ -967,6 +967,7 @@ checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
  "num-traits",
+ "serde",
  "windows-link",
 ]
 
@@ -2316,7 +2317,7 @@ dependencies = [
 
 [[package]]
 name = "imgforge"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "ab_glyph",
  "avif-decode",

@@ -13,3 +13,6 @@ pub mod gui;
 
 #[cfg(feature = "review")]
 pub mod review;
+
+#[cfg(feature = "video-review")]
+pub mod video_review;
