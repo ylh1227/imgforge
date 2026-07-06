@@ -11,6 +11,8 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RELEASE_FEATURES: incremental,rename,thumbnails,watermark,jpegxl,bayer
+  # 降低 CI 链接阶段内存占用（本地 release profile 仍为 codegen-units=1）。
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 4
 
 jobs:
   build-cli:
@@ -39,6 +41,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-cli-v2
+
+      - name: Show toolchain
+        run: rustc --version && cargo --version
 
       - name: Get version
         id: version
@@ -49,6 +56,8 @@ jobs:
 
       - name: Build CLI
         run: cargo build --release --target ${{ matrix.target }} --features "${{ env.RELEASE_FEATURES }}"
+        env:
+          CARGO_BUILD_JOBS: 2
 
       - name: Stage CLI distribution
         shell: bash
@@ -108,6 +117,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-gui-v2
+
+      - name: Show toolchain
+        run: rustc --version && cargo --version
 
       - name: Get version
         id: version
@@ -118,6 +132,8 @@ jobs:
 
       - name: Build GUI
         run: cargo build --release --target ${{ matrix.target }} --features gui --bin imgforge-app
+        env:
+          CARGO_BUILD_JOBS: 2
 
       - name: Package Windows GUI
         if: runner.os == 'Windows'
