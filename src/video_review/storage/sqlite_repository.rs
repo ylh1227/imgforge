@@ -66,7 +66,7 @@ fn color_to_sql(c: [u8; 4]) -> String {
 fn color_from_sql(raw: &str) -> [u8; 4] {
   let parts: Vec<u8> = raw
     .split(',')
-    .filter_map(|p| p.trim().parse().ok())
+    .filter_map(|p| p.trim().parse::<u8>().ok())
     .collect();
   if parts.len() == 4 {
     [parts[0], parts[1], parts[2], parts[3]]
