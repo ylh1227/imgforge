@@ -16,115 +16,115 @@ use crate::cli_loader::load_config;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
-  color_eyre::install().ok();
+    color_eyre::install().ok();
 
-  let cli = Cli::parse();
+    let cli = Cli::parse();
 
-  if let Some(Commands::Completions { shell }) = cli.command {
-    Cli::generate_completions(shell.into());
-    return Ok(());
-  }
-
-  if matches!(cli.command, Some(Commands::Doctor)) {
-    ui::doctor::run_doctor();
-    return Ok(());
-  }
-
-  // 未指定输入时给出用法提示（避免 IDE 直接 Run 扫当前目录报错）
-  if cli.command.is_none()
-    && cli.input.is_none()
-    && cli.config.is_none()
-    && std::env::var("IMGFORGE_INPUT").is_err()
-    && std::env::var("IMGFORGE_INPUT_DIR").is_err()
-  {
-    use clap::CommandFactory;
-    Cli::command().print_help()?;
-    eprintln!();
-    eprintln!("示例:");
-    eprintln!("  imgforge -i ./photos -o ./output -f webp");
-    eprintln!("图形界面: cargo run --features gui --bin imgforge-app");
-    return Ok(());
-  }
-
-  ui::init_logger(cli.verbose);
-
-  let config = load_config(&cli).wrap_err("failed to load configuration")?;
-
-  tracing::info!(
-    input = %config.input_dir.display(),
-    output = %config.output_dir.display(),
-    format = %config.target_format,
-    concurrency = config.concurrency.value(),
-    "starting imgforge"
-  );
-
-  let cancelled = Arc::new(AtomicBool::new(false));
-  install_shutdown_handler(Arc::clone(&cancelled));
-
-  if config.dry_run {
-    tracing::info!("dry-run mode: no files will be written");
-    match imgforge::job::preview_batch(&config) {
-      Ok(preview) => {
-        ui::report::ProcessReport::print_preview_summary(
-          &preview,
-          config.target_format.extension(),
-        );
-      }
-      Err(e) => tracing::warn!(error = %e, "preview scan failed"),
+    if let Some(Commands::Completions { shell }) = cli.command {
+        Cli::generate_completions(shell.into());
+        return Ok(());
     }
-  }
 
-  let report = run_batch(config, cancelled, None)
-    .await
-    .wrap_err("execution failed")?;
+    if matches!(cli.command, Some(Commands::Doctor)) {
+        ui::doctor::run_doctor();
+        return Ok(());
+    }
 
-  report.print_summary();
+    // 未指定输入时给出用法提示（避免 IDE 直接 Run 扫当前目录报错）
+    if cli.command.is_none()
+        && cli.input.is_none()
+        && cli.config.is_none()
+        && std::env::var("IMGFORGE_INPUT").is_err()
+        && std::env::var("IMGFORGE_INPUT_DIR").is_err()
+    {
+        use clap::CommandFactory;
+        Cli::command().print_help()?;
+        eprintln!();
+        eprintln!("示例:");
+        eprintln!("  imgforge -i ./photos -o ./output -f webp");
+        eprintln!("图形界面: cargo run --features gui --bin imgforge-app");
+        return Ok(());
+    }
 
-  if !report.failures.is_empty() {
-    std::process::exit(1);
-  }
+    ui::init_logger(cli.verbose);
 
-  Ok(())
+    let config = load_config(&cli).wrap_err("failed to load configuration")?;
+
+    tracing::info!(
+      input = %config.input_dir.display(),
+      output = %config.output_dir.display(),
+      format = %config.target_format,
+      concurrency = config.concurrency.value(),
+      "starting imgforge"
+    );
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    install_shutdown_handler(Arc::clone(&cancelled));
+
+    if config.dry_run {
+        tracing::info!("dry-run mode: no files will be written");
+        match imgforge::job::preview_batch(&config) {
+            Ok(preview) => {
+                ui::report::ProcessReport::print_preview_summary(
+                    &preview,
+                    config.target_format.extension(),
+                );
+            }
+            Err(e) => tracing::warn!(error = %e, "preview scan failed"),
+        }
+    }
+
+    let report = run_batch(config, cancelled, None)
+        .await
+        .wrap_err("execution failed")?;
+
+    report.print_summary();
+
+    if !report.failures.is_empty() {
+        std::process::exit(1);
+    }
+
+    Ok(())
 }
 
 /// 跨平台优雅退出：Unix Ctrl+C / Windows Ctrl+C 与 Ctrl+Break。
 fn install_shutdown_handler(cancelled: Arc<AtomicBool>) {
-  #[cfg(not(windows))]
-  tokio::spawn(async move {
-    if tokio::signal::ctrl_c().await.is_ok() {
-      tracing::warn!("received Ctrl+C, shutting down gracefully...");
-      cancelled.store(true, Ordering::Relaxed);
-    }
-  });
+    #[cfg(not(windows))]
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            tracing::warn!("received Ctrl+C, shutting down gracefully...");
+            cancelled.store(true, Ordering::Relaxed);
+        }
+    });
 
-  #[cfg(windows)]
-  tokio::spawn(async move {
-    let mut ctrl_break = match tokio::signal::windows::ctrl_break() {
-      Ok(signal) => signal,
-      Err(e) => {
-        tracing::warn!(error = %e, "failed to install Ctrl+Break handler");
-        return;
-      }
-    };
-    let mut ctrl_close = match tokio::signal::windows::ctrl_close() {
-      Ok(signal) => signal,
-      Err(e) => {
-        tracing::warn!(error = %e, "failed to install console close handler");
-        return;
-      }
-    };
+    #[cfg(windows)]
+    tokio::spawn(async move {
+        let mut ctrl_break = match tokio::signal::windows::ctrl_break() {
+            Ok(signal) => signal,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to install Ctrl+Break handler");
+                return;
+            }
+        };
+        let mut ctrl_close = match tokio::signal::windows::ctrl_close() {
+            Ok(signal) => signal,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to install console close handler");
+                return;
+            }
+        };
 
-    tokio::select! {
-      _ = tokio::signal::ctrl_c() => {
-        tracing::warn!("received Ctrl+C, shutting down gracefully...");
-      }
-      _ = ctrl_break.recv() => {
-        tracing::warn!("received Ctrl+Break, shutting down gracefully...");
-      }
-      _ = ctrl_close.recv() => {
-        tracing::warn!("received console close, shutting down gracefully...");
-      }
-    }
-    cancelled.store(true, Ordering::Relaxed);
-  });
+        tokio::select! {
+          _ = tokio::signal::ctrl_c() => {
+            tracing::warn!("received Ctrl+C, shutting down gracefully...");
+          }
+          _ = ctrl_break.recv() => {
+            tracing::warn!("received Ctrl+Break, shutting down gracefully...");
+          }
+          _ = ctrl_close.recv() => {
+            tracing::warn!("received console close, shutting down gracefully...");
+          }
+        }
+        cancelled.store(true, Ordering::Relaxed);
+    });
 }

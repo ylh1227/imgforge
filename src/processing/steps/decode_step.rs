@@ -9,12 +9,12 @@ use crate::processing::pipeline::ProcessStep;
 pub struct DecodeStep;
 
 impl ProcessStep for DecodeStep {
-  fn name(&self) -> &'static str {
-    "decode"
-  }
+    fn name(&self) -> &'static str {
+        "decode"
+    }
 
-  fn execute(&self, ctx: &mut ImageContext) -> AppResult<()> {
-    let backend = default_backend();
-    backend.decode(ctx)
-  }
+    fn execute(&self, ctx: &mut ImageContext) -> AppResult<()> {
+        let backend = default_backend();
+        backend.decode(ctx)
+    }
 }

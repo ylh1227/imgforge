@@ -1,11 +1,11 @@
-//! 视频评审 SQLite 表结构（`user_version` 4）。
+//! 视频评审 SQLite 表结构（`user_version` 5）。
 
 use rusqlite::Connection;
 
 use crate::review::storage::migrate as review_migrate;
 use crate::video_review::error::VideoReviewResult;
 
-pub const VIDEO_REVIEW_SCHEMA_VERSION: i32 = 4;
+pub const VIDEO_REVIEW_SCHEMA_VERSION: i32 = 5;
 
 const SCHEMA_V4: &str = r#"
 CREATE TABLE IF NOT EXISTS video_review_batch (
@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS video_review_item (
   video_codec TEXT NOT NULL DEFAULT '',
   audio_codec TEXT,
   bitrate_kbps INTEGER,
+  device_model TEXT,
   offset_ms INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
@@ -87,39 +88,55 @@ CREATE TABLE IF NOT EXISTS video_review_compare_session (
 "#;
 
 pub fn ensure_schema(conn: &Connection) -> VideoReviewResult<()> {
-  review_migrate::ensure_schema(conn).map_err(|e| {
-    crate::video_review::error::VideoReviewError::Message(e.to_string())
-  })?;
-  let version: i32 = conn
-    .pragma_query_value(None, "user_version", |row| row.get(0))
-    .unwrap_or(0);
-  if version < VIDEO_REVIEW_SCHEMA_VERSION {
-    conn.execute_batch(SCHEMA_V4)?;
-    conn.pragma_update(None, "user_version", VIDEO_REVIEW_SCHEMA_VERSION)?;
-  }
-  Ok(())
+    review_migrate::ensure_schema(conn)
+        .map_err(|e| crate::video_review::error::VideoReviewError::Message(e.to_string()))?;
+    let version: i32 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap_or(0);
+    if version < VIDEO_REVIEW_SCHEMA_VERSION {
+        conn.execute_batch(SCHEMA_V4)?;
+        if !column_exists(conn, "video_review_item", "device_model")? {
+            conn.execute(
+                "ALTER TABLE video_review_item ADD COLUMN device_model TEXT",
+                [],
+            )?;
+        }
+        conn.pragma_update(None, "user_version", VIDEO_REVIEW_SCHEMA_VERSION)?;
+    }
+    Ok(())
+}
+
+fn column_exists(conn: &Connection, table: &str, column: &str) -> VideoReviewResult<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]
 mod tests {
-  use super::*;
-  use rusqlite::Connection;
+    use super::*;
+    use rusqlite::Connection;
 
-  #[test]
-  fn video_schema_applies_on_fresh_db() {
-    let conn = Connection::open_in_memory().unwrap();
-    ensure_schema(&conn).unwrap();
-    let version: i32 = conn
-      .pragma_query_value(None, "user_version", |row| row.get(0))
-      .unwrap();
-    assert_eq!(version, VIDEO_REVIEW_SCHEMA_VERSION);
-    let count: i64 = conn
-      .query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE name = 'video_review_item'",
-        [],
-        |row| row.get(0),
-      )
-      .unwrap();
-    assert_eq!(count, 1);
-  }
+    #[test]
+    fn video_schema_applies_on_fresh_db() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+        let version: i32 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, VIDEO_REVIEW_SCHEMA_VERSION);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'video_review_item'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
 }

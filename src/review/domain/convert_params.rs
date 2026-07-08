@@ -7,13 +7,13 @@ use crate::core::types::ImageFormat;
 /// 评审页为单张图片标记的转换参数（可选，默认不改变全局配置）。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ConvertParams {
-  pub format: Option<ImageFormat>,
-  pub quality: Option<u8>,
-  pub width: Option<u32>,
+    pub format: Option<ImageFormat>,
+    pub quality: Option<u8>,
+    pub width: Option<u32>,
 }
 
 impl ConvertParams {
-  pub fn is_empty(&self) -> bool {
-    self.format.is_none() && self.quality.is_none() && self.width.is_none()
-  }
+    pub fn is_empty(&self) -> bool {
+        self.format.is_none() && self.quality.is_none() && self.width.is_none()
+    }
 }

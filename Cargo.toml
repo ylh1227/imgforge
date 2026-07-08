@@ -1,6 +1,6 @@
 [package]
 name = "imgforge"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2021"
 rust-version = "1.85"
 description = "Cross-platform high-performance batch image format converter"
@@ -30,6 +30,7 @@ gui = [
   "dep:open",
   "review",
   "video-review",
+  "data-extract",
   "incremental",
   "rename",
   "thumbnails",
@@ -39,6 +40,8 @@ gui = [
 ]
 review = ["dep:rusqlite", "dep:imageproc", "dep:serde_json", "dep:csv"]
 video-review = ["review", "dep:serde_json", "dep:csv", "dep:ab_glyph", "dep:imageproc"]
+data-extract = ["dep:serde_json", "dep:csv", "ocr"]
+ocr = []
 incremental = ["dep:sha2"]
 avif = ["dep:ravif"]
 avif-decode = ["dep:avif-decode"]

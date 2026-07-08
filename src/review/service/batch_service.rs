@@ -10,75 +10,80 @@ use crate::review::storage::sqlite_repository::{ensure_cache_dirs, SqliteReviewR
 
 /// 批次业务服务（借用仓储，不持有连接）。
 pub struct BatchService<'a> {
-  repo: &'a SqliteReviewRepository,
+    repo: &'a SqliteReviewRepository,
 }
 
 impl<'a> BatchService<'a> {
-  pub fn new(repo: &'a SqliteReviewRepository) -> Self {
-    Self { repo }
-  }
-
-  pub fn repo(&self) -> &SqliteReviewRepository {
-    self.repo
-  }
-
-  /// 从文件夹扫描图片创建批次。
-  pub fn create_from_folder(&self, name: &str, folder: &Path, recursive: bool) -> ReviewResult<i64> {
-    ensure_cache_dirs()?;
-    let paths = scan_images(folder, recursive)?;
-    if paths.is_empty() {
-      return Err(ReviewError::EmptyBatch);
+    pub fn new(repo: &'a SqliteReviewRepository) -> Self {
+        Self { repo }
     }
-    self.repo.create_batch(name, &paths)
-  }
 
-  /// 从已有路径列表创建批次（转换队列选中文件）。
-  pub fn create_from_paths(&self, name: &str, paths: &[PathBuf]) -> ReviewResult<i64> {
-    ensure_cache_dirs()?;
-    if paths.is_empty() {
-      return Err(ReviewError::EmptyBatch);
+    pub fn repo(&self) -> &SqliteReviewRepository {
+        self.repo
     }
-    self.repo.create_batch(name, paths)
-  }
 
-  pub fn list_batches(&self) -> ReviewResult<Vec<ReviewBatch>> {
-    self.repo.list_batches()
-  }
+    /// 从文件夹扫描图片创建批次。
+    pub fn create_from_folder(
+        &self,
+        name: &str,
+        folder: &Path,
+        recursive: bool,
+    ) -> ReviewResult<i64> {
+        ensure_cache_dirs()?;
+        let paths = scan_images(folder, recursive)?;
+        if paths.is_empty() {
+            return Err(ReviewError::EmptyBatch);
+        }
+        self.repo.create_batch(name, &paths)
+    }
 
-  pub fn batch_stats(&self, batch_id: i64) -> ReviewResult<BatchStats> {
-    self.repo.batch_stats(batch_id)
-  }
+    /// 从已有路径列表创建批次（转换队列选中文件）。
+    pub fn create_from_paths(&self, name: &str, paths: &[PathBuf]) -> ReviewResult<i64> {
+        ensure_cache_dirs()?;
+        if paths.is_empty() {
+            return Err(ReviewError::EmptyBatch);
+        }
+        self.repo.create_batch(name, paths)
+    }
+
+    pub fn list_batches(&self) -> ReviewResult<Vec<ReviewBatch>> {
+        self.repo.list_batches()
+    }
+
+    pub fn batch_stats(&self, batch_id: i64) -> ReviewResult<BatchStats> {
+        self.repo.batch_stats(batch_id)
+    }
 }
 
 fn scan_images(folder: &Path, recursive: bool) -> ReviewResult<Vec<PathBuf>> {
-  let mut out = Vec::new();
-  if !folder.is_dir() {
-    return Err(ReviewError::InvalidPath(folder.to_path_buf()));
-  }
-  let extensions = ["jpg", "jpeg", "png", "webp", "bmp", "tiff", "tif", "gif"];
-  if recursive {
-    for entry in WalkDir::new(folder).into_iter().filter_map(|e| e.ok()) {
-      if entry.file_type().is_file() {
-        push_if_image(&entry.path(), &extensions, &mut out);
-      }
+    let mut out = Vec::new();
+    if !folder.is_dir() {
+        return Err(ReviewError::InvalidPath(folder.to_path_buf()));
     }
-  } else {
-    for entry in std::fs::read_dir(folder)? {
-      let entry = entry?;
-      let path = entry.path();
-      if path.is_file() {
-        push_if_image(&path, &extensions, &mut out);
-      }
+    let extensions = ["jpg", "jpeg", "png", "webp", "bmp", "tiff", "tif", "gif"];
+    if recursive {
+        for entry in WalkDir::new(folder).into_iter().filter_map(|e| e.ok()) {
+            if entry.file_type().is_file() {
+                push_if_image(&entry.path(), &extensions, &mut out);
+            }
+        }
+    } else {
+        for entry in std::fs::read_dir(folder)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_file() {
+                push_if_image(&path, &extensions, &mut out);
+            }
+        }
     }
-  }
-  out.sort();
-  Ok(out)
+    out.sort();
+    Ok(out)
 }
 
 fn push_if_image(path: &Path, extensions: &[&str], out: &mut Vec<PathBuf>) {
-  if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-    if extensions.contains(&ext.to_ascii_lowercase().as_str()) {
-      out.push(path.to_path_buf());
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        if extensions.contains(&ext.to_ascii_lowercase().as_str()) {
+            out.push(path.to_path_buf());
+        }
     }
-  }
 }

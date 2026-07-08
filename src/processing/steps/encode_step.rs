@@ -9,12 +9,12 @@ use crate::processing::pipeline::ProcessStep;
 pub struct EncodeStep;
 
 impl ProcessStep for EncodeStep {
-  fn name(&self) -> &'static str {
-    "encode"
-  }
+    fn name(&self) -> &'static str {
+        "encode"
+    }
 
-  fn execute(&self, ctx: &mut ImageContext) -> AppResult<()> {
-    let backend = default_backend();
-    backend.encode(ctx)
-  }
+    fn execute(&self, ctx: &mut ImageContext) -> AppResult<()> {
+        let backend = default_backend();
+        backend.encode(ctx)
+    }
 }

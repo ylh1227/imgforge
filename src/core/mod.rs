@@ -7,6 +7,6 @@ pub mod types;
 pub use context::ImageContext;
 pub use error::{AppError, AppResult};
 pub use types::{
-  AdjustOptions, Concurrency, ImageFormat, MetadataPolicy, Quality, ResizeMode, ResizeOptions,
-  ThumbnailSpec, Transform, WatermarkOptions, WatermarkPosition,
+    AdjustOptions, Concurrency, ImageFormat, MetadataPolicy, Quality, ResizeMode, ResizeOptions,
+    ThumbnailSpec, Transform, WatermarkOptions, WatermarkPosition,
 };

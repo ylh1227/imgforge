@@ -27,19 +27,19 @@ use crate::core::types::ImageFormat;
 
 /// 统一编解码后端接口，实现后端无关性。
 pub trait ImageBackend: Send + Sync {
-  fn name(&self) -> &'static str;
-  fn decode(&self, ctx: &mut ImageContext) -> AppResult<()>;
-  fn encode(&self, ctx: &mut ImageContext) -> AppResult<()>;
-  fn supported_formats(&self) -> &[ImageFormat];
+    fn name(&self) -> &'static str;
+    fn decode(&self, ctx: &mut ImageContext) -> AppResult<()>;
+    fn encode(&self, ctx: &mut ImageContext) -> AppResult<()>;
+    fn supported_formats(&self) -> &[ImageFormat];
 }
 
 /// 根据 feature 选择默认后端。
 pub fn default_backend() -> Box<dyn ImageBackend> {
-  #[cfg(feature = "vips")]
-  {
-    if let Some(backend) = vips_backend::try_create() {
-      return Box::new(backend);
+    #[cfg(feature = "vips")]
+    {
+        if let Some(backend) = vips_backend::try_create() {
+            return Box::new(backend);
+        }
     }
-  }
-  Box::new(native_backend::NativeBackend::new())
+    Box::new(native_backend::NativeBackend::new())
 }

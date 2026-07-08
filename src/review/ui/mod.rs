@@ -14,7 +14,7 @@ mod toolbar;
 
 pub use annotation_canvas::AnnotationCanvas;
 pub use compare_view::{
-  CompareDisplayMode, CompareView, CompareViewConfig, SplitLayout, MAX_MULTI_COMPARE_PANES,
+    CompareDisplayMode, CompareView, CompareViewConfig, SplitLayout, MAX_MULTI_COMPARE_PANES,
 };
 pub use list_thumbnail_cache::ListThumbnailCache;
 pub use review_panel::{ReviewPanel, ReviewPanelHost, ReviewPanelOutput};

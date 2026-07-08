@@ -16,3 +16,6 @@ pub mod review;
 
 #[cfg(feature = "video-review")]
 pub mod video_review;
+
+#[cfg(feature = "data-extract")]
+pub mod data_extract;

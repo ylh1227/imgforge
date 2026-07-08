@@ -21,213 +21,215 @@ use crate::ui::report::{FailureRecord, ProcessReport};
 
 /// 执行结果。
 pub struct ExecutionResult {
-  pub report: ProcessReport,
+    pub report: ProcessReport,
 }
 
 /// 混合并发执行器。
 pub struct Executor {
-  config: AppConfig,
-  cancelled: Arc<AtomicBool>,
+    config: AppConfig,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl Executor {
-  pub fn new(config: AppConfig, cancelled: Arc<AtomicBool>) -> Self {
-    Self { config, cancelled }
-  }
-
-  /// 执行批量转换任务。
-  pub async fn run(
-    &self,
-    tasks: Vec<ConversionTask>,
-    progress: Option<Arc<dyn ProgressReporter>>,
-  ) -> AppResult<ExecutionResult> {
-    let start = Instant::now();
-    let pipeline = Arc::new(crate::processing::pipeline::build_pipeline(&self.config));
-    let mut incremental = IncrementalProcessor::load(
-      self.config.output_dir.join(".imgforge-state.toml"),
-      self.config.incremental,
-    )?;
-
-    let scanned = tasks.len();
-    let filter = incremental.filter_tasks(tasks)?;
-    let skipped = filter.skipped;
-    let tasks = filter.tasks;
-    let total = tasks.len();
-
-    let progress_reporter: Arc<dyn ProgressReporter> = match progress {
-      Some(reporter) => reporter,
-      None => Arc::new(ProgressManager::new(total)),
-    };
-    progress_reporter.set_total(total);
-
-    let semaphore = Arc::new(Semaphore::new(self.config.concurrency.value()));
-
-    if total == 0 {
-      tracing::info!(scanned, skipped, "no tasks to process after filtering");
+    pub fn new(config: AppConfig, cancelled: Arc<AtomicBool>) -> Self {
+        Self { config, cancelled }
     }
 
-    let mut successes = 0usize;
-    let mut failures = Vec::new();
-    let mut total_input_bytes = 0u64;
-    let mut total_output_bytes = 0u64;
+    /// 执行批量转换任务。
+    pub async fn run(
+        &self,
+        tasks: Vec<ConversionTask>,
+        progress: Option<Arc<dyn ProgressReporter>>,
+    ) -> AppResult<ExecutionResult> {
+        let start = Instant::now();
+        let pipeline = Arc::new(crate::processing::pipeline::build_pipeline(&self.config));
+        let mut incremental = IncrementalProcessor::load(
+            self.config.output_dir.join(".imgforge-state.toml"),
+            self.config.incremental,
+        )?;
 
-    let mut join_set: JoinSet<(ConversionTask, AppResult<TaskOutcome>)> = JoinSet::new();
+        let scanned = tasks.len();
+        let filter = incremental.filter_tasks(tasks)?;
+        let skipped = filter.skipped;
+        let tasks = filter.tasks;
+        let total = tasks.len();
 
-    for task in tasks {
-      if self.cancelled.load(Ordering::Relaxed) {
-        break;
-      }
+        let progress_reporter: Arc<dyn ProgressReporter> = match progress {
+            Some(reporter) => reporter,
+            None => Arc::new(ProgressManager::new(total)),
+        };
+        progress_reporter.set_total(total);
 
-      let permit = semaphore
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|_| AppError::Cancelled)?;
+        let semaphore = Arc::new(Semaphore::new(self.config.concurrency.value()));
 
-      let pipeline = Arc::clone(&pipeline);
-      let config = self.config.clone();
-      let cancelled = Arc::clone(&self.cancelled);
-      let progress = Arc::clone(&progress_reporter);
+        if total == 0 {
+            tracing::info!(scanned, skipped, "no tasks to process after filtering");
+        }
 
-      join_set.spawn(async move {
-        let result =
-          process_single_task(task.clone(), &config, pipeline, &cancelled).await;
-        progress.inc(result.as_ref().ok().map(|o| (task.input_size, o.output_size)));
-        drop(permit);
-        (task, result)
-      });
+        let mut successes = 0usize;
+        let mut failures = Vec::new();
+        let mut total_input_bytes = 0u64;
+        let mut total_output_bytes = 0u64;
+
+        let mut join_set: JoinSet<(ConversionTask, AppResult<TaskOutcome>)> = JoinSet::new();
+
+        for task in tasks {
+            if self.cancelled.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let permit = semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| AppError::Cancelled)?;
+
+            let pipeline = Arc::clone(&pipeline);
+            let config = self.config.clone();
+            let cancelled = Arc::clone(&self.cancelled);
+            let progress = Arc::clone(&progress_reporter);
+
+            join_set.spawn(async move {
+                let result = process_single_task(task.clone(), &config, pipeline, &cancelled).await;
+                progress.inc(
+                    result
+                        .as_ref()
+                        .ok()
+                        .map(|o| (task.input_size, o.output_size)),
+                );
+                drop(permit);
+                (task, result)
+            });
+        }
+
+        while let Some(joined) = join_set.join_next().await {
+            match joined {
+                Ok((task, Ok(outcome))) => {
+                    successes += 1;
+                    total_input_bytes += task.input_size;
+                    total_output_bytes += outcome.output_size;
+                    let _ = incremental.record_success(&task);
+                }
+                Ok((task, Err(e))) => {
+                    failures.push(FailureRecord {
+                        path: task.input_path.clone(),
+                        error: e.to_string(),
+                    });
+                }
+                Err(e) => {
+                    failures.push(FailureRecord {
+                        path: PathBuf::from("<unknown>"),
+                        error: e.to_string(),
+                    });
+                }
+            }
+        }
+
+        progress_reporter.finish();
+        let _ = incremental.save();
+
+        let report = ProcessReport {
+            scanned,
+            skipped,
+            total,
+            successes,
+            failures: failures.clone(),
+            elapsed: start.elapsed(),
+            total_input_bytes,
+            total_output_bytes,
+            cancelled: self.cancelled.load(Ordering::Relaxed),
+        };
+
+        Ok(ExecutionResult { report })
     }
-
-    while let Some(joined) = join_set.join_next().await {
-      match joined {
-        Ok((task, Ok(outcome))) => {
-          successes += 1;
-          total_input_bytes += task.input_size;
-          total_output_bytes += outcome.output_size;
-          let _ = incremental.record_success(&task);
-        }
-        Ok((task, Err(e))) => {
-          failures.push(FailureRecord {
-            path: task.input_path.clone(),
-            error: e.to_string(),
-          });
-        }
-        Err(e) => {
-          failures.push(FailureRecord {
-            path: PathBuf::from("<unknown>"),
-            error: e.to_string(),
-          });
-        }
-      }
-    }
-
-    progress_reporter.finish();
-    let _ = incremental.save();
-
-    let report = ProcessReport {
-      scanned,
-      skipped,
-      total,
-      successes,
-      failures: failures.clone(),
-      elapsed: start.elapsed(),
-      total_input_bytes,
-      total_output_bytes,
-      cancelled: self.cancelled.load(Ordering::Relaxed),
-    };
-
-    Ok(ExecutionResult { report })
-  }
 }
 
 struct TaskOutcome {
-  output_size: u64,
+    output_size: u64,
 }
 
 async fn process_single_task(
-  task: ConversionTask,
-  config: &AppConfig,
-  pipeline: Arc<ProcessingPipeline>,
-  cancelled: &AtomicBool,
+    task: ConversionTask,
+    config: &AppConfig,
+    pipeline: Arc<ProcessingPipeline>,
+    cancelled: &AtomicBool,
 ) -> AppResult<TaskOutcome> {
-  if cancelled.load(Ordering::Relaxed) {
-    return Err(AppError::Cancelled);
-  }
+    if cancelled.load(Ordering::Relaxed) {
+        return Err(AppError::Cancelled);
+    }
 
-  let raw_bytes = fs::read(&task.input_path)
+    let raw_bytes = fs::read(&task.input_path)
+        .await
+        .map_err(|e| AppError::io(&task.input_path, e))?;
+
+    validate_output_path(&config.output_dir, &task.output_path)?;
+
+    let mut ctx = ImageContext::new(
+        task.input_path.clone(),
+        task.output_path.clone(),
+        task.format_override.unwrap_or(config.target_format),
+        task.quality_override.unwrap_or(config.quality),
+        task.input_size,
+    );
+    ctx.raw_bytes = Some(raw_bytes);
+    ctx.resize = task.resize_override.unwrap_or(config.resize);
+    ctx.adjust = config.adjust;
+    ctx.metadata_policy = config.metadata_policy;
+    ctx.transform = config.transform;
+    ctx.watermark = config.watermark.clone();
+    ctx.dry_run = config.dry_run;
+    ctx.bayer_only = config.bayer_only;
+
+    // CPU 密集流水线在阻塞线程池中执行，避免阻塞 tokio 运行时
+    let result = tokio::task::spawn_blocking(move || {
+        let r = pipeline.execute(&mut ctx);
+        (r, ctx)
+    })
     .await
-    .map_err(|e| AppError::io(&task.input_path, e))?;
+    .map_err(|e| AppError::Other(e.to_string()))?;
 
-  validate_output_path(&config.output_dir, &task.output_path)?;
+    let (pipeline_result, mut ctx) = result;
+    pipeline_result?;
 
-  let mut ctx = ImageContext::new(
-    task.input_path.clone(),
-    task.output_path.clone(),
-    task.format_override.unwrap_or(config.target_format),
-    task.quality_override.unwrap_or(config.quality),
-    task.input_size,
-  );
-  ctx.raw_bytes = Some(raw_bytes);
-  ctx.resize = task
-    .resize_override
-    .unwrap_or(config.resize);
-  ctx.adjust = config.adjust;
-  ctx.metadata_policy = config.metadata_policy;
-  ctx.transform = config.transform;
-  ctx.watermark = config.watermark.clone();
-  ctx.dry_run = config.dry_run;
-  ctx.bayer_only = config.bayer_only;
-
-  // CPU 密集流水线在阻塞线程池中执行，避免阻塞 tokio 运行时
-  let result = tokio::task::spawn_blocking(move || {
-    let r = pipeline.execute(&mut ctx);
-    (r, ctx)
-  })
-  .await
-  .map_err(|e| AppError::Other(e.to_string()))?;
-
-  let (pipeline_result, mut ctx) = result;
-  pipeline_result?;
-
-  if let Some(max_bytes) = config.target_max_bytes {
-    if let Some(ref image) = ctx.image {
-      if crate::processing::quality_fit::supports_quality_target(ctx.target_format) {
-        let fitted = crate::processing::quality_fit::fit_quality_to_max_bytes(
-          image,
-          ctx.target_format,
-          max_bytes,
-        )?;
-        let encoded = crate::processing::backends::native_backend::encode_dynamic_image(
-          image,
-          ctx.target_format,
-          fitted,
-        )?;
-        ctx.quality = fitted;
-        ctx.encoded_bytes = Some(encoded);
-      }
+    if let Some(max_bytes) = config.target_max_bytes {
+        if let Some(ref image) = ctx.image {
+            if crate::processing::quality_fit::supports_quality_target(ctx.target_format) {
+                let fitted = crate::processing::quality_fit::fit_quality_to_max_bytes(
+                    image,
+                    ctx.target_format,
+                    max_bytes,
+                )?;
+                let encoded = crate::processing::backends::native_backend::encode_dynamic_image(
+                    image,
+                    ctx.target_format,
+                    fitted,
+                )?;
+                ctx.quality = fitted;
+                ctx.encoded_bytes = Some(encoded);
+            }
+        }
     }
-  }
 
-  let encoded = ctx.encoded_bytes.ok_or_else(|| AppError::Pipeline {
-    step: "output".into(),
-    reason: "no encoded bytes produced".into(),
-  })?;
-  let output_size = encoded.len() as u64;
+    let encoded = ctx.encoded_bytes.ok_or_else(|| AppError::Pipeline {
+        step: "output".into(),
+        reason: "no encoded bytes produced".into(),
+    })?;
+    let output_size = encoded.len() as u64;
 
-  if !config.dry_run {
-    atomic_write(&task.output_path, &encoded).await?;
-    #[cfg(feature = "review")]
-    if config.burn_review_annotations {
-      use crate::review::ReviewConversionBridge;
-      if let Ok(service) = crate::review::ReviewService::open() {
-        let _ = service.burn_annotations_for_export(
-          &task.input_path,
-          &task.output_path,
-          config.quality.value(),
-        );
-      }
+    if !config.dry_run {
+        atomic_write(&task.output_path, &encoded).await?;
+        #[cfg(feature = "review")]
+        if config.burn_review_annotations {
+            use crate::review::ReviewConversionBridge;
+            if let Ok(service) = crate::review::ReviewService::open() {
+                let _ = service.burn_annotations_for_export(
+                    &task.input_path,
+                    &task.output_path,
+                    config.quality.value(),
+                );
+            }
+        }
     }
-  }
 
-  Ok(TaskOutcome { output_size })
+    Ok(TaskOutcome { output_size })
 }
