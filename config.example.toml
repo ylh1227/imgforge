@@ -49,3 +49,31 @@ extensions = []
 
 # min_size = 1024
 # max_size = 10485760
+
+# 移动设备拉取。ADB 默认优先使用发布包内置 platform-tools/adb。
+[mobile_pull]
+enabled = false
+backend = "adb"                 # auto | fs | adb
+source_path = "/sdcard/DCIM"    # adb: Android 路径；fs: 本地挂载目录
+staging_dir = ".imgforge/mobile-import"
+preserve_structure = true
+adb_mode = "auto"               # auto | bundled | custom | path
+# adb_serial = "DEVICE_SERIAL"
+# adb_path = "/path/to/adb"
+allow_path_fallback = true
+delete_after_pull = false       # 第一版不支持删除设备端文件
+
+# 远端服务器接入（生产栈：Postgres + Redis Streams + S3/MinIO + imgforge-server）
+# SQLite / 磁盘 / 内存队列只作为测试和单机开发后备。Token 请用环境变量 IMGFORGE_REMOTE_TOKEN。
+[remote]
+enabled = false
+# base_url = "http://127.0.0.1:8787"
+# workspace_id = "default"
+# auth_mode = "none"   # none | env_bearer | keychain
+timeout_secs = 30
+offline_cache = true
+# cache_path = "~/.imgforge/remote_jobs.toml"
+# 服务器：docker compose -f deploy/docker-compose.yml up --build
+# 服务端环境：IMGFORGE_DATABASE_URL、IMGFORGE_REDIS_URL、IMGFORGE_S3_*、IMGFORGE_SERVER_TOKEN
+# 可选：IMGFORGE_DEFAULT_WORKSPACE、IMGFORGE_RATE_LIMIT_PER_MINUTE（默认 120）
+# 客户端：enabled=true 且 base_url 指向服务器；CLI 用 --remote 或 remote submit

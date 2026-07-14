@@ -155,6 +155,7 @@ impl ImageFormat {
     }
 
     pub fn all_supported() -> Vec<Self> {
+        #[allow(unused_mut)]
         let mut formats = vec![
             Self::Jpeg,
             Self::Png,

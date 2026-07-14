@@ -189,7 +189,7 @@ impl GridVideoExportService {
         );
         let duration_sec = duration_ms as f64 / 1000.0;
 
-        let mut cmd = Command::new(ffmpeg_path);
+        let mut cmd = crate::process_util::command(ffmpeg_path);
         cmd.args(["-hide_banner", "-loglevel", "error"]);
         for video in &req.videos {
             let ss = video.effective_time_ms(req.start_time_ms) as f64 / 1000.0;
@@ -513,7 +513,7 @@ fn escape_filter_value(path: &Path) -> String {
 }
 
 fn check_ffmpeg(path: &str) -> VideoReviewResult<bool> {
-    let out = Command::new(path)
+    let out = crate::process_util::command(path)
         .arg("-version")
         .output()
         .map_err(|e| VideoReviewError::FfmpegUnavailable(e.to_string()))?;

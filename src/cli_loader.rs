@@ -149,6 +149,38 @@ fn apply_cli_overrides(config: &mut AppConfig, cli: &Cli) {
     if cli.bayer_only {
         config.bayer_only = true;
     }
+    if cli.remote {
+        config.remote.enabled = true;
+    }
+    config.remote.apply_env_overrides();
+
+    if cli.mobile_pull {
+        config.mobile_pull.enabled = true;
+    }
+    if let Some(backend) = cli.mobile_backend {
+        config.mobile_pull.backend = backend;
+        config.mobile_pull.enabled = true;
+    }
+    if let Some(source) = &cli.mobile_source {
+        config.mobile_pull.source_path = source.clone();
+        config.mobile_pull.enabled = true;
+    }
+    if let Some(staging) = &cli.mobile_staging {
+        config.mobile_pull.staging_dir = staging.clone();
+        config.mobile_pull.enabled = true;
+    }
+    if let Some(serial) = &cli.adb_serial {
+        config.mobile_pull.adb_serial = Some(serial.clone());
+        config.mobile_pull.enabled = true;
+    }
+    if let Some(mode) = cli.adb_mode {
+        config.mobile_pull.adb_mode = mode;
+        config.mobile_pull.enabled = true;
+    }
+    if let Some(path) = &cli.adb_path {
+        config.mobile_pull.adb_path = Some(path.clone());
+        config.mobile_pull.enabled = true;
+    }
 
     config.verbose = cli.verbose;
 }

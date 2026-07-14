@@ -51,6 +51,15 @@ cp scripts/QUICKSTART.txt "$RES_DIR/"
 cp README.md "$RES_DIR/"
 cp LICENSE "$RES_DIR/"
 
+PT_SRC="$ROOT/assets/platform-tools/macos"
+if [ -d "$PT_SRC" ]; then
+  mkdir -p "$RES_DIR/platform-tools/macos"
+  cp -R "$PT_SRC"/. "$RES_DIR/platform-tools/macos/"
+  chmod +x "$RES_DIR/platform-tools/macos/adb" 2>/dev/null || true
+else
+  echo "note: bundled adb skipped; missing $PT_SRC"
+fi
+
 ARCHIVE="$ROOT/dist/imgforge-${VERSION}-${SUFFIX}-app.tar.gz"
 tar -czf "$ARCHIVE" -C "$STAGE" "$APP_NAME"
 

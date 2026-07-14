@@ -397,11 +397,7 @@ impl ReviewService {
         request: &crate::review::service::BatchImageScreenshotRequest,
         progress: Option<&dyn crate::ui::progress::ProgressReporter>,
     ) -> ReviewResult<crate::review::service::BatchImageScreenshotResult> {
-        crate::review::service::BatchImageScreenshotService::export(
-            &self.repo,
-            request,
-            progress,
-        )
+        crate::review::service::BatchImageScreenshotService::export(&self.repo, request, progress)
     }
 }
 

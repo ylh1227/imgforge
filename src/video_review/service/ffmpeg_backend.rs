@@ -2,11 +2,11 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::Command;
 use std::sync::Mutex;
 
 use serde::Deserialize;
 
+use crate::process_util;
 use crate::video_review::domain::VideoMetadata;
 use crate::video_review::error::{VideoReviewError, VideoReviewResult};
 
@@ -43,6 +43,9 @@ pub trait VideoBackend: Send + Sync {
         width: u32,
         output: &Path,
     ) -> VideoReviewResult<()>;
+    fn ffmpeg_bin(&self) -> &str {
+        "ffmpeg"
+    }
 }
 
 pub struct FfmpegBackend {
@@ -62,8 +65,12 @@ impl FfmpegBackend {
         Self::new(FfmpegConfig::default())
     }
 
+    pub fn ffmpeg_path(&self) -> &str {
+        &self.config.ffmpeg_path
+    }
+
     fn check_tool(path: &str) -> (bool, Option<String>) {
-        let output = Command::new(path).arg("-version").output();
+        let output = process_util::command(path).arg("-version").output();
         match output {
             Ok(out) if out.status.success() => {
                 let first = String::from_utf8_lossy(&out.stdout)
@@ -108,7 +115,7 @@ impl VideoBackend for FfmpegBackend {
             ));
         }
 
-        let output = Command::new(&self.config.ffprobe_path)
+        let output = process_util::command(&self.config.ffprobe_path)
             .args([
                 "-v",
                 "quiet",
@@ -162,16 +169,19 @@ impl VideoBackend for FfmpegBackend {
             String::new()
         };
 
-        let mut cmd = Command::new(&self.config.ffmpeg_path);
+        // 精确抽帧：-ss 放在 -i 之后，避免关键帧快搜偏差（对比/缺陷导出用）
+        let mut cmd = process_util::command(&self.config.ffmpeg_path);
         cmd.args([
             "-hide_banner",
             "-loglevel",
             "error",
+            "-i",
+            path.to_string_lossy().as_ref(),
             "-ss",
-            &format!("{seconds:.3}"),
+            &format!("{seconds:.6}"),
+            "-frames:v",
+            "1",
         ]);
-        cmd.args(["-i", path.to_string_lossy().as_ref()]);
-        cmd.args(["-frames:v", "1"]);
         if !scale.is_empty() {
             cmd.args(["-vf", &scale]);
         }
@@ -191,6 +201,10 @@ impl VideoBackend for FfmpegBackend {
             });
         }
         Ok(())
+    }
+
+    fn ffmpeg_bin(&self) -> &str {
+        &self.config.ffmpeg_path
     }
 }
 

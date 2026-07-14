@@ -60,7 +60,19 @@ impl Executor {
         };
         progress_reporter.set_total(total);
 
-        let semaphore = Arc::new(Semaphore::new(self.config.concurrency.value()));
+        // 大图全量读入内存时，按输入体积动态收紧并发，降低峰值 RSS。
+        let max_input = tasks.iter().map(|t| t.input_size).max().unwrap_or(0);
+        let configured = self.config.concurrency.value();
+        let effective = effective_concurrency(configured, max_input, total);
+        if effective < configured {
+            tracing::info!(
+                configured,
+                effective,
+                max_input_bytes = max_input,
+                "reduced concurrency for large inputs"
+            );
+        }
+        let semaphore = Arc::new(Semaphore::new(effective));
 
         if total == 0 {
             tracing::info!(scanned, skipped, "no tasks to process after filtering");
@@ -232,4 +244,35 @@ async fn process_single_task(
     }
 
     Ok(TaskOutcome { output_size })
+}
+
+/// 根据最大输入体积与任务数，估算更安全的并发上限。
+///
+/// 经验阈值：单文件 ≥ 32 MiB 时开始收紧；≥ 128 MiB 时进一步限制。
+fn effective_concurrency(configured: usize, max_input_bytes: u64, task_count: usize) -> usize {
+    let configured = configured.max(1);
+    if task_count <= 1 {
+        return 1.min(configured);
+    }
+    let by_size = if max_input_bytes >= 128 * 1024 * 1024 {
+        1
+    } else if max_input_bytes >= 32 * 1024 * 1024 {
+        2
+    } else {
+        configured
+    };
+    configured.min(by_size).max(1)
+}
+
+#[cfg(test)]
+mod concurrency_tests {
+    use super::effective_concurrency;
+
+    #[test]
+    fn large_inputs_reduce_concurrency() {
+        assert_eq!(effective_concurrency(8, 40 * 1024 * 1024, 10), 2);
+        assert_eq!(effective_concurrency(8, 200 * 1024 * 1024, 10), 1);
+        assert_eq!(effective_concurrency(8, 1024 * 1024, 10), 8);
+        assert_eq!(effective_concurrency(8, 1024, 1), 1);
+    }
 }

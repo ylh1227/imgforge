@@ -10,19 +10,22 @@ use crate::io::paths;
 
 /// 校验输出路径，防止路径穿越攻击。
 pub fn validate_output_path(base: &Path, output: &Path) -> AppResult<()> {
-    if output
-        .components()
-        .any(|c| matches!(c, std::path::Component::ParentDir))
-    {
-        return Err(AppError::PathTraversal(output.to_path_buf()));
-    }
+    // 拒绝显式 `..` 组件。
+    paths::ensure_safe_relative(output)?;
 
-    // 输出目录可以独立于输入目录（跨盘符在 Windows 上很常见）
-    let _base = paths::canonicalize(base);
-    let _parent = output
-        .parent()
-        .map(paths::canonicalize)
-        .unwrap_or_else(|| PathBuf::from("."));
+    // 若输出根目录已存在，且能解析出相对关系，则再次确认相对路径安全。
+    // 输出可在不同盘符（Windows），此时 strip_prefix 失败属正常，不视为穿越。
+    if base.exists() {
+        let base_canon = paths::canonicalize(base);
+        if let Some(parent) = output.parent() {
+            if parent.exists() {
+                let parent_canon = paths::canonicalize(parent);
+                if let Ok(rel) = parent_canon.strip_prefix(&base_canon) {
+                    paths::ensure_safe_relative(rel)?;
+                }
+            }
+        }
+    }
 
     Ok(())
 }

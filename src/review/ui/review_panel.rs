@@ -10,7 +10,11 @@ use crate::gui::prefs::{self, ActionHistoryEntry, ActionHistoryStatus, GuiPrefs}
 use crate::gui::theme;
 use crate::gui::widgets;
 use crate::gui::BackgroundJob;
-use crate::review::domain::annotation::Annotation;
+use crate::remote::DataSource;
+use crate::review::domain::annotation::{
+    Annotation, AnnotationKind, AnnotationPosition, AnnotationStyle, ArrowPosition,
+    RectanglePosition, TextPosition,
+};
 use crate::review::domain::image_item::next_image_id;
 use crate::review::domain::{BatchStats, ReviewBatch, ReviewImageItem, ReviewStatus};
 use crate::review::error::ReviewResult;
@@ -28,7 +32,8 @@ use crate::review::ui::properties_panel::{properties_panel_ui, PropertiesPanelSt
 use crate::review::ui::shortcut_panel::{shortcut_panel_ui, ShortcutPanelState};
 use crate::review::ui::shortcuts::handle_shortcuts;
 use crate::review::ui::sidebar::{
-    batch_list_ui, format_stats, image_list_ui, status_buttons, SidebarState,
+    batch_list_ui, filter_sort_ui, format_stats, image_list_body_ui, image_list_ui, status_buttons,
+    SidebarState,
 };
 use crate::review::ui::ListThumbnailCache;
 use crate::review::RemarkWriteMode;
@@ -36,24 +41,39 @@ use crate::review::{ReviewConversionBridge, ReviewService};
 use crate::ui::progress::ProgressReporter;
 use crate::video_review::service::ScreenshotFormat;
 
-/// 主应用向评审面板提供的上下文（评审模块不依赖 gui 内部实现）。
-pub trait ReviewPanelHost {
-    /// 格式转换页待处理/已导入的路径队列。
-    fn conversion_queue_paths(&self) -> &[PathBuf];
-    /// 转换输出目录（用于对比视图查找转换后预览）。
-    fn output_directory(&self) -> &str;
+use crate::review::ui::review_panel_helpers::{
+    annotation_kind_label, batch_op_description, file_mtime_key, format_contact_sheets,
+    histogram_ui, truncate_text, viewport_size,
+};
+
+use crate::review::ui::review_panel_types::{BatchOpKind, DialogState, RightTab};
+pub use crate::review::ui::review_panel_types::{ReviewPanelHost, ReviewPanelOutput};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReviewLayoutMode {
+    ThreeColumn,
+    TwoColumn,
+    Stacked,
 }
 
-/// 评审面板向主应用输出的联动指令。
-#[derive(Debug, Clone, Default)]
-pub struct ReviewPanelOutput {
-    /// 将「通过」的图片路径加入格式转换队列。
-    pub enqueue_approved: Vec<PathBuf>,
-    /// 单图转换参数覆盖（评审标记带入队列），与 `enqueue_approved` 对应。
-    pub enqueue_params: Vec<crate::review::ConversionTaskParams>,
-    pub status_message: String,
-    /// 请求主应用切回格式转换 Tab。
-    pub switch_to_convert: bool,
+impl ReviewLayoutMode {
+    fn from_width(width: f32) -> Self {
+        if width >= theme::REVIEW_THREE_COL_BREAKPOINT {
+            Self::ThreeColumn
+        } else if width >= theme::REVIEW_TWO_COL_BREAKPOINT {
+            Self::TwoColumn
+        } else {
+            Self::Stacked
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum ReviewStackPane {
+    #[default]
+    List,
+    Canvas,
+    Inspector,
 }
 
 /// egui 评审主面板（独立 Tab 入口）。
@@ -78,11 +98,26 @@ pub struct ReviewPanel {
     batch_remark_mode: RemarkWriteMode,
     last_batch_annotation_ids: Vec<i64>,
     config: ReviewModuleConfig,
+    remote_config: crate::remote::RemoteConfig,
+    remote_batch_id: Option<String>,
+    remote_item_ids: HashMap<i64, String>,
+    data_source: crate::remote::DataSource,
+    remote_batches: Vec<crate::remote::RemoteReviewBatchSummary>,
+    remote_items: Vec<crate::remote::RemoteReviewItem>,
+    remote_id_map: crate::remote::RemoteIdMap,
+    batches_fetch: Option<crate::remote::RemoteFetch<Vec<crate::remote::RemoteReviewBatchSummary>>>,
+    items_fetch:
+        Option<crate::remote::RemoteFetch<Vec<(crate::remote::RemoteReviewItem, Option<PathBuf>)>>>,
+    asset_fetch: Option<crate::remote::RemoteFetch<(i64, PathBuf)>>,
+    remote_loading: bool,
+    pending_open_remote_batch_id: Option<String>,
     properties: PropertiesPanelState,
     shortcut_panel: ShortcutPanelState,
     show_shortcut_panel: bool,
     last_backup_minute: u64,
     right_tab: RightTab,
+    /// 小窗堆叠布局当前分段。
+    stack_pane: ReviewStackPane,
     all_tags: Vec<crate::review::ReviewTag>,
     current_image_tags: Vec<i64>,
     new_tag_name: String,
@@ -106,61 +141,15 @@ pub struct ReviewPanel {
     viewport_resize_frames: u8,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum RightTab {
-    #[default]
-    Review,
-    Info,
-    Analysis,
-    Annotations,
-    Tags,
-}
-
-impl RightTab {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Review => "评审属性",
-            Self::Info => "图片信息",
-            Self::Analysis => "分析",
-            Self::Annotations => "标注列表",
-            Self::Tags => "标签",
-        }
-    }
-
-    fn all() -> [Self; 5] {
-        [
-            Self::Review,
-            Self::Info,
-            Self::Analysis,
-            Self::Annotations,
-            Self::Tags,
-        ]
-    }
-}
-
-#[derive(Debug, Clone)]
-enum DialogState {
-    ConfirmBatchOp(BatchOpKind),
-    IrreversibleStatus {
-        target: ReviewStatus,
-        warnings: Vec<StatusTransitionWarning>,
-        confirm: bool,
-    },
-}
-
-#[derive(Debug, Clone, Copy)]
-enum BatchOpKind {
-    SetStatus(ReviewStatus),
-    ClearAnnotations,
-    AddRemark,
-    CopyCurrentAnnotations,
-}
-
 impl ReviewPanel {
     pub fn new() -> ReviewResult<Self> {
         let service = ReviewService::open()?;
         let shortcuts = service.shortcuts.clone();
         let config = ReviewModuleConfig::load().unwrap_or_default();
+        let mut remote_config = crate::remote::RemoteConfig::default();
+        remote_config.apply_env_overrides();
+        let data_source =
+            DataSource::from_remote_enabled(crate::remote::remote_enabled(&remote_config));
         let mut panel = Self {
             service,
             batches: Vec::new(),
@@ -182,11 +171,24 @@ impl ReviewPanel {
             batch_remark_mode: RemarkWriteMode::Overwrite,
             last_batch_annotation_ids: Vec::new(),
             config,
+            remote_config,
+            remote_batch_id: None,
+            remote_item_ids: HashMap::new(),
+            data_source,
+            remote_batches: Vec::new(),
+            remote_items: Vec::new(),
+            remote_id_map: crate::remote::RemoteIdMap::new(),
+            batches_fetch: None,
+            items_fetch: None,
+            asset_fetch: None,
+            remote_loading: false,
+            pending_open_remote_batch_id: None,
             properties: PropertiesPanelState::default(),
             shortcut_panel: ShortcutPanelState::new(&shortcuts),
             show_shortcut_panel: false,
             last_backup_minute: 0,
             right_tab: RightTab::default(),
+            stack_pane: ReviewStackPane::default(),
             all_tags: Vec::new(),
             current_image_tags: Vec::new(),
             new_tag_name: String::new(),
@@ -210,13 +212,25 @@ impl ReviewPanel {
         };
         let _ = panel.reload_tags();
         panel.reload_batches()?;
-        if let Ok((batch, image)) = panel.service.restore_session() {
-            panel.current_batch = batch;
-            panel.current_image = image;
-            let _ = panel.reload_images();
-            panel.load_current_annotations();
+        if panel.data_source == DataSource::Local {
+            if let Ok((batch, image)) = panel.service.restore_session() {
+                panel.current_batch = batch;
+                panel.current_image = image;
+                let _ = panel.reload_images();
+                panel.load_current_annotations();
+            }
         }
         Ok(panel)
+    }
+
+    pub fn set_remote_config(&mut self, remote_config: crate::remote::RemoteConfig) {
+        self.remote_config = remote_config;
+        let want =
+            DataSource::from_remote_enabled(crate::remote::remote_enabled(&self.remote_config));
+        if self.data_source != want {
+            self.data_source = want;
+            let _ = self.reload_batches();
+        }
     }
 
     /// 由主应用在切换 Tab 前调度：从转换队列创建评审批次。
@@ -234,8 +248,22 @@ impl ReviewPanel {
         std::mem::take(&mut self.output)
     }
 
+    pub fn open_remote_batch(&mut self, batch_id: &str) {
+        self.data_source = DataSource::Remote;
+        self.remote_batch_id = Some(batch_id.to_string());
+        self.pending_open_remote_batch_id = Some(batch_id.to_string());
+        self.start_remote_batches_fetch();
+    }
+
+    pub fn refresh_remote_catalog(&mut self) {
+        self.data_source = DataSource::Remote;
+        self.pending_open_remote_batch_id = None;
+        self.start_remote_batches_fetch();
+    }
+
     /// 渲染评审面板（三栏 + 顶栏 + 底栏）。
     pub fn ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, host: &dyn ReviewPanelHost) {
+        self.poll_remote_fetches(ctx);
         self.process_pending_import();
         self.handle_shortcut_actions(ctx);
         self.poll_screenshot_job(ctx);
@@ -256,27 +284,107 @@ impl ReviewPanel {
         self.maybe_scheduled_backup();
 
         let dark = ui.style().visuals.dark_mode;
-        let narrow = ui.available_width() < theme::REVIEW_NARROW_BREAKPOINT;
+        let layout = ReviewLayoutMode::from_width(ui.available_width());
+        let viewport_h = ui.available_height();
+        // 小窗/矮视口：整页滚动（顶栏+正文一起滚），避免顶栏占满导致正文高度为 0
+        // 高屏三栏：顶栏固定，正文吃满剩余高度
+        let page_scroll = !matches!(layout, ReviewLayoutMode::ThreeColumn) || viewport_h < 780.0;
 
-        widgets::navigation_header(ui, "图片评审");
-        ui.add_space(20.0);
+        if page_scroll {
+            egui::ScrollArea::vertical()
+                .id_salt("review_page_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    let page_w = ui
+                        .available_width()
+                        .min(ui.max_rect().width())
+                        .max(200.0);
+                    ui.set_max_width(page_w);
+                    ui.set_width(page_w);
+                    self.paint_chrome(ui, ctx, host, dark, true);
+                    match layout {
+                        ReviewLayoutMode::ThreeColumn => {
+                            let row_h = 520.0_f32.min(viewport_h.max(360.0)).max(360.0);
+                            let body_w = ui.available_width();
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(body_w, row_h),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    ui.set_width(body_w);
+                                    ui.set_min_height(row_h);
+                                    ui.set_max_height(row_h);
+                                    self.layout_three_column(ui, ctx, host, dark);
+                                },
+                            );
+                        }
+                        ReviewLayoutMode::TwoColumn => {
+                            self.layout_two_column(ui, ctx, host, dark);
+                        }
+                        ReviewLayoutMode::Stacked => {
+                            self.layout_stacked(ui, ctx, host, dark);
+                        }
+                    }
+                    ui.add_space(28.0);
+                });
+        } else {
+            self.paint_chrome(ui, ctx, host, dark, false);
+            let body_h = ui.available_height().max(theme::REVIEW_MIN_BODY_H);
+            let body_w = ui.available_width();
+            ui.allocate_ui_with_layout(
+                egui::vec2(body_w, body_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_min_height(body_h);
+                    ui.set_max_height(body_h);
+                    ui.set_width(body_w);
+                    self.layout_three_column(ui, ctx, host, dark);
+                },
+            );
+        }
+    }
+
+    fn paint_chrome(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        host: &dyn ReviewPanelHost,
+        dark: bool,
+        compact: bool,
+    ) {
+        if compact {
+            ui.label(
+                RichText::new("ImgForge")
+                    .font(theme::title_font())
+                    .strong()
+                    .color(theme::primary_label(dark)),
+            );
+            ui.label(
+                RichText::new("批注、对比与通过状态")
+                    .font(theme::subtitle_font())
+                    .color(theme::secondary_label(dark)),
+            );
+            ui.add_space(8.0);
+        } else {
+            widgets::navigation_header(ui, "批注、对比与通过状态");
+            widgets::page_header_gap(ui);
+        }
 
         widgets::grouped_section(ui, "操作", |ui| {
             self.top_toolbar(ui, host);
         });
 
-        ui.add_space(16.0);
+        ui.add_space(if compact { 8.0 } else { theme::SECTION_GAP });
 
         if let Some(err) = &self.error {
             widgets::error_banner(ui, err);
-            ui.add_space(8.0);
+            ui.add_space(6.0);
         }
 
         widgets::status_banner(ui, &self.status_message(dark), false);
-        ui.add_space(12.0);
+        ui.add_space(6.0);
 
         self.main_workflow_bar(ui, ctx, dark);
-        ui.add_space(16.0);
+        ui.add_space(if compact { 8.0 } else { theme::SECTION_GAP });
 
         if self.show_shortcut_panel {
             widgets::grouped_section(ui, "快捷键", |ui| {
@@ -285,13 +393,7 @@ impl ReviewPanel {
                     self.set_status("快捷键已更新");
                 }
             });
-            ui.add_space(16.0);
-        }
-
-        if narrow {
-            self.layout_stacked(ui, ctx, host, dark);
-        } else {
-            self.layout_three_column(ui, ctx, host, dark);
+            ui.add_space(8.0);
         }
     }
 
@@ -318,14 +420,168 @@ impl ReviewPanel {
     }
 
     fn top_toolbar(&mut self, ui: &mut egui::Ui, host: &dyn ReviewPanelHost) {
+        let avail = ui.available_width();
+        ui.set_width(avail);
+        let narrow = avail < theme::REVIEW_TWO_COL_BREAKPOINT;
+        let queue_len = host.conversion_queue_paths().len();
+
+        if narrow {
+            if widgets::full_width_primary_button(ui, "从文件夹创建", true).clicked() {
+                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                    self.create_batch_from_folder(&folder);
+                }
+            }
+            ui.add_space(6.0);
+            let gap = 6.0;
+            let cell = ((ui.available_width() - gap) * 0.5).max(100.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                if widgets::full_width_secondary_button_in(
+                    ui,
+                    &format!("队列导入 ({queue_len})"),
+                    queue_len > 0,
+                    cell,
+                )
+                .clicked()
+                {
+                    let paths = host.conversion_queue_paths().to_vec();
+                    self.import_from_paths(&paths, "转换队列导入");
+                }
+                if widgets::full_width_secondary_button_in(
+                    ui,
+                    "导出 CSV",
+                    self.current_batch.is_some(),
+                    cell,
+                )
+                .clicked()
+                {
+                    self.export_csv();
+                }
+            });
+            ui.add_space(gap);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                if widgets::full_width_secondary_button_in(
+                    ui,
+                    "导出标注",
+                    self.current_image.is_some(),
+                    cell,
+                )
+                .clicked()
+                {
+                    self.export_sidecar();
+                }
+                if widgets::full_width_secondary_button_in(
+                    ui,
+                    "批量 JSON",
+                    self.current_batch.is_some(),
+                    cell,
+                )
+                .clicked()
+                {
+                    self.export_batch_json();
+                }
+            });
+            ui.add_space(gap);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                if widgets::full_width_secondary_button_in(ui, "快捷键", true, cell).clicked() {
+                    self.show_shortcut_panel = !self.show_shortcut_panel;
+                }
+                if widgets::full_width_secondary_button_in(ui, "备份数据", true, cell).clicked() {
+                    match crate::review::storage::create_backup() {
+                        Ok(p) => self.set_status(format!("已备份：{}", p.display())),
+                        Err(e) => self.error = Some(e.to_string()),
+                    }
+                }
+            });
+            ui.add_space(gap);
+            if widgets::full_width_secondary_button(ui, "清理缩略图缓存", true).clicked() {
+                match crate::review::service::ThumbnailService::clear_cache() {
+                    Ok(n) => {
+                        self.list_thumbs.clear();
+                        self.set_status(format!("已清理 {n} 个缩略图缓存"));
+                    }
+                    Err(e) => self.error = Some(e.to_string()),
+                }
+            }
+            if crate::remote::remote_enabled(&self.remote_config) {
+                ui.add_space(gap);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    ui.label("数据源");
+                    if ui
+                        .selectable_label(self.data_source == DataSource::Remote, "远程")
+                        .clicked()
+                        && self.data_source != DataSource::Remote
+                    {
+                        self.data_source = DataSource::Remote;
+                        self.start_remote_batches_fetch();
+                    }
+                    if ui
+                        .selectable_label(self.data_source == DataSource::Local, "本地")
+                        .clicked()
+                        && self.data_source != DataSource::Local
+                    {
+                        self.switch_to_local("已切换到本地数据源");
+                    }
+                    if self.remote_loading {
+                        ui.spinner();
+                    }
+                    if widgets::compact_secondary_button(
+                        ui,
+                        "刷新远程",
+                        self.data_source == DataSource::Remote && !self.remote_loading,
+                    )
+                    .clicked()
+                    {
+                        self.start_remote_batches_fetch();
+                    }
+                });
+            }
+            return;
+        }
+
         ui.horizontal_wrapped(|ui| {
+            ui.set_max_width(avail);
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
             if widgets::compact_primary_button(ui, "从文件夹创建", true).clicked() {
                 if let Some(folder) = rfd::FileDialog::new().pick_folder() {
                     self.create_batch_from_folder(&folder);
                 }
             }
+            if crate::remote::remote_enabled(&self.remote_config) {
+                ui.label("数据源");
+                if ui
+                    .selectable_label(self.data_source == DataSource::Remote, "远程")
+                    .clicked()
+                    && self.data_source != DataSource::Remote
+                {
+                    self.data_source = DataSource::Remote;
+                    self.start_remote_batches_fetch();
+                }
+                if ui
+                    .selectable_label(self.data_source == DataSource::Local, "本地")
+                    .clicked()
+                    && self.data_source != DataSource::Local
+                {
+                    self.switch_to_local("已切换到本地数据源");
+                }
+                if self.remote_loading {
+                    ui.spinner();
+                    ui.label("加载中…");
+                }
+                if widgets::compact_secondary_button(
+                    ui,
+                    "刷新远程",
+                    self.data_source == DataSource::Remote && !self.remote_loading,
+                )
+                .clicked()
+                {
+                    self.start_remote_batches_fetch();
+                }
+            }
 
-            let queue_len = host.conversion_queue_paths().len();
             if widgets::compact_secondary_button(
                 ui,
                 &format!("从转换队列导入 ({queue_len})"),
@@ -336,8 +592,6 @@ impl ReviewPanel {
                 let paths = host.conversion_queue_paths().to_vec();
                 self.import_from_paths(&paths, "转换队列导入");
             }
-
-            ui.separator();
 
             if widgets::compact_secondary_button(ui, "导出 CSV", self.current_batch.is_some())
                 .clicked()
@@ -354,9 +608,6 @@ impl ReviewPanel {
             {
                 self.export_batch_json();
             }
-
-            ui.separator();
-
             if widgets::compact_secondary_button(ui, "快捷键", true).clicked() {
                 self.show_shortcut_panel = !self.show_shortcut_panel;
             }
@@ -386,27 +637,29 @@ impl ReviewPanel {
         let can_next = idx.map(|i| i + 1 < self.images.len()).unwrap_or(false);
 
         widgets::grouped_section(ui, "常用", |ui| {
+            let avail = ui.available_width();
+            ui.set_width(avail);
             let selected_count = self.sidebar.selected_ids.len();
             let page_label = idx.map(|i| format!("{}/{}", i + 1, self.images.len()));
-            let left_w = widgets::workflow_left_zone_width(ui, page_label.as_deref());
+            let narrow = avail < theme::REVIEW_TWO_COL_BREAKPOINT;
 
-            widgets::toolbar_row(ui, |ui| {
-                widgets::toolbar_left_zone(ui, left_w, |ui| {
-                    if widgets::compact_secondary_button(ui, "◀ 上一张", can_prev).clicked() {
-                        self.select_relative(-1);
-                    }
-                    if widgets::compact_secondary_button(ui, "下一张 ▶", can_next).clicked() {
-                        self.select_relative(1);
-                    }
-                    if let Some(label) = &page_label {
-                        ui.label(
-                            RichText::new(label)
-                                .size(13.0)
-                                .color(theme::secondary_label(dark)),
-                        );
-                    }
-                });
-                widgets::toolbar_separator(ui);
+            // 导航 + 状态：始终可换行，避免小窗单行挤压
+            ui.horizontal_wrapped(|ui| {
+                ui.set_max_width(avail);
+                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                if widgets::compact_secondary_button(ui, "◀ 上一张", can_prev).clicked() {
+                    self.select_relative(-1);
+                }
+                if widgets::compact_secondary_button(ui, "下一张 ▶", can_next).clicked() {
+                    self.select_relative(1);
+                }
+                if let Some(label) = &page_label {
+                    ui.label(
+                        RichText::new(label)
+                            .size(13.0)
+                            .color(theme::secondary_label(dark)),
+                    );
+                }
                 let current_status = self.current_item().map(|item| item.status);
                 if let Some(status) = status_buttons(ui, current_status) {
                     if let Some(id) = self.current_image {
@@ -417,59 +670,76 @@ impl ReviewPanel {
 
             ui.add_space(8.0);
 
-            widgets::toolbar_row(ui, |ui| {
-                widgets::toolbar_left_zone(ui, left_w, |ui| {
-                    widgets::toolbar_field_label(ui, "对比模式", dark);
+            if narrow {
+                ui.horizontal_wrapped(|ui| {
+                    ui.set_max_width(avail);
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    widgets::toolbar_field_label(ui, "对比", dark);
                     self.compare_view.mode_selector_ui(ui);
                 });
-                widgets::toolbar_separator(ui);
-                let selected = selected_count;
-                let batch_label = format!("批量对比 ({selected})");
-                let batch_clicked = if selected >= 2 {
-                    widgets::compact_primary_button(ui, &batch_label, true).clicked()
+                ui.add_space(6.0);
+                let batch_label = format!("批量对比 ({selected_count})");
+                let enabled = selected_count >= 2;
+                let clicked = if enabled {
+                    widgets::full_width_primary_button(ui, &batch_label, true).clicked()
                 } else {
-                    widgets::compact_secondary_button(ui, &batch_label, false).clicked()
+                    widgets::full_width_secondary_button(ui, &batch_label, false).clicked()
                 };
-                if batch_clicked {
+                if clicked {
                     self.start_batch_compare();
                 }
-            });
+            } else {
+                ui.horizontal_wrapped(|ui| {
+                    ui.set_max_width(avail);
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    widgets::toolbar_field_label(ui, "对比模式", dark);
+                    self.compare_view.mode_selector_ui(ui);
+                    let batch_label = format!("批量对比 ({selected_count})");
+                    let batch_clicked = if selected_count >= 2 {
+                        widgets::compact_primary_button(ui, &batch_label, true).clicked()
+                    } else {
+                        widgets::compact_secondary_button(ui, &batch_label, false).clicked()
+                    };
+                    if batch_clicked {
+                        self.start_batch_compare();
+                    }
+                });
+            }
 
             ui.add_space(8.0);
 
-            widgets::toolbar_row(ui, |ui| {
-                widgets::toolbar_left_zone(ui, left_w, |ui| {
-                    let canvas = self.canvas_size_for_view(ctx);
-                    if widgets::compact_secondary_button(
-                        ui,
-                        "适应窗口",
-                        has_image || selected_count >= 2,
-                    )
-                    .clicked()
-                    {
-                        self.compare_view.fit_to_window(canvas);
-                    }
-                    if widgets::compact_secondary_button(
-                        ui,
-                        "100%",
-                        has_image || selected_count >= 2,
-                    )
-                    .clicked()
-                    {
-                        self.compare_view.set_zoom_100(canvas);
-                    }
-                    if widgets::compact_secondary_button(ui, "撤销标注", has_image).clicked() {
-                        if let Some(id) = self.current_image {
-                            if let Err(e) = self.service.undo_last_annotation(id) {
-                                self.error = Some(e.to_string());
-                            } else {
-                                self.load_current_annotations();
-                                let _ = self.reload_images();
-                            }
+            ui.horizontal_wrapped(|ui| {
+                ui.set_max_width(avail);
+                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                let canvas = self.canvas_size_for_view(ctx);
+                if widgets::compact_secondary_button(
+                    ui,
+                    "适应窗口",
+                    has_image || selected_count >= 2,
+                )
+                .clicked()
+                {
+                    self.compare_view.fit_to_window(canvas);
+                }
+                if widgets::compact_secondary_button(
+                    ui,
+                    "100%",
+                    has_image || selected_count >= 2,
+                )
+                .clicked()
+                {
+                    self.compare_view.set_zoom_100(canvas);
+                }
+                if widgets::compact_secondary_button(ui, "撤销标注", has_image).clicked() {
+                    if let Some(id) = self.current_image {
+                        if let Err(e) = self.service.undo_last_annotation(id) {
+                            self.error = Some(e.to_string());
+                        } else {
+                            self.load_current_annotations();
+                            let _ = self.reload_images();
                         }
                     }
-                });
-                widgets::toolbar_separator(ui);
+                }
                 if widgets::compact_secondary_button(
                     ui,
                     "仅显示未评审",
@@ -485,7 +755,6 @@ impl ReviewPanel {
                     self.sidebar.show_recycle = false;
                     let _ = self.reload_images();
                 }
-
                 if ui
                     .checkbox(
                         &mut self.config.auto_advance_on_status,
@@ -495,29 +764,28 @@ impl ReviewPanel {
                 {
                     let _ = self.config.save();
                 }
-
-                widgets::toolbar_separator(ui);
-
-                let approved = self
-                    .current_batch
-                    .map(|batch_id| {
-                        self.batch_stats
-                            .iter()
-                            .find(|(id, _)| *id == batch_id)
-                            .map(|(_, s)| s.approved)
-                            .unwrap_or(0)
-                    })
-                    .unwrap_or(0);
-                if widgets::compact_primary_button(
-                    ui,
-                    &format!("回流转换队列 ({approved})"),
-                    approved > 0,
-                )
-                .clicked()
-                {
-                    self.enqueue_approved_to_convert();
-                }
             });
+
+            ui.add_space(6.0);
+            let approved = self
+                .current_batch
+                .map(|batch_id| {
+                    self.batch_stats
+                        .iter()
+                        .find(|(id, _)| *id == batch_id)
+                        .map(|(_, s)| s.approved)
+                        .unwrap_or(0)
+                })
+                .unwrap_or(0);
+            let reflux_label = format!("回流转换队列 ({approved})");
+            let reflux_clicked = if narrow {
+                widgets::full_width_primary_button(ui, &reflux_label, approved > 0).clicked()
+            } else {
+                widgets::compact_primary_button(ui, &reflux_label, approved > 0).clicked()
+            };
+            if reflux_clicked {
+                self.enqueue_approved_to_convert();
+            }
         });
     }
 
@@ -528,25 +796,144 @@ impl ReviewPanel {
         host: &dyn ReviewPanelHost,
         dark: bool,
     ) {
+        const GAP: f32 = 10.0;
+        let avail = ui.available_width();
+        let mut left_w = theme::REVIEW_LEFT_W;
+        let mut right_w = theme::REVIEW_RIGHT_W;
+        let min_center = theme::REVIEW_CENTER_MIN_W;
+        let budget = (avail - GAP * 2.0).max(0.0);
+        if budget < left_w + right_w + min_center {
+            let side_budget = (budget - min_center).max(400.0);
+            let scale = (side_budget / (left_w + right_w)).clamp(0.65, 1.0);
+            left_w = (theme::REVIEW_LEFT_W * scale).max(200.0);
+            right_w = (theme::REVIEW_RIGHT_W * scale).max(200.0);
+        }
+        let center_w = (budget - left_w - right_w).max(min_center);
+        // 预留底边，避免贴齐窗口底边裁切最后一行控件
+        let row_h = (ui.available_height() - 8.0).max(240.0);
+
         ui.horizontal_top(|ui| {
-            ui.vertical(|ui| {
-                ui.set_width(260.0);
-                self.left_column(ui, ctx, dark);
-            });
+            // egui 的 add_space 不会抵消 item_spacing；若不置零，列宽之和会超出 avail，右侧被裁切
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.allocate_ui_with_layout(
+                egui::vec2(left_w, row_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_min_width(left_w);
+                    ui.set_max_width(left_w);
+                    ui.set_width(left_w);
+                    ui.set_min_height(row_h);
+                    ui.set_max_height(row_h);
+                    // 上：批次+筛选可滚；下：图片列表占满剩余高度（避免底部按钮被裁切）
+                    self.left_column_split_viewport(ui, ctx, dark, row_h);
+                },
+            );
 
-            ui.separator();
+            ui.add_space(GAP);
 
-            ui.vertical(|ui| {
-                ui.set_min_width(320.0);
-                self.center_column(ui, ctx, host);
-            });
+            ui.allocate_ui_with_layout(
+                egui::vec2(center_w, row_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_min_width(center_w);
+                    ui.set_max_width(center_w);
+                    ui.set_width(center_w);
+                    ui.set_min_height(row_h);
+                    ui.set_max_height(row_h);
+                    self.center_column(ui, ctx, host);
+                },
+            );
 
-            ui.separator();
+            ui.add_space(GAP);
 
-            ui.vertical(|ui| {
-                ui.set_width(280.0);
-                self.right_column(ctx, ui, dark);
-            });
+            ui.allocate_ui_with_layout(
+                egui::vec2(right_w, row_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_min_width(right_w);
+                    ui.set_max_width(right_w);
+                    ui.set_width(right_w);
+                    ui.set_min_height(row_h);
+                    ui.set_max_height(row_h);
+                    egui::ScrollArea::vertical()
+                        .id_salt("review_three_col_right")
+                        .max_height(row_h)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            let content_w = ui
+                                .available_width()
+                                .min(ui.max_rect().width())
+                                .max(160.0);
+                            ui.set_max_width(content_w);
+                            ui.set_width(content_w);
+                            self.right_column(ctx, ui, dark);
+                            ui.add_space(24.0);
+                        });
+                },
+            );
+        });
+    }
+
+    /// 中等宽度：左列表 | 画布并排（限高可滚），属性全宽沉底，由外层滚动承载。
+    fn layout_two_column(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        host: &dyn ReviewPanelHost,
+        dark: bool,
+    ) {
+        const GAP: f32 = 10.0;
+        let avail = ui.available_width();
+        let left_w = theme::REVIEW_LEFT_W
+            .min(avail * 0.38)
+            .clamp(200.0, theme::REVIEW_LEFT_W);
+        let center_w = (avail - left_w - GAP).max(theme::REVIEW_CENTER_MIN_W);
+        // 固定画布区高度，避免按剩余高度百分比挤压「图片」列表
+        let row_h = 400.0_f32.min(ui.available_height().max(280.0)).max(280.0);
+
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.allocate_ui_with_layout(
+                egui::vec2(left_w, row_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_min_width(left_w);
+                    ui.set_max_width(left_w);
+                    ui.set_width(left_w);
+                    egui::ScrollArea::vertical()
+                        .id_salt("review_two_col_left")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            let content_w = ui
+                                .available_width()
+                                .min(ui.max_rect().width())
+                                .max(120.0);
+                            ui.set_width(content_w);
+                            self.left_column(ui, ctx, dark);
+                        });
+                },
+            );
+
+            ui.add_space(GAP);
+
+            ui.allocate_ui_with_layout(
+                egui::vec2(center_w, row_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_min_width(center_w);
+                    ui.set_max_width(center_w);
+                    ui.set_width(center_w);
+                    self.center_column(ui, ctx, host);
+                },
+            );
+        });
+
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(8.0);
+        widgets::grouped_section(ui, "属性与详情", |ui| {
+            ui.set_width(ui.available_width());
+            self.right_column(ctx, ui, dark);
         });
     }
 
@@ -557,20 +944,136 @@ impl ReviewPanel {
         host: &dyn ReviewPanelHost,
         dark: bool,
     ) {
-        ui.vertical(|ui| {
-            self.left_column(ui, ctx, dark);
-            ui.separator();
-            self.center_column(ui, ctx, host);
-            ui.separator();
-            self.right_column(ctx, ui, dark);
-        });
+        ui.set_width(ui.available_width());
+        widgets::mode_tab_bar(
+            ui,
+            &mut self.stack_pane,
+            &[
+                (ReviewStackPane::List, "列表"),
+                (ReviewStackPane::Canvas, "画布"),
+                (ReviewStackPane::Inspector, "属性"),
+            ],
+        );
+        ui.add_space(10.0);
+
+        match self.stack_pane {
+            ReviewStackPane::List => {
+                let col_w = ui.available_width();
+                ui.set_width(col_w);
+                self.left_column(ui, ctx, dark);
+            }
+            ReviewStackPane::Canvas => {
+                // 整页滚动场景下给画布固定可视高度，避免吃光后续空间
+                let area_h = 420.0;
+                let area_w = ui.available_width();
+                ui.allocate_ui_with_layout(
+                    egui::vec2(area_w, area_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_width(area_w);
+                        ui.set_min_height(area_h);
+                        ui.set_max_height(area_h);
+                        self.center_column(ui, ctx, host);
+                    },
+                );
+            }
+            ReviewStackPane::Inspector => {
+                let col_w = ui.available_width();
+                ui.set_width(col_w);
+                self.right_column(ctx, ui, dark);
+            }
+        }
     }
 
     fn left_column(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, dark: bool) {
+        let col_w = ui.available_width();
+        ui.set_min_width(col_w);
+        ui.set_max_width(col_w);
+        ui.set_width(col_w);
+        self.left_batch_section(ui, dark);
+        ui.add_space(12.0);
+        widgets::grouped_section(ui, "图片", |ui| {
+            let list_action = image_list_ui(
+                ui,
+                ctx,
+                &self.images,
+                self.current_image,
+                &mut self.sidebar,
+                &mut self.list_thumbs,
+            );
+            self.apply_image_list_action(list_action);
+        });
+        self.left_batch_stats(ui, dark);
+    }
+
+    /// 定高三栏左列：上半批次+筛选可滚，下半列表占满剩余高度。
+    fn left_column_split_viewport(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        dark: bool,
+        viewport_h: f32,
+    ) {
+        let col_w = ui.available_width();
+        ui.set_width(col_w);
+        // 无图时把高度让给上方批次/筛选；有图时上下约各半
+        let top_budget = if self.images.is_empty() {
+            (viewport_h - 72.0).clamp(200.0, viewport_h.max(200.0))
+        } else {
+            (viewport_h * 0.50).clamp(168.0, (viewport_h - 140.0).max(168.0))
+        };
+
+        egui::ScrollArea::vertical()
+            .id_salt("review_left_top")
+            .max_height(top_budget)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                let content_w = ui
+                    .available_width()
+                    .min(ui.max_rect().width())
+                    .max(120.0);
+                ui.set_width(content_w);
+                self.left_batch_section(ui, dark);
+                ui.add_space(10.0);
+                widgets::section_header(ui, "图片");
+                ui.add_space(6.0);
+                if filter_sort_ui(ui, &mut self.sidebar) {
+                    let _ = self.reload_images();
+                }
+                ui.add_space(8.0);
+            });
+
+        ui.add_space(6.0);
+        let list_h = (ui.available_height() - 8.0).max(48.0);
+        widgets::grouped_section_frame(ui, |ui| {
+            let list_w = ui
+                .available_width()
+                .min(ui.max_rect().width())
+                .max(120.0);
+            ui.set_width(list_w);
+            // 扣除分组框内边距，避免高度溢出裁切
+            let body_h = (list_h - 28.0).max(40.0);
+            let list_action = image_list_body_ui(
+                ui,
+                ctx,
+                &self.images,
+                self.current_image,
+                &mut self.sidebar,
+                &mut self.list_thumbs,
+                Some(body_h),
+            );
+            self.apply_image_list_action(list_action);
+        });
+        self.left_batch_stats(ui, dark);
+    }
+
+    fn left_batch_section(&mut self, ui: &mut egui::Ui, dark: bool) {
+        let _ = dark;
         widgets::grouped_section(ui, "批次", |ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.sidebar.batch_name_input)
                     .hint_text("批次名称")
+                    .desired_width(f32::INFINITY)
                     .margin(egui::vec2(12.0, 10.0)),
             );
             ui.add_space(4.0);
@@ -583,26 +1086,9 @@ impl ReviewPanel {
                 let _ = self.reload_images();
             }
         });
+    }
 
-        ui.add_space(16.0);
-
-        widgets::grouped_section(ui, "图片", |ui| {
-            let list_action = image_list_ui(
-                ui,
-                ctx,
-                &self.images,
-                self.current_image,
-                &mut self.sidebar,
-                &mut self.list_thumbs,
-            );
-            if list_action.reload {
-                let _ = self.reload_images();
-            }
-            if let Some(id) = list_action.selected {
-                self.select_image(id);
-            }
-        });
-
+    fn left_batch_stats(&self, ui: &mut egui::Ui, dark: bool) {
         if let Some(batch_id) = self.current_batch {
             if let Some((_, stats)) = self.batch_stats.iter().find(|(id, _)| *id == batch_id) {
                 ui.add_space(6.0);
@@ -612,6 +1098,15 @@ impl ReviewPanel {
                         .color(theme::secondary_label(dark)),
                 );
             }
+        }
+    }
+
+    fn apply_image_list_action(&mut self, list_action: crate::review::ui::sidebar::ImageListAction) {
+        if list_action.reload {
+            let _ = self.reload_images();
+        }
+        if let Some(id) = list_action.selected {
+            self.select_image(id);
         }
     }
 
@@ -666,9 +1161,21 @@ impl ReviewPanel {
             }
 
             if let Some(item) = self.current_item().cloned() {
-                let thumb_path =
+                let cache_thumb =
                     crate::review::service::ThumbnailService::valid_cache_path(&item.file_path);
-                let thumb_ref = thumb_path.as_deref();
+                let item_thumb = item
+                    .thumbnail_path
+                    .as_ref()
+                    .filter(|p| p.exists())
+                    .cloned();
+                let thumb_owned = item_thumb.or(cache_thumb);
+                let thumb_ref = thumb_owned.as_deref();
+                let display_path =
+                    if crate::review::service::is_non_filesystem_path(&item.file_path) {
+                        thumb_ref.unwrap_or(item.file_path.as_path())
+                    } else {
+                        item.file_path.as_path()
+                    };
                 self.update_converted_preview(host.output_directory(), &item.file_path);
 
                 let events = {
@@ -676,7 +1183,7 @@ impl ReviewPanel {
                     events.extend(self.compare_view.ui(
                         ui,
                         ctx,
-                        &item.file_path,
+                        display_path,
                         self.converted_preview.as_deref(),
                         thumb_ref,
                         &self.current_annotations,
@@ -705,9 +1212,11 @@ impl ReviewPanel {
 
     fn tab_review(&mut self, ui: &mut egui::Ui, dark: bool) {
         widgets::section_label(ui, "备注");
+        let edit_w = (ui.available_width() - 2.0).max(80.0);
         if ui
             .add(
                 egui::TextEdit::multiline(&mut self.remark_buf)
+                    .desired_width(edit_w)
                     .margin(egui::vec2(12.0, 10.0))
                     .desired_rows(4),
             )
@@ -715,8 +1224,16 @@ impl ReviewPanel {
         {
             if let Some(id) = self.current_image {
                 let remark = self.remark_buf.clone();
-                if let Err(e) = self.service.set_remark(id, &remark) {
-                    self.error = Some(e.to_string());
+                if self.data_source == DataSource::Remote {
+                    self.set_remote_remark(id, remark);
+                } else {
+                    if let Err(e) = self.service.set_remark(id, &remark) {
+                        self.error = Some(e.to_string());
+                    } else if let Some(note) =
+                        self.sync_remote_review_item(id, None, Some(remark), None)
+                    {
+                        self.set_status(note);
+                    }
                 }
             }
         }
@@ -1007,6 +1524,13 @@ impl ReviewPanel {
         }
         if had_toggles {
             self.reload_current_image_tags();
+            if let Some(image_id) = self.current_image {
+                let names = self.current_remote_tag_names();
+                if let Some(note) = self.sync_remote_review_item(image_id, None, None, Some(names))
+                {
+                    self.set_status(note);
+                }
+            }
         }
         if let Some((tag_id, name)) = rename_commit {
             let name = name.trim().to_string();
@@ -1032,6 +1556,10 @@ impl ReviewPanel {
     }
 
     fn reload_current_image_tags(&mut self) {
+        if self.data_source == DataSource::Remote {
+            self.current_image_tags.clear();
+            return;
+        }
         if let Some(id) = self.current_image {
             self.current_image_tags = self.service.tags_for_image(id).unwrap_or_default();
         } else {
@@ -1040,13 +1568,22 @@ impl ReviewPanel {
     }
 
     fn right_column(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, dark: bool) {
-        // 顶部 Tab 切换：评审属性 / 图片信息 / 标注列表 / 标签
-        ui.horizontal_wrapped(|ui| {
-            for tab in RightTab::all() {
-                if widgets::toggle_chip(ui, tab.label(), self.right_tab == tab, true) {
-                    self.right_tab = tab;
-                }
-            }
+        let col_w = ui
+            .available_width()
+            .min(ui.max_rect().width())
+            .max(120.0);
+        ui.set_max_width(col_w);
+        ui.set_width(col_w);
+
+        let tabs = [
+            (RightTab::Review, "评审属性"),
+            (RightTab::Info, "图片信息"),
+            (RightTab::Analysis, "分析"),
+            (RightTab::Annotations, "标注列表"),
+            (RightTab::Tags, "标签"),
+        ];
+        widgets::tab_grid_selector(ui, "review_right_tabs", &tabs, self.right_tab, |tab| {
+            self.right_tab = tab;
         });
         ui.add_space(10.0);
 
@@ -1059,139 +1596,228 @@ impl ReviewPanel {
         }
 
         ui.add_space(16.0);
+        self.batch_ops_ui(ctx, ui, dark);
+    }
 
+    fn batch_ops_ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, dark: bool) {
+        let section_w = ui
+            .available_width()
+            .min(ui.max_rect().width())
+            .max(100.0);
+        ui.set_max_width(section_w);
+        ui.set_width(section_w);
         widgets::grouped_section(ui, "批量操作", |ui| {
+            let inner_w = ui
+                .available_width()
+                .min(ui.max_rect().width())
+                .max(80.0);
+            ui.set_max_width(inner_w);
+            ui.set_width(inner_w);
             ui.label(
                 RichText::new(format!("已选 {} 张", self.sidebar.selected_ids.len()))
                     .font(theme::section_font())
                     .color(theme::primary_label(dark)),
             );
 
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
-                widgets::section_label(ui, "目标状态");
-                egui::ComboBox::from_id_salt("batch_status_target")
-                    .selected_text(self.batch_target_status.label())
-                    .show_ui(ui, |ui| {
+                ui.set_max_width(inner_w);
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.add_sized(
+                    egui::vec2(36.0, widgets::TOOLBAR_ROW_HEIGHT),
+                    egui::Label::new(
+                        RichText::new("状态")
+                            .size(13.0)
+                            .color(theme::primary_label(dark)),
+                    ),
+                );
+                let combo_w = ui.available_width().min(ui.max_rect().width()).max(48.0);
+                widgets::toolbar_combo_box(
+                    ui,
+                    "batch_status_target",
+                    self.batch_target_status.label(),
+                    combo_w,
+                    |ui| {
                         for s in [
                             ReviewStatus::Pending,
                             ReviewStatus::Approved,
                             ReviewStatus::NeedsFix,
                             ReviewStatus::Rejected,
                         ] {
-                            ui.selectable_value(&mut self.batch_target_status, s, s.label());
+                            if ui
+                                .selectable_label(self.batch_target_status == s, s.label())
+                                .clicked()
+                            {
+                                self.batch_target_status = s;
+                            }
                         }
-                    });
+                    },
+                );
             });
 
-            ui.horizontal_wrapped(|ui| {
-                if widgets::compact_secondary_button(ui, "批量更新状态", true).clicked() {
+            ui.add_space(8.0);
+            let gap = 6.0;
+            let cell = widgets::equal_cell_width(inner_w, gap, 2);
+            ui.horizontal(|ui| {
+                ui.set_max_width(inner_w);
+                ui.spacing_mut().item_spacing.x = gap;
+                if widgets::full_width_secondary_button_in(ui, "更新状态", true, cell).clicked() {
                     self.dialog = Some(DialogState::ConfirmBatchOp(BatchOpKind::SetStatus(
                         self.batch_target_status,
                     )));
                 }
-                if widgets::compact_secondary_button(ui, "批量清空标注", true).clicked() {
+                if widgets::full_width_secondary_button_in(ui, "清空标注", true, cell).clicked() {
                     self.dialog = Some(DialogState::ConfirmBatchOp(BatchOpKind::ClearAnnotations));
                 }
-                if widgets::compact_secondary_button(ui, "复制当前标注", true).clicked() {
-                    self.dialog = Some(DialogState::ConfirmBatchOp(
-                        BatchOpKind::CopyCurrentAnnotations,
-                    ));
-                }
             });
+            ui.add_space(gap);
+            if widgets::full_width_secondary_button(ui, "复制当前标注到所选", true).clicked() {
+                self.dialog = Some(DialogState::ConfirmBatchOp(
+                    BatchOpKind::CopyCurrentAnnotations,
+                ));
+            }
 
-            ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| {
-                if widgets::toggle_chip(
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.set_max_width(inner_w);
+                ui.spacing_mut().item_spacing.x = gap;
+                if widgets::tab_chip_sized(
                     ui,
                     "覆盖备注",
+                    cell,
                     self.batch_remark_mode == RemarkWriteMode::Overwrite,
                     true,
                 ) {
                     self.batch_remark_mode = RemarkWriteMode::Overwrite;
                 }
-                if widgets::toggle_chip(
+                if widgets::tab_chip_sized(
                     ui,
                     "追加备注",
+                    cell,
                     self.batch_remark_mode == RemarkWriteMode::Append,
                     true,
                 ) {
                     self.batch_remark_mode = RemarkWriteMode::Append;
                 }
             });
-            if widgets::compact_secondary_button(ui, "批量写入备注", true).clicked() {
+            ui.add_space(gap);
+            if widgets::full_width_primary_button(ui, "批量写入备注", true).clicked() {
                 self.dialog = Some(DialogState::ConfirmBatchOp(BatchOpKind::AddRemark));
             }
 
-            if !self.last_batch_annotation_ids.is_empty()
-                && widgets::compact_secondary_button(ui, "撤销上次批量标注", true).clicked()
-            {
-                match self
-                    .service
-                    .undo_batch_annotations(&self.last_batch_annotation_ids)
-                {
-                    Ok(()) => {
-                        self.last_batch_annotation_ids.clear();
-                        self.load_current_annotations();
-                        self.set_status("已撤销上次批量标注");
+            if !self.last_batch_annotation_ids.is_empty() {
+                ui.add_space(gap);
+                if widgets::full_width_secondary_button(ui, "撤销上次批量标注", true).clicked() {
+                    match self
+                        .service
+                        .undo_batch_annotations(&self.last_batch_annotation_ids)
+                    {
+                        Ok(()) => {
+                            self.last_batch_annotation_ids.clear();
+                            self.load_current_annotations();
+                            self.set_status("已撤销上次批量标注");
+                        }
+                        Err(e) => self.error = Some(e.to_string()),
                     }
-                    Err(e) => self.error = Some(e.to_string()),
                 }
             }
 
-            ui.add_space(8.0);
+            ui.add_space(10.0);
             ui.separator();
+            ui.add_space(8.0);
             ui.label(RichText::new("批量截图").strong());
             let screenshot_targets = self.screenshot_target_items().len();
-            ui.label(format!("目标 {screenshot_targets} 张"));
-            ui.horizontal_wrapped(|ui| {
-                if widgets::toggle_chip(ui, "选中图片", !self.screenshot_use_all_visible, true)
-                {
+            ui.label(
+                RichText::new(format!("目标 {screenshot_targets} 张"))
+                    .size(12.0)
+                    .color(theme::secondary_label(dark)),
+            );
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.set_max_width(inner_w);
+                ui.spacing_mut().item_spacing.x = gap;
+                if widgets::tab_chip_sized(
+                    ui,
+                    "选中图片",
+                    cell,
+                    !self.screenshot_use_all_visible,
+                    true,
+                ) {
                     self.screenshot_use_all_visible = false;
                 }
-                if widgets::toggle_chip(ui, "当前列表", self.screenshot_use_all_visible, true) {
+                if widgets::tab_chip_sized(
+                    ui,
+                    "当前列表",
+                    cell,
+                    self.screenshot_use_all_visible,
+                    true,
+                ) {
                     self.screenshot_use_all_visible = true;
                 }
             });
+            ui.add_space(6.0);
             ui.checkbox(&mut self.screenshot_include_annotations, "包含标注");
             ui.horizontal(|ui| {
-                ui.label("格式");
-                egui::ComboBox::from_id_salt("image_batch_screenshot_format")
-                    .selected_text(self.screenshot_format.extension().to_uppercase())
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut self.screenshot_format,
-                            ScreenshotFormat::Jpeg,
-                            "JPG",
-                        );
-                        ui.selectable_value(
-                            &mut self.screenshot_format,
-                            ScreenshotFormat::Png,
-                            "PNG",
-                        );
-                    });
+                ui.set_max_width(inner_w);
+                ui.spacing_mut().item_spacing.x = gap;
+                ui.add_sized(
+                    egui::vec2(36.0, widgets::TOOLBAR_ROW_HEIGHT),
+                    egui::Label::new(
+                        RichText::new("格式")
+                            .size(13.0)
+                            .color(theme::primary_label(dark)),
+                    ),
+                );
+                let format_label = self.screenshot_format.extension().to_uppercase();
+                let combo_w = ui.available_width().min(ui.max_rect().width()).max(48.0);
+                widgets::toolbar_combo_box(
+                    ui,
+                    "image_batch_screenshot_format",
+                    &format_label,
+                    combo_w,
+                    |ui| {
+                        if ui
+                            .selectable_label(
+                                self.screenshot_format == ScreenshotFormat::Jpeg,
+                                "JPG",
+                            )
+                            .clicked()
+                        {
+                            self.screenshot_format = ScreenshotFormat::Jpeg;
+                        }
+                        if ui
+                            .selectable_label(
+                                self.screenshot_format == ScreenshotFormat::Png,
+                                "PNG",
+                            )
+                            .clicked()
+                        {
+                            self.screenshot_format = ScreenshotFormat::Png;
+                        }
+                    },
+                );
             });
             ui.checkbox(&mut self.screenshot_write_json, "同时导出 JSON 清单");
             ui.checkbox(
                 &mut self.screenshot_write_contact_sheet,
-                "生成索引图（PNG，每页最多 36 张，超出自动分页）",
+                "生成索引图（自动分页）",
             );
             ui.label(
-                RichText::new("默认生成 CSV 清单；失败项不会中断整个批次")
+                RichText::new("默认生成 CSV；失败项不中断整批")
                     .weak()
                     .size(11.0),
             );
             if self.screenshot_job.is_running() {
                 if let Some(progress) = self.screenshot_job.progress() {
-                    ui.add(
-                        egui::ProgressBar::new(progress.fraction()).show_percentage(),
-                    );
+                    ui.add(egui::ProgressBar::new(progress.fraction()).show_percentage());
                     if let Some(label) = ProgressReporter::status_label(progress.as_ref()) {
                         ui.label(RichText::new(label).weak().size(11.0));
                     }
                 }
             }
+            ui.add_space(6.0);
             let export_enabled = screenshot_targets > 0 && !self.screenshot_job.is_running();
-            if widgets::compact_secondary_button(ui, "批量导出截图…", export_enabled).clicked()
+            if widgets::full_width_secondary_button(ui, "批量导出截图…", export_enabled).clicked()
             {
                 self.export_batch_screenshots(ctx);
             }
@@ -1249,7 +1875,10 @@ impl ReviewPanel {
         let Some(result) = self.screenshot_job.poll(ctx) else {
             return;
         };
-        let started = self.screenshot_job_started.take().unwrap_or_else(Instant::now);
+        let started = self
+            .screenshot_job_started
+            .take()
+            .unwrap_or_else(Instant::now);
         let dir = self
             .screenshot_job_dir
             .take()
@@ -1412,6 +2041,28 @@ impl ReviewPanel {
                 Err(e) => self.error = Some(e.to_string()),
             },
             BatchOpKind::AddRemark => {
+                if self.data_source == DataSource::Remote {
+                    let text = self.remark_buf.clone();
+                    let mut changed = 0usize;
+                    for id in ids {
+                        let current = self
+                            .images
+                            .iter()
+                            .find(|item| item.id == id)
+                            .map(|item| item.remark.clone())
+                            .unwrap_or_default();
+                        let remark = match self.batch_remark_mode {
+                            RemarkWriteMode::Overwrite => text.clone(),
+                            RemarkWriteMode::Append if current.trim().is_empty() => text.clone(),
+                            RemarkWriteMode::Append => format!("{current}\n{text}"),
+                        };
+                        if self.set_remote_remark(id, remark).is_some() {
+                            changed += 1;
+                        }
+                    }
+                    self.set_status(format!("已更新 {changed} 张远程图片备注"));
+                    return;
+                }
                 let result = self.service.batch_add_remarks(&BatchRemarkRequest {
                     image_ids: ids,
                     text: self.remark_buf.clone(),
@@ -1455,6 +2106,35 @@ impl ReviewPanel {
     }
 
     fn start_batch_status(&mut self, ids: Vec<i64>, target: ReviewStatus) {
+        if self.data_source == DataSource::Remote {
+            let warnings: Vec<_> = self
+                .images
+                .iter()
+                .filter(|item| ids.contains(&item.id))
+                .filter(|item| is_irreversible_transition(item.status, target))
+                .map(|item| StatusTransitionWarning {
+                    image_id: item.id,
+                    from: item.status,
+                    to: target,
+                    message: format!(
+                        "{}：{} → {}",
+                        item.file_path.display(),
+                        item.status.label(),
+                        target.label()
+                    ),
+                })
+                .collect();
+            if warnings.is_empty() {
+                self.apply_batch_status(target, true);
+            } else {
+                self.dialog = Some(DialogState::IrreversibleStatus {
+                    target,
+                    warnings,
+                    confirm: false,
+                });
+            }
+            return;
+        }
         let items = match self.service.repo().get_images_by_ids(&ids) {
             Ok(v) => v,
             Err(e) => {
@@ -1491,16 +2171,37 @@ impl ReviewPanel {
 
     fn apply_batch_status(&mut self, target: ReviewStatus, confirm: bool) {
         let ids = self.sidebar.selected_ids.clone();
+        if self.data_source == DataSource::Remote {
+            let _ = confirm;
+            let mut changed = 0usize;
+            for id in &ids {
+                if self.set_remote_image_status(*id, target).is_some() {
+                    changed += 1;
+                }
+            }
+            self.refresh_current_remote_stats();
+            self.set_status(format!("已更新 {changed} 张远程图片状态"));
+            return;
+        }
         let result = self.service.batch_update_status(&BatchStatusRequest {
-            image_ids: ids,
+            image_ids: ids.clone(),
             target_status: target,
             confirm_irreversible: confirm,
         });
         match result {
             Ok(r) if r.applied => {
+                let remote_count = self.sync_remote_review_statuses(&ids, target);
                 let _ = self.reload_images();
                 let _ = self.reload_batches();
-                self.set_status(format!("已更新 {} 张图片状态", r.success_count));
+                let remote_note = if remote_count > 0 {
+                    format!(" · 已同步远程 {remote_count} 张")
+                } else {
+                    String::new()
+                };
+                self.set_status(format!(
+                    "已更新 {} 张图片状态{remote_note}",
+                    r.success_count
+                ));
             }
             Ok(r) if !r.warnings.is_empty() => {
                 self.dialog = Some(DialogState::IrreversibleStatus {
@@ -1537,10 +2238,15 @@ impl ReviewPanel {
                 if let Some(first) = self.images.first() {
                     self.select_image(first.id);
                 }
-                self.set_status(format!(
+                let remote_note = self.sync_remote_review_batch(batch_name, paths);
+                let mut msg = format!(
                     "已从转换队列导入 {} 张图片到批次「{batch_name}」",
                     paths.len()
-                ));
+                );
+                if let Some(note) = remote_note {
+                    msg.push_str(&format!(" · {note}"));
+                }
+                self.set_status(msg);
             }
             Err(e) => self.error = Some(e.to_string()),
         }
@@ -1568,6 +2274,448 @@ impl ReviewPanel {
 
     fn set_status(&mut self, msg: impl Into<String>) {
         self.status_hint = msg.into();
+    }
+
+    fn switch_to_local(&mut self, reason: impl Into<String>) {
+        self.data_source = DataSource::Local;
+        self.batches_fetch = None;
+        self.items_fetch = None;
+        self.asset_fetch = None;
+        self.remote_loading = false;
+        self.remote_batches.clear();
+        self.remote_items.clear();
+        self.remote_id_map.clear();
+        self.pending_open_remote_batch_id = None;
+        self.set_status(reason);
+        let _ = self.reload_batches();
+        let _ = self.reload_images();
+    }
+
+    fn start_remote_batches_fetch(&mut self) {
+        if !crate::remote::remote_enabled(&self.remote_config) {
+            self.switch_to_local("远程未配置，已回退本地");
+            return;
+        }
+        let cfg = self.remote_config.clone();
+        self.remote_loading = true;
+        self.batches_fetch = Some(crate::remote::RemoteFetch::spawn(move || {
+            let _ = crate::remote::probe_remote_health(&cfg)?;
+            crate::remote::list_remote_review_batches(&cfg, crate::remote::RemoteBatchKind::Image)
+        }));
+    }
+
+    fn start_remote_items_fetch(&mut self, remote_batch_id: String) {
+        let cfg = self.remote_config.clone();
+        self.remote_batch_id = Some(remote_batch_id.clone());
+        self.remote_loading = true;
+        self.items_fetch = Some(crate::remote::RemoteFetch::spawn(move || {
+            crate::remote::fetch_batch_items_with_thumbs(&cfg, &remote_batch_id)
+        }));
+    }
+
+    fn poll_remote_fetches(&mut self, ctx: &egui::Context) {
+        let batches_result = self.batches_fetch.as_ref().and_then(|fetch| fetch.poll());
+        if let Some(result) = batches_result {
+            self.batches_fetch = None;
+            self.remote_loading = self.items_fetch.is_some() || self.asset_fetch.is_some();
+            match result {
+                Ok(summaries) => {
+                    self.apply_remote_batches(summaries);
+                    self.set_status(format!("已加载 {} 个远程评审批次", self.batches.len()));
+                }
+                Err(e) => self.switch_to_local(format!("远程批次加载失败，已回退本地：{e}")),
+            }
+            ctx.request_repaint();
+        } else if self.batches_fetch.is_some() {
+            ctx.request_repaint();
+        }
+        let items_result = self.items_fetch.as_ref().and_then(|fetch| fetch.poll());
+        if let Some(result) = items_result {
+            self.items_fetch = None;
+            self.remote_loading = self.batches_fetch.is_some() || self.asset_fetch.is_some();
+            match result {
+                Ok(pairs) => {
+                    self.apply_remote_items(pairs);
+                    self.set_status(format!("远程条目 {} 张", self.images.len()));
+                }
+                Err(e) => self.switch_to_local(format!("远程条目加载失败，已回退本地：{e}")),
+            }
+            ctx.request_repaint();
+        } else if self.items_fetch.is_some() {
+            ctx.request_repaint();
+        }
+        let asset_result = self.asset_fetch.as_ref().and_then(|fetch| fetch.poll());
+        if let Some(result) = asset_result {
+            self.asset_fetch = None;
+            self.remote_loading = self.batches_fetch.is_some() || self.items_fetch.is_some();
+            match result {
+                Ok((image_id, path)) => {
+                    if let Some(img) = self.images.iter_mut().find(|i| i.id == image_id) {
+                        img.file_path = path;
+                    }
+                    if self.current_image == Some(image_id) {
+                        self.converted_preview = None;
+                        self.load_current_analysis();
+                        if let Some(item) = self.current_item().cloned() {
+                            self.properties.sync_item(&item, None);
+                        }
+                    }
+                    self.set_status("原图已下载到本地缓存");
+                }
+                Err(e) => self.set_status(format!("原图下载失败：{e}")),
+            }
+            ctx.request_repaint();
+        } else if self.asset_fetch.is_some() {
+            ctx.request_repaint();
+        }
+    }
+
+    fn apply_remote_batches(&mut self, summaries: Vec<crate::remote::RemoteReviewBatchSummary>) {
+        self.remote_id_map.clear();
+        self.remote_batches = summaries;
+        self.batches = self
+            .remote_batches
+            .iter()
+            .map(|s| crate::remote::batch_from_summary(&mut self.remote_id_map, s))
+            .collect();
+        self.batch_stats = self
+            .batches
+            .iter()
+            .map(|b| (b.id, BatchStats::default()))
+            .collect();
+
+        let previous_batch = self.current_batch;
+        let preferred = self
+            .pending_open_remote_batch_id
+            .take()
+            .and_then(|rid| self.remote_id_map.local_of(&rid));
+        if let Some(local) = preferred {
+            self.current_batch = Some(local);
+        } else if let Some(cur) = self.current_batch {
+            if !self.batches.iter().any(|b| b.id == cur) {
+                self.current_batch = self.batches.first().map(|b| b.id);
+            }
+        } else {
+            self.current_batch = self.batches.first().map(|b| b.id);
+        }
+
+        if self.current_batch != previous_batch {
+            self.current_image = None;
+            self.images.clear();
+            self.remote_items.clear();
+            self.list_thumbs.clear();
+        }
+
+        if let Some(bid) = self.current_batch {
+            if let Some(rid) = self.remote_id_map.remote_of(bid).map(|s| s.to_string()) {
+                self.remote_batch_id = Some(rid.clone());
+                self.start_remote_items_fetch(rid);
+            }
+        } else {
+            self.remote_batch_id = None;
+            self.images.clear();
+            self.remote_items.clear();
+        }
+    }
+
+    fn apply_remote_items(
+        &mut self,
+        pairs: Vec<(crate::remote::RemoteReviewItem, Option<PathBuf>)>,
+    ) {
+        let Some(batch_local) = self.current_batch else {
+            return;
+        };
+        if let Some(rid) = self.remote_id_map.remote_of(batch_local) {
+            self.remote_batch_id = Some(rid.to_string());
+        }
+
+        self.remote_items = pairs.iter().map(|(i, _)| i.clone()).collect();
+        self.refresh_current_remote_stats();
+        self.images = pairs
+            .iter()
+            .map(|(item, thumb)| {
+                let file = thumb
+                    .clone()
+                    .unwrap_or_else(|| crate::remote::placeholder_path_for_asset(&item.asset));
+                let thumb_path = thumb.clone();
+                let mut img = crate::remote::image_from_remote_item(
+                    &mut self.remote_id_map,
+                    batch_local,
+                    item,
+                    file,
+                    thumb_path.clone(),
+                );
+                if let Some(t) = &thumb_path {
+                    img.file_path = t.clone();
+                }
+                img
+            })
+            .collect();
+
+        self.remote_item_ids.clear();
+        for item in &self.remote_items {
+            if let Some(local) = self.remote_id_map.local_of(&item.item_id) {
+                self.remote_item_ids.insert(local, item.item_id.clone());
+            }
+        }
+        self.sidebar
+            .selected_ids
+            .retain(|id| self.images.iter().any(|image| image.id == *id));
+        if let Some(cur) = self.current_image {
+            if !self.images.iter().any(|i| i.id == cur) {
+                self.current_image = self.images.first().map(|i| i.id);
+            }
+        } else {
+            self.current_image = self.images.first().map(|i| i.id);
+        }
+        if let Some(id) = self.current_image {
+            self.select_image(id);
+        } else {
+            self.current_annotations.clear();
+            self.current_image_tags.clear();
+            self.remark_buf.clear();
+        }
+    }
+
+    fn ensure_remote_original_downloaded(&mut self, image_id: i64) {
+        if self.data_source != DataSource::Remote {
+            return;
+        }
+        if self
+            .asset_fetch
+            .as_ref()
+            .map(|f| f.is_pending())
+            .unwrap_or(false)
+        {
+            return;
+        }
+        let Some(remote_item_id) = self.remote_item_ids.get(&image_id).cloned() else {
+            return;
+        };
+        let Some(remote_item) = self
+            .remote_items
+            .iter()
+            .find(|i| i.item_id == remote_item_id)
+            .cloned()
+        else {
+            return;
+        };
+        if let Some(img) = self.images.iter().find(|i| i.id == image_id) {
+            let p = &img.file_path;
+            let is_thumb = img.thumbnail_path.as_ref() == Some(p);
+            if p.exists() && !p.to_string_lossy().starts_with("remote://") && !is_thumb {
+                return;
+            }
+        }
+        let cfg = self.remote_config.clone();
+        let asset = remote_item.asset.clone();
+        self.remote_loading = true;
+        self.asset_fetch = Some(crate::remote::RemoteFetch::spawn(move || {
+            let path = crate::remote::ensure_remote_asset_local(&cfg, &asset)?;
+            Ok((image_id, path))
+        }));
+    }
+
+    fn refresh_current_remote_stats(&mut self) {
+        let Some(batch_local) = self.current_batch else {
+            return;
+        };
+        if let Some((_, stats)) = self
+            .batch_stats
+            .iter_mut()
+            .find(|(id, _)| *id == batch_local)
+        {
+            *stats = crate::remote::stats_from_items(&self.remote_items);
+        }
+    }
+
+    fn sync_remote_review_batch(&mut self, name: &str, paths: &[PathBuf]) -> Option<String> {
+        if !crate::remote::remote_enabled(&self.remote_config) {
+            self.remote_batch_id = None;
+            self.remote_item_ids.clear();
+            return None;
+        }
+        if paths.is_empty() {
+            return None;
+        }
+
+        match crate::remote::create_remote_batch_from_paths(
+            &self.remote_config,
+            name,
+            crate::remote::RemoteBatchKind::Image,
+            paths,
+        ) {
+            Ok(batch) => {
+                self.remote_batch_id = Some(batch.batch_id.clone());
+                let items = match crate::remote::list_remote_review_items(
+                    &self.remote_config,
+                    &batch.batch_id,
+                ) {
+                    Ok(items) => items,
+                    Err(e) => {
+                        return Some(format!("远程批次 {}（读取条目失败：{e}）", batch.batch_id));
+                    }
+                };
+                self.remember_remote_items(&items);
+                let inputs = items.iter().map(|item| item.asset.clone()).collect();
+                let extras = vec![
+                    ("batch_id".into(), batch.batch_id.clone()),
+                    ("batch_name".into(), name.to_string()),
+                    ("generate_thumbnails".into(), "true".into()),
+                    ("generate_previews".into(), "true".into()),
+                ];
+                match crate::remote::submit_module_job(
+                    &self.remote_config,
+                    crate::remote::RemoteJobSource::Review,
+                    inputs,
+                    extras,
+                ) {
+                    Ok((status, _)) => Some(format!(
+                        "远程批次 {} · 任务 {}",
+                        batch.batch_id, status.job_id
+                    )),
+                    Err(e) => Some(format!("远程批次 {}（任务提交失败：{e}）", batch.batch_id)),
+                }
+            }
+            Err(e) => {
+                self.remote_batch_id = None;
+                self.remote_item_ids.clear();
+                Some(format!("远程批次创建失败：{e}"))
+            }
+        }
+    }
+
+    fn remember_remote_items(&mut self, items: &[crate::remote::RemoteReviewItem]) {
+        self.remote_item_ids.clear();
+        let mut used = std::collections::HashSet::new();
+        for image in &self.images {
+            let Some(local_name) = image.file_path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if let Some(item) = items
+                .iter()
+                .find(|item| !used.contains(&item.item_id) && item.asset.name == local_name)
+            {
+                used.insert(item.item_id.clone());
+                self.remote_item_ids.insert(image.id, item.item_id.clone());
+            }
+        }
+    }
+
+    fn sync_remote_review_statuses(&mut self, ids: &[i64], status: ReviewStatus) -> usize {
+        ids.iter()
+            .filter(|id| {
+                self.sync_remote_review_item(
+                    **id,
+                    Some(review_status_to_remote(status)),
+                    None,
+                    None,
+                )
+                .as_deref()
+                    == Some("已同步远程")
+            })
+            .count()
+    }
+
+    fn sync_remote_review_item(
+        &mut self,
+        local_id: i64,
+        status: Option<crate::remote::RemoteReviewItemStatus>,
+        remark: Option<String>,
+        tags: Option<Vec<String>>,
+    ) -> Option<String> {
+        if !crate::remote::remote_enabled(&self.remote_config) || self.remote_batch_id.is_none() {
+            return None;
+        }
+        let item_id = self.remote_item_ids.get(&local_id)?.clone();
+        match crate::remote::sync_review_item(&self.remote_config, &item_id, status, remark, tags) {
+            Ok(_) => Some("已同步远程".into()),
+            Err(e) => Some(format!("远程同步失败：{e}")),
+        }
+    }
+
+    fn set_remote_image_status(&mut self, id: i64, status: ReviewStatus) -> Option<String> {
+        if let Some(image) = self.images.iter_mut().find(|image| image.id == id) {
+            image.status = status;
+            image.updated_at = chrono::Utc::now();
+        }
+        if let Some(remote_item_id) = self.remote_item_ids.get(&id).cloned() {
+            if let Some(item) = self
+                .remote_items
+                .iter_mut()
+                .find(|item| item.item_id == remote_item_id)
+            {
+                item.status = crate::remote::local_status_to_remote(status);
+                item.updated_at = chrono::Utc::now().timestamp().max(0) as u64;
+            }
+        }
+        self.sync_remote_review_item(
+            id,
+            Some(crate::remote::local_status_to_remote(status)),
+            None,
+            None,
+        )
+    }
+
+    fn set_remote_remark(&mut self, id: i64, remark: String) -> Option<String> {
+        if let Some(image) = self.images.iter_mut().find(|image| image.id == id) {
+            image.remark = remark.clone();
+            image.updated_at = chrono::Utc::now();
+        }
+        if let Some(remote_item_id) = self.remote_item_ids.get(&id).cloned() {
+            if let Some(item) = self
+                .remote_items
+                .iter_mut()
+                .find(|item| item.item_id == remote_item_id)
+            {
+                item.remark = remark.clone();
+                item.updated_at = chrono::Utc::now().timestamp().max(0) as u64;
+            }
+        }
+        self.sync_remote_review_item(id, None, Some(remark), None)
+    }
+
+    fn current_remote_tag_names(&self) -> Vec<String> {
+        self.current_image_tags
+            .iter()
+            .filter_map(|id| {
+                self.all_tags
+                    .iter()
+                    .find(|tag| tag.id == *id)
+                    .map(|tag| tag.name.clone())
+            })
+            .collect()
+    }
+
+    fn sync_current_remote_annotations(&mut self, image_item_id: i64) {
+        if !crate::remote::remote_enabled(&self.remote_config)
+            || !self.remote_item_ids.contains_key(&image_item_id)
+        {
+            return;
+        }
+        for ann in self.current_annotations.clone() {
+            self.sync_remote_annotation(&ann);
+        }
+    }
+
+    fn sync_remote_annotation(&mut self, ann: &Annotation) {
+        if !crate::remote::remote_enabled(&self.remote_config) {
+            return;
+        }
+        let Some(item_id) = self.remote_item_ids.get(&ann.image_item_id).cloned() else {
+            return;
+        };
+        let remote = crate::remote::RemoteAnnotation {
+            schema_version: crate::remote::REMOTE_SCHEMA_VERSION,
+            annotation_id: format!("local-{}", ann.id),
+            item_id,
+            kind: annotation_kind_to_remote(ann.kind),
+            content: ann.content.clone(),
+            geometry: annotation_geometry(&ann.position),
+            created_at: ann.created_at.timestamp().max(0) as u64,
+            locked: ann.locked,
+        };
+        let _ = crate::remote::save_annotation(&self.remote_config, remote);
     }
 
     fn handle_shortcut_actions(&mut self, ctx: &egui::Context) {
@@ -1611,6 +2759,11 @@ impl ReviewPanel {
 
     fn select_image(&mut self, id: i64) {
         self.current_image = Some(id);
+        // 小窗堆叠布局：选中图片后切到画布，避免还要手动点「画布」
+        if self.stack_pane == ReviewStackPane::List {
+            self.stack_pane = ReviewStackPane::Canvas;
+        }
+        self.ensure_remote_original_downloaded(id);
         if let Some(item) = self.images.iter().find(|i| i.id == id) {
             self.remark_buf = item.remark.clone();
             self.properties.sync_item(item, None);
@@ -1622,12 +2775,14 @@ impl ReviewPanel {
             }
         }
         self.load_current_analysis();
-        if let (Some(batch), Some(image)) = (self.current_batch, self.current_image) {
-            let _ = self.service.save_session(batch, image);
+        if self.data_source == DataSource::Local {
+            if let (Some(batch), Some(image)) = (self.current_batch, self.current_image) {
+                let _ = self.service.save_session(batch, image);
+            }
         }
         self.load_current_annotations();
         self.reload_current_image_tags();
-        if let (Some(idx), Some(batch_id)) = (self.current_index(), self.current_batch) {
+        if let (Some(idx), Some(_batch_id)) = (self.current_index(), self.current_batch) {
             let paths: Vec<_> = self.images.iter().map(|i| i.file_path.clone()).collect();
             let thumbs: Vec<_> = self
                 .images
@@ -1686,11 +2841,30 @@ impl ReviewPanel {
     }
 
     fn set_image_status(&mut self, id: i64, status: ReviewStatus) {
+        if self.data_source == DataSource::Remote {
+            let remote_note = self
+                .set_remote_image_status(id, status)
+                .map(|note| format!(" · {note}"))
+                .unwrap_or_default();
+            self.refresh_current_remote_stats();
+            self.set_status(format!("已设为「{}」{remote_note}", status.label()));
+            if self.config.auto_advance_on_status {
+                match next_image_id(&self.images, id, self.config.auto_advance_target) {
+                    Some(next) => self.select_image(next),
+                    None => self.set_status("已完成全部评审"),
+                }
+            }
+            return;
+        }
         match self.service.set_status(id, status) {
             Ok(()) => {
+                let remote_note = self
+                    .sync_remote_review_item(id, Some(review_status_to_remote(status)), None, None)
+                    .map(|note| format!(" · {note}"))
+                    .unwrap_or_default();
                 let _ = self.reload_images();
                 let _ = self.reload_batches();
-                self.set_status(format!("已设为「{}」", status.label()));
+                self.set_status(format!("已设为「{}」{remote_note}", status.label()));
                 if self.config.auto_advance_on_status {
                     match next_image_id(&self.images, id, self.config.auto_advance_target) {
                         Some(next) => self.select_image(next),
@@ -1707,6 +2881,27 @@ impl ReviewPanel {
         if self.images.iter().all(|i| i.id != id) {
             return;
         }
+        if self.data_source == DataSource::Remote {
+            self.current_annotations.clear();
+            let Some(remote_item_id) = self.remote_item_ids.get(&id).cloned() else {
+                return;
+            };
+            match crate::remote::list_remote_annotations(&self.remote_config, &remote_item_id) {
+                Ok(remote_annotations) => {
+                    let total = remote_annotations.len();
+                    self.current_annotations = remote_annotations
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(idx, ann)| remote_annotation_to_local(id, idx, ann))
+                        .collect();
+                    if self.current_annotations.len() < total {
+                        self.set_status("部分远程标注类型暂不支持显示");
+                    }
+                }
+                Err(e) => self.set_status(format!("远程标注加载失败：{e}")),
+            }
+            return;
+        }
         match self.service.load_annotations(id) {
             Ok(anns) => self.current_annotations = anns,
             Err(e) => self.error = Some(e.to_string()),
@@ -1714,6 +2909,10 @@ impl ReviewPanel {
     }
 
     fn handle_canvas_events(&mut self, events: Vec<AnnotationCanvasEvent>, image_item_id: i64) {
+        if self.data_source == DataSource::Remote {
+            self.handle_remote_canvas_events(events, image_item_id);
+            return;
+        }
         let mut changed = false;
         for event in &events {
             match event {
@@ -1730,7 +2929,11 @@ impl ReviewPanel {
                         style.clone(),
                         content.clone(),
                     );
-                    if let Err(e) = self.service.add_annotation(&ann).map(|_| ()) {
+                    if let Err(e) = self.service.add_annotation(&ann).map(|new_id| {
+                        let mut saved = ann.clone();
+                        saved.id = new_id;
+                        self.sync_remote_annotation(&saved);
+                    }) {
                         self.error = Some(e.to_string());
                     } else {
                         changed = true;
@@ -1763,10 +2966,87 @@ impl ReviewPanel {
         }
         if changed {
             self.load_current_annotations();
+            self.sync_current_remote_annotations(image_item_id);
         }
     }
 
+    fn handle_remote_canvas_events(
+        &mut self,
+        events: Vec<AnnotationCanvasEvent>,
+        image_item_id: i64,
+    ) {
+        let mut changed = false;
+        for event in events {
+            match event {
+                AnnotationCanvasEvent::CreateAnnotation {
+                    kind,
+                    position,
+                    style,
+                    content,
+                } => {
+                    let mut ann =
+                        Annotation::new_draft(image_item_id, kind, position, style, content);
+                    ann.id = self.next_remote_annotation_id();
+                    self.current_annotations.push(ann.clone());
+                    self.sync_remote_annotation(&ann);
+                    changed = true;
+                }
+                AnnotationCanvasEvent::UpdateAnnotation { id, position } => {
+                    if let Some(ann) = self.current_annotations.iter_mut().find(|ann| ann.id == id)
+                    {
+                        ann.position = position;
+                        let ann = ann.clone();
+                        self.sync_remote_annotation(&ann);
+                        changed = true;
+                    }
+                }
+                AnnotationCanvasEvent::UpdateAnnotationContent { id, content } => {
+                    if let Some(ann) = self.current_annotations.iter_mut().find(|ann| ann.id == id)
+                    {
+                        ann.content = content;
+                        let ann = ann.clone();
+                        self.sync_remote_annotation(&ann);
+                        changed = true;
+                    }
+                }
+                AnnotationCanvasEvent::DeleteAnnotation { id } => {
+                    let before = self.current_annotations.len();
+                    self.current_annotations.retain(|ann| ann.id != id);
+                    if self.current_annotations.len() != before {
+                        self.set_status("远程标注删除仅更新当前视图");
+                        changed = true;
+                    }
+                }
+                AnnotationCanvasEvent::SelectionChanged { .. }
+                | AnnotationCanvasEvent::ToolChanged { .. } => {}
+            }
+        }
+        if changed {
+            if let Some(image) = self
+                .images
+                .iter_mut()
+                .find(|image| image.id == image_item_id)
+            {
+                image.annotation_count = self.current_annotations.len() as i32;
+            }
+        }
+    }
+
+    fn next_remote_annotation_id(&self) -> i64 {
+        self.current_annotations
+            .iter()
+            .map(|ann| ann.id)
+            .min()
+            .unwrap_or(0)
+            .min(0)
+            - 1
+    }
+
     fn reload_batches(&mut self) -> ReviewResult<()> {
+        if self.data_source == DataSource::Remote {
+            self.start_remote_batches_fetch();
+            return Ok(());
+        }
         self.batches = self.service.batch_service().list_batches()?;
         self.batch_stats = self
             .batches
@@ -1780,6 +3060,17 @@ impl ReviewPanel {
     }
 
     fn reload_images(&mut self) -> ReviewResult<()> {
+        if self.data_source == DataSource::Remote {
+            let Some(batch_id) = self.current_batch else {
+                self.images.clear();
+                self.remote_items.clear();
+                return Ok(());
+            };
+            if let Some(remote_batch_id) = self.remote_id_map.remote_of(batch_id) {
+                self.start_remote_items_fetch(remote_batch_id.to_string());
+            }
+            return Ok(());
+        }
         let Some(batch_id) = self.current_batch else {
             self.images.clear();
             return Ok(());
@@ -1826,7 +3117,13 @@ impl ReviewPanel {
                 self.error = None;
                 let _ = self.reload_batches();
                 let _ = self.reload_images();
-                self.set_status(format!("已创建批次：{name}"));
+                let remote_paths = review_image_paths(folder, true).unwrap_or_default();
+                let remote_note = self.sync_remote_review_batch(&name, &remote_paths);
+                let mut msg = format!("已创建批次：{name}");
+                if let Some(note) = remote_note {
+                    msg.push_str(&format!(" · {note}"));
+                }
+                self.set_status(msg);
             }
             Err(e) => self.error = Some(e.to_string()),
         }
@@ -1904,42 +3201,6 @@ impl ReviewPanel {
     }
 }
 
-fn viewport_size(ctx: &egui::Context) -> egui::Vec2 {
-    ctx.input(|i| {
-        i.viewport()
-            .inner_rect
-            .map(|r| r.size())
-            .unwrap_or_else(|| ctx.screen_rect().size())
-    })
-}
-
-fn file_mtime_key(path: &Path) -> Option<u64> {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs().saturating_mul(1_000_000_000) + d.subsec_nanos() as u64)
-}
-
-fn histogram_ui(ui: &mut egui::Ui, bins: &[u32], color: egui::Color32, height: f32) {
-    let width = ui.available_width().max(128.0);
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
-    let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 4.0, egui::Color32::from_black_alpha(24));
-    let max = bins.iter().copied().max().unwrap_or(1).max(1) as f32;
-    let bar_w = rect.width() / bins.len().max(1) as f32;
-    for (idx, count) in bins.iter().enumerate() {
-        let x0 = rect.left() + idx as f32 * bar_w;
-        let x1 = (x0 + bar_w).min(rect.right());
-        let h = (*count as f32 / max) * rect.height();
-        let bar = egui::Rect::from_min_max(
-            egui::pos2(x0, rect.bottom() - h),
-            egui::pos2(x1.max(x0 + 1.0), rect.bottom()),
-        );
-        painter.rect_filled(bar, 0.0, color.linear_multiply(0.85));
-    }
-}
-
 impl ReviewPanel {
     /// 按列表顺序返回已勾选图片（path, thumb, 显示名）。
     fn selected_compare_sources(&self) -> Vec<(PathBuf, Option<PathBuf>, String)> {
@@ -1952,11 +3213,22 @@ impl ReviewPanel {
                     .file_name()
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_else(|| item.file_path.display().to_string());
-                (
-                    item.file_path.clone(),
-                    crate::review::service::ThumbnailService::valid_cache_path(&item.file_path),
-                    label,
-                )
+                let cache_thumb =
+                    crate::review::service::ThumbnailService::valid_cache_path(&item.file_path);
+                let thumb = item
+                    .thumbnail_path
+                    .as_ref()
+                    .filter(|p| p.exists())
+                    .cloned()
+                    .or(cache_thumb);
+                let path = if crate::review::service::is_non_filesystem_path(&item.file_path) {
+                    thumb
+                        .clone()
+                        .unwrap_or_else(|| item.file_path.clone())
+                } else {
+                    item.file_path.clone()
+                };
+                (path, thumb, label)
             })
             .collect()
     }
@@ -1994,39 +3266,135 @@ impl ReviewPanel {
     }
 }
 
-fn format_contact_sheets(paths: &[PathBuf]) -> String {
-    if paths.is_empty() {
-        "无".into()
-    } else if paths.len() == 1 {
-        paths[0].display().to_string()
-    } else {
-        format!("{} 页", paths.len())
+fn review_status_to_remote(status: ReviewStatus) -> crate::remote::RemoteReviewItemStatus {
+    match status {
+        ReviewStatus::Pending => crate::remote::RemoteReviewItemStatus::Pending,
+        ReviewStatus::Approved => crate::remote::RemoteReviewItemStatus::Approved,
+        ReviewStatus::NeedsFix => crate::remote::RemoteReviewItemStatus::NeedsFix,
+        ReviewStatus::Rejected => crate::remote::RemoteReviewItemStatus::Rejected,
     }
 }
 
-fn batch_op_description(op: BatchOpKind) -> &'static str {
-    match op {
-        BatchOpKind::SetStatus(_) => "将对所选图片批量更新评审状态，是否继续？",
-        BatchOpKind::ClearAnnotations => "将清空所选图片的全部标注，是否继续？",
-        BatchOpKind::AddRemark => "将对所选图片批量写入备注，是否继续？",
-        BatchOpKind::CopyCurrentAnnotations => "将把当前图片的首条标注复制到所选图片，是否继续？",
-    }
-}
-
-fn annotation_kind_label(kind: crate::review::domain::AnnotationKind) -> &'static str {
-    use crate::review::domain::AnnotationKind;
+fn annotation_kind_to_remote(kind: AnnotationKind) -> crate::remote::RemoteAnnotationKind {
     match kind {
-        AnnotationKind::Rectangle => "矩形",
-        AnnotationKind::Arrow => "箭头",
-        AnnotationKind::Text => "文字",
+        AnnotationKind::Rectangle => crate::remote::RemoteAnnotationKind::Rectangle,
+        AnnotationKind::Arrow => crate::remote::RemoteAnnotationKind::Arrow,
+        AnnotationKind::Text => crate::remote::RemoteAnnotationKind::Text,
     }
 }
 
-fn truncate_text(text: &str, max_chars: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= max_chars {
-        text.to_string()
+fn annotation_geometry(position: &AnnotationPosition) -> Vec<(String, f64)> {
+    match position {
+        AnnotationPosition::Rectangle(r) => vec![
+            ("x0".into(), r.x0 as f64),
+            ("y0".into(), r.y0 as f64),
+            ("x1".into(), r.x1 as f64),
+            ("y1".into(), r.y1 as f64),
+        ],
+        AnnotationPosition::Arrow(a) => vec![
+            ("x0".into(), a.x0 as f64),
+            ("y0".into(), a.y0 as f64),
+            ("x1".into(), a.x1 as f64),
+            ("y1".into(), a.y1 as f64),
+        ],
+        AnnotationPosition::Text(t) => vec![("x".into(), t.x as f64), ("y".into(), t.y as f64)],
+    }
+}
+
+fn remote_annotation_to_local(
+    image_item_id: i64,
+    idx: usize,
+    ann: &crate::remote::RemoteAnnotation,
+) -> Option<Annotation> {
+    let kind = match ann.kind {
+        crate::remote::RemoteAnnotationKind::Rectangle => AnnotationKind::Rectangle,
+        crate::remote::RemoteAnnotationKind::Arrow => AnnotationKind::Arrow,
+        crate::remote::RemoteAnnotationKind::Text => AnnotationKind::Text,
+        crate::remote::RemoteAnnotationKind::Marker
+        | crate::remote::RemoteAnnotationKind::Segment => {
+            return None;
+        }
+    };
+    let position = remote_annotation_position(kind, &ann.geometry)?;
+    let created_at = chrono::DateTime::<chrono::Utc>::from_timestamp(
+        ann.created_at.min(i64::MAX as u64) as i64,
+        0,
+    )
+    .unwrap_or_else(chrono::Utc::now);
+    Some(Annotation {
+        id: -((idx as i64) + 1),
+        image_item_id,
+        kind,
+        position,
+        style: AnnotationStyle::default(),
+        content: ann.content.clone(),
+        created_at,
+        locked: ann.locked,
+        z_index: idx as i32,
+    })
+}
+
+fn remote_annotation_position(
+    kind: AnnotationKind,
+    geometry: &[(String, f64)],
+) -> Option<AnnotationPosition> {
+    let value = |key: &str| {
+        geometry
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| *value as f32)
+    };
+    match kind {
+        AnnotationKind::Rectangle => Some(AnnotationPosition::Rectangle(RectanglePosition {
+            x0: value("x0")?,
+            y0: value("y0")?,
+            x1: value("x1")?,
+            y1: value("y1")?,
+        })),
+        AnnotationKind::Arrow => Some(AnnotationPosition::Arrow(ArrowPosition {
+            x0: value("x0")?,
+            y0: value("y0")?,
+            x1: value("x1")?,
+            y1: value("y1")?,
+        })),
+        AnnotationKind::Text => Some(AnnotationPosition::Text(TextPosition {
+            x: value("x")?,
+            y: value("y")?,
+        })),
+    }
+}
+
+fn review_image_paths(folder: &Path, recursive: bool) -> std::io::Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    let extensions = ["jpg", "jpeg", "png", "webp", "bmp", "tiff", "tif", "gif"];
+    if recursive {
+        for entry in jwalk::WalkDir::new(folder)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if entry.file_type().is_file() {
+                push_review_image_path(&entry.path(), &extensions, &mut out);
+            }
+        }
     } else {
-        format!("{}…", chars[..max_chars].iter().collect::<String>())
+        for entry in std::fs::read_dir(folder)? {
+            let path = entry?.path();
+            if path.is_file() {
+                push_review_image_path(&path, &extensions, &mut out);
+            }
+        }
+    }
+    out.sort();
+    Ok(out)
+}
+
+fn push_review_image_path(path: &Path, extensions: &[&str], out: &mut Vec<PathBuf>) {
+    if path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| extensions.contains(&ext.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+    {
+        out.push(path.to_path_buf());
     }
 }

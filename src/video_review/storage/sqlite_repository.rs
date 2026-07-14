@@ -8,7 +8,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::review::domain::image_item::ReviewStatus;
 use crate::review::storage::paths::database_path;
 use crate::video_review::domain::{
-    BatchStats, MarkerKind, VideoBatch, VideoFilter, VideoItem, VideoMarker, VideoSegment, VideoTag,
+    BatchStats, MarkerKind, VideoBatch, VideoDefect, VideoFilter, VideoItem, VideoMarker,
+    VideoSegment, VideoTag,
 };
 use crate::video_review::error::{VideoReviewError, VideoReviewResult};
 use crate::video_review::storage::migrate;
@@ -536,6 +537,78 @@ impl VideoRepository for SqliteVideoRepository {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    fn create_defect(
+        &self,
+        batch_id: i64,
+        title: &str,
+        description: &str,
+        severity: u8,
+        time_ms: u64,
+        half_window_ms: u64,
+        video_ids: &[i64],
+        package_path: Option<&Path>,
+    ) -> VideoReviewResult<VideoDefect> {
+        let ids_json = serde_json::to_string(video_ids)?;
+        let path_str = package_path.map(|p| p.to_string_lossy().to_string());
+        let created = now_ts();
+        self.conn.execute(
+            "INSERT INTO video_review_defect
+             (batch_id, title, description, severity, time_ms, half_window_ms, video_ids, package_path, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                batch_id,
+                title,
+                description,
+                severity as i64,
+                time_ms as i64,
+                half_window_ms as i64,
+                ids_json,
+                path_str,
+                created,
+            ],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        Ok(VideoDefect {
+            id,
+            batch_id,
+            title: title.to_string(),
+            description: description.to_string(),
+            severity,
+            time_ms,
+            half_window_ms,
+            video_ids: video_ids.to_vec(),
+            package_path: package_path.map(Path::to_path_buf),
+            created_at: DateTime::from_timestamp(created, 0).unwrap_or_else(Utc::now),
+        })
+    }
+
+    fn list_defects(&self, batch_id: i64) -> VideoReviewResult<Vec<VideoDefect>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, batch_id, title, description, severity, time_ms, half_window_ms,
+                    video_ids, package_path, created_at
+             FROM video_review_defect WHERE batch_id = ?1 ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([batch_id], |row| {
+            let ids_json: String = row.get(7)?;
+            let video_ids: Vec<i64> = serde_json::from_str(&ids_json).unwrap_or_default();
+            let package_path: Option<String> = row.get(8)?;
+            let created: i64 = row.get(9)?;
+            Ok(VideoDefect {
+                id: row.get(0)?,
+                batch_id: row.get(1)?,
+                title: row.get(2)?,
+                description: row.get(3)?,
+                severity: row.get::<_, i64>(4)? as u8,
+                time_ms: row.get::<_, i64>(5)? as u64,
+                half_window_ms: row.get::<_, i64>(6)? as u64,
+                video_ids,
+                package_path: package_path.map(PathBuf::from),
+                created_at: DateTime::from_timestamp(created, 0).unwrap_or_else(Utc::now),
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 }
 

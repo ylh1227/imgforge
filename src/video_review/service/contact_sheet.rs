@@ -203,7 +203,12 @@ impl ContactSheetService {
     }
 }
 
-fn index_page_path(output_dir: &Path, base_name: &str, page_index: usize, total_pages: usize) -> PathBuf {
+fn index_page_path(
+    output_dir: &Path,
+    base_name: &str,
+    page_index: usize,
+    total_pages: usize,
+) -> PathBuf {
     if total_pages <= 1 {
         output_dir.join(format!("{base_name}.png"))
     } else {
@@ -220,8 +225,7 @@ fn export_image_index_page(
     let frame_w = cell_frame_width.max(160);
     let frame_h = (frame_w as f32 * 9.0 / 16.0).round() as u32;
     let layout = compute_layout(count, frame_w, frame_h);
-    let mut sheet =
-        RgbaImage::from_pixel(layout.sheet_w, layout.sheet_h, Rgba([28, 28, 30, 255]));
+    let mut sheet = RgbaImage::from_pixel(layout.sheet_w, layout.sheet_h, Rgba([28, 28, 30, 255]));
 
     for (idx, (path, label)) in items.iter().enumerate() {
         let row = idx / layout.cols;
@@ -507,9 +511,13 @@ mod tests {
                 .unwrap();
             items.push((path, format!("label_{i}")));
         }
-        let pages =
-            ContactSheetService::export_image_index_pages(&items, dir.path(), "screenshots_index", 160)
-                .unwrap();
+        let pages = ContactSheetService::export_image_index_pages(
+            &items,
+            dir.path(),
+            "screenshots_index",
+            160,
+        )
+        .unwrap();
         assert_eq!(pages.len(), 1);
         assert!(dir.path().join("screenshots_index.png").exists());
     }
@@ -525,9 +533,13 @@ mod tests {
                 .unwrap();
             items.push((path, format!("label_{i}")));
         }
-        let pages =
-            ContactSheetService::export_image_index_pages(&items, dir.path(), "screenshots_index", 160)
-                .unwrap();
+        let pages = ContactSheetService::export_image_index_pages(
+            &items,
+            dir.path(),
+            "screenshots_index",
+            160,
+        )
+        .unwrap();
         assert_eq!(pages.len(), 2);
         assert!(dir.path().join("screenshots_index_001.png").exists());
         assert!(dir.path().join("screenshots_index_002.png").exists());

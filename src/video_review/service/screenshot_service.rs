@@ -6,12 +6,12 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::ui::progress::ProgressReporter;
 use crate::video_review::domain::{VideoItem, VideoMarker, VideoSegment};
 use crate::video_review::error::{VideoReviewError, VideoReviewResult};
 use crate::video_review::service::contact_sheet::ContactSheetService;
 use crate::video_review::service::ffmpeg_backend::ms_to_timestamp;
 use crate::video_review::service::frame_cache::FrameCache;
-use crate::ui::progress::ProgressReporter;
 
 pub const DEFAULT_MAX_SHOTS: usize = 500;
 pub const DEFAULT_INTERVAL_SECS: f64 = 5.0;

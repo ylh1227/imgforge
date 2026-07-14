@@ -4,10 +4,11 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, Context, TextureHandle};
-use image::GenericImageView;
 
 use crate::review::domain::coords::ViewportTransform;
-use crate::review::service::{AsyncImageLoader, DecodedImage, ImageLoadTier};
+use crate::review::service::{
+    is_non_filesystem_path, AsyncImageLoader, DecodedImage, ImageLoadTier, LoadOutcome,
+};
 
 /// 每帧最多上传的纹理数量，避免窗口缩放/列表展开时主线程卡顿。
 const MAX_TEXTURE_UPLOADS_PER_FRAME: usize = 2;
@@ -28,6 +29,8 @@ pub struct ImageTextureCache {
     max_entries: usize,
     loader: AsyncImageLoader,
     current_tier: HashMap<String, ImageLoadTier>,
+    /// 路径级失败信息（停止无限重试）。
+    failures: HashMap<String, String>,
 }
 
 impl Default for ImageTextureCache {
@@ -44,6 +47,7 @@ impl ImageTextureCache {
             max_entries: max_entries.max(4),
             loader: AsyncImageLoader::new(2),
             current_tier: HashMap::new(),
+            failures: HashMap::new(),
         }
     }
 
@@ -53,7 +57,13 @@ impl ImageTextureCache {
 
     /// 请求加载（异步）；若已缓存同层或更高层则跳过。
     pub fn request(&mut self, path: &Path, thumb: Option<&Path>, tier: ImageLoadTier) {
+        if is_non_filesystem_path(path) {
+            return;
+        }
         let key = path.to_string_lossy().to_string();
+        if self.failures.contains_key(&key) {
+            return;
+        }
         if self.current_tier.get(&key).is_some_and(|t| *t >= tier) {
             return;
         }
@@ -64,17 +74,36 @@ impl ImageTextureCache {
     pub fn poll(&mut self, ctx: &Context) -> bool {
         let mut uploaded = false;
         for _ in 0..MAX_TEXTURE_UPLOADS_PER_FRAME {
-            let Some(img) = self.loader.try_recv_one() else {
+            let Some(outcome) = self.loader.try_recv_one() else {
                 break;
             };
-            self.insert_decoded(ctx, img);
-            uploaded = true;
+            match outcome {
+                LoadOutcome::Ok(img) => {
+                    self.insert_decoded(ctx, img);
+                    uploaded = true;
+                }
+                LoadOutcome::Err(fail) => {
+                    let path_key = fail.path.to_string_lossy().to_string();
+                    self.failures.insert(path_key, fail.error);
+                }
+            }
         }
         uploaded
     }
 
+    pub fn load_error(&self, path: &Path) -> Option<&str> {
+        let key = path.to_string_lossy().to_string();
+        self.failures.get(&key).map(String::as_str)
+    }
+
+    pub fn clear_error(&mut self, path: &Path) {
+        let key = path.to_string_lossy().to_string();
+        self.failures.remove(&key);
+    }
+
     fn insert_decoded(&mut self, ctx: &Context, img: DecodedImage) {
-        let path_key = img.key.split(':').next().unwrap_or(&img.key).to_string();
+        let path_key = img.path.to_string_lossy().to_string();
+        self.failures.remove(&path_key);
         let color_image = egui::ColorImage::from_rgba_unmultiplied(
             [img.width as usize, img.height as usize],
             &img.rgba,
@@ -90,7 +119,7 @@ impl ImageTextureCache {
             CachedImage {
                 texture: tex,
                 size: (img.width, img.height),
-                source_path: PathBuf::from(&path_key),
+                source_path: img.path,
                 tier: img.tier,
             },
         );
@@ -119,12 +148,14 @@ impl ImageTextureCache {
         let key = path.to_string_lossy().to_string();
         self.entries.remove(&key);
         self.current_tier.remove(&key);
+        self.failures.remove(&key);
         self.order.retain(|k| k != &key);
     }
 
     pub fn clear(&mut self) {
         self.entries.clear();
         self.current_tier.clear();
+        self.failures.clear();
         self.order.clear();
     }
 

@@ -1,13 +1,13 @@
 //! Tesseract CLI 后端。
 
 use std::path::Path;
-use std::process::Command;
 
 use crate::data_extract::error::{DataExtractError, DataExtractResult};
 use crate::data_extract::ocr::{OcrAvailability, OcrOutput};
+use crate::process_util;
 
 pub fn check_tesseract() -> OcrAvailability {
-    match Command::new("tesseract").arg("--version").output() {
+    match process_util::command("tesseract").arg("--version").output() {
         Ok(out) if out.status.success() => {
             let ver = String::from_utf8_lossy(&out.stdout);
             let first = ver.lines().next().unwrap_or("tesseract").to_string();
@@ -31,7 +31,7 @@ pub fn check_tesseract() -> OcrAvailability {
 }
 
 pub fn run_tesseract(image_path: &Path, lang: &str) -> DataExtractResult<OcrOutput> {
-    let out = Command::new("tesseract")
+    let out = process_util::command("tesseract")
         .arg(image_path)
         .arg("stdout")
         .arg("-l")

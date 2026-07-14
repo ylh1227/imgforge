@@ -67,6 +67,12 @@ pub struct AppConfig {
     /// 目标输出文件大小上限（字节）；启用后对 JPEG/WebP 等做质量二分拟合。
     #[serde(default)]
     pub target_max_bytes: Option<u64>,
+    /// 远端服务器接入配置（可选；默认关闭）。
+    #[serde(default)]
+    pub remote: crate::remote::config::RemoteConfig,
+    /// 移动设备拉取配置（可选；默认关闭）。
+    #[serde(default)]
+    pub mobile_pull: crate::mobile::MobilePullConfig,
 }
 
 impl Default for AppConfig {
@@ -102,6 +108,8 @@ impl Default for AppConfig {
             burn_review_annotations: false,
             bayer_only: false,
             target_max_bytes: None,
+            remote: crate::remote::config::RemoteConfig::default(),
+            mobile_pull: crate::mobile::MobilePullConfig::default(),
         }
     }
 }
@@ -120,6 +128,8 @@ impl AppConfig {
                 self.concurrency.value(),
             ));
         }
+        self.mobile_pull.validate()?;
+        self.remote.validate()?;
         Ok(())
     }
 }

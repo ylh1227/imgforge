@@ -75,4 +75,21 @@ pub trait VideoRepository {
 
     fn save_session_value(&self, key: &str, value: &str) -> VideoReviewResult<()>;
     fn load_session_value(&self, key: &str) -> VideoReviewResult<Option<String>>;
+
+    fn create_defect(
+        &self,
+        batch_id: i64,
+        title: &str,
+        description: &str,
+        severity: u8,
+        time_ms: u64,
+        half_window_ms: u64,
+        video_ids: &[i64],
+        package_path: Option<&Path>,
+    ) -> VideoReviewResult<crate::video_review::domain::VideoDefect>;
+
+    fn list_defects(
+        &self,
+        batch_id: i64,
+    ) -> VideoReviewResult<Vec<crate::video_review::domain::VideoDefect>>;
 }

@@ -1,11 +1,11 @@
-//! 视频评审 SQLite 表结构（`user_version` 5）。
+//! 视频评审 SQLite 表结构（`user_version` 6）。
 
 use rusqlite::Connection;
 
 use crate::review::storage::migrate as review_migrate;
 use crate::video_review::error::VideoReviewResult;
 
-pub const VIDEO_REVIEW_SCHEMA_VERSION: i32 = 5;
+pub const VIDEO_REVIEW_SCHEMA_VERSION: i32 = 6;
 
 const SCHEMA_V4: &str = r#"
 CREATE TABLE IF NOT EXISTS video_review_batch (
@@ -93,7 +93,7 @@ pub fn ensure_schema(conn: &Connection) -> VideoReviewResult<()> {
     let version: i32 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap_or(0);
-    if version < VIDEO_REVIEW_SCHEMA_VERSION {
+    if version < 5 {
         conn.execute_batch(SCHEMA_V4)?;
         if !column_exists(conn, "video_review_item", "device_model")? {
             conn.execute(
@@ -101,6 +101,29 @@ pub fn ensure_schema(conn: &Connection) -> VideoReviewResult<()> {
                 [],
             )?;
         }
+        conn.pragma_update(None, "user_version", 5)?;
+    }
+    let version: i32 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap_or(0);
+    if version < VIDEO_REVIEW_SCHEMA_VERSION {
+        conn.execute_batch(
+            r#"
+CREATE TABLE IF NOT EXISTS video_review_defect (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  batch_id INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  severity INTEGER NOT NULL DEFAULT 2,
+  time_ms INTEGER NOT NULL,
+  half_window_ms INTEGER NOT NULL DEFAULT 5000,
+  video_ids TEXT NOT NULL,
+  package_path TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_video_review_defect_batch ON video_review_defect(batch_id);
+"#,
+        )?;
         conn.pragma_update(None, "user_version", VIDEO_REVIEW_SCHEMA_VERSION)?;
     }
     Ok(())

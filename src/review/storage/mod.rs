@@ -5,6 +5,7 @@ pub(crate) mod consistency;
 pub(crate) mod migrate;
 pub(crate) mod paths;
 pub mod repository;
+pub(crate) mod sqlite_mappers;
 pub(crate) mod sqlite_repository;
 pub mod traits;
 

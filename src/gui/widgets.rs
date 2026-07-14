@@ -9,6 +9,76 @@ use crate::gui::theme;
 /// 工具栏统一行高（与 compact 按钮、状态芯片一致）。
 pub const TOOLBAR_ROW_HEIGHT: f32 = 32.0;
 
+/// 等分列宽：保证 `cols * cell + (cols-1)*gap <= total`，不会因下限撑破容器。
+pub fn equal_cell_width(total: f32, gap: f32, cols: usize) -> f32 {
+    let cols = cols.max(1) as f32;
+    let usable = (total - gap * (cols - 1.0)).max(cols);
+    (usable / cols).floor().max(1.0)
+}
+
+/// 侧栏 + 主区布局模式（各业务页共用，防止小窗裁切侧栏）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SideMainMode {
+    SideBySide,
+    Stacked,
+}
+
+impl SideMainMode {
+    pub fn from_width(avail_w: f32, breakpoint: f32) -> Self {
+        if avail_w >= breakpoint {
+            Self::SideBySide
+        } else {
+            Self::Stacked
+        }
+    }
+}
+
+/// 侧栏 + 主区几何参数。新模块按此分配宽度，勿再写死 `LEFT_W` 后让主区贪婪扩张。
+#[derive(Debug, Clone, Copy)]
+pub struct SideMainGeometry {
+    pub mode: SideMainMode,
+    pub left_w: f32,
+    pub main_w: f32,
+    pub row_h: f32,
+    pub side_max_h: f32,
+    pub gap: f32,
+    pub right_inset: f32,
+}
+
+impl SideMainGeometry {
+    /// 根据可用区域与断点计算布局；`left_w` 为宽屏侧栏目标宽。
+    pub fn compute(avail: egui::Vec2, breakpoint: f32, left_w: f32) -> Self {
+        let gap = theme::SIDE_MAIN_GAP;
+        let right_inset = theme::SIDE_MAIN_RIGHT_INSET;
+        let mode = SideMainMode::from_width(avail.x, breakpoint);
+        let side_max_h = (avail.y * theme::SIDE_MAIN_STACK_SIDE_FRAC)
+            .clamp(theme::SIDE_MAIN_STACK_SIDE_MIN_H, theme::SIDE_MAIN_STACK_SIDE_MAX_H);
+        match mode {
+            SideMainMode::SideBySide => {
+                let main_w = (avail.x - left_w - gap - right_inset).max(160.0);
+                Self {
+                    mode,
+                    left_w,
+                    main_w,
+                    row_h: avail.y.max(280.0),
+                    side_max_h,
+                    gap,
+                    right_inset,
+                }
+            }
+            SideMainMode::Stacked => Self {
+                mode,
+                left_w: avail.x,
+                main_w: avail.x,
+                row_h: avail.y.max(280.0),
+                side_max_h,
+                gap,
+                right_inset,
+            },
+        }
+    }
+}
+
 /// 工具栏内按钮内边距（小于全局 `button_padding`，以便固定行高内垂直居中）。
 const TOOLBAR_BUTTON_PADDING: egui::Vec2 = egui::vec2(10.0, 4.0);
 /// 与 compact 按钮描边对齐，纯文本标签需补一点左距。
@@ -179,14 +249,22 @@ pub fn toolbar_combo_box(
 
 pub fn navigation_header(ui: &mut Ui, subtitle: &str) {
     let dark = ui.style().visuals.dark_mode;
+    let accent = theme::accent(dark);
     ui.vertical(|ui| {
-        ui.label(
+        let brand = ui.label(
             RichText::new("ImgForge")
                 .font(theme::title_font())
                 .strong()
                 .color(theme::primary_label(dark)),
         );
-        ui.add_space(4.0);
+        // 签名：品牌字下方细强调色线
+        let underline = egui::Rect::from_min_size(
+            egui::pos2(brand.rect.left(), brand.rect.bottom() + 2.0),
+            egui::vec2((brand.rect.width() * 0.42).clamp(36.0, 88.0), 2.5),
+        );
+        ui.painter()
+            .rect_filled(underline, CornerRadius::same(2), accent);
+        ui.add_space(8.0);
         ui.label(
             RichText::new(subtitle)
                 .font(theme::subtitle_font())
@@ -195,29 +273,189 @@ pub fn navigation_header(ui: &mut Ui, subtitle: &str) {
     });
 }
 
-/// 分组标题（与 `grouped_section` 标题样式一致）。
-pub fn section_header(ui: &mut Ui, title: &str) {
-    let dark = ui.style().visuals.dark_mode;
-    ui.label(
-        RichText::new(title)
-            .font(theme::section_header_font())
-            .strong()
-            .color(theme::secondary_label(dark)),
-    );
+/// 页头之后的标准间距。
+pub fn page_header_gap(ui: &mut Ui) {
+    ui.add_space(theme::PAGE_HEADER_GAP);
 }
 
-/// 分组内容框（无标题），与 `grouped_section` 内框样式一致。
+/// 区块之间的标准间距。
+pub fn section_gap(ui: &mut Ui) {
+    ui.add_space(theme::SECTION_GAP);
+}
+
+/// 顶栏与内容区间距。
+pub fn chrome_gap(ui: &mut Ui) {
+    ui.add_space(theme::CHROME_GAP);
+}
+
+/// 居中内容列：按视口宽度封顶，左右留白一致。
+pub fn content_column<R>(
+    ui: &mut Ui,
+    content_width: f32,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    ui.vertical_centered(|ui| {
+        ui.set_width(content_width);
+        add_contents(ui)
+    })
+    .inner
+}
+
+/// 分组标题（左侧细强调色条 + 小号字重）。
+pub fn section_header(ui: &mut Ui, title: &str) {
+    let dark = ui.style().visuals.dark_mode;
+    let accent = theme::accent(dark);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let (bar_rect, _) =
+            ui.allocate_exact_size(egui::vec2(3.0, 12.0), egui::Sense::hover());
+        ui.painter()
+            .rect_filled(bar_rect, CornerRadius::same(2), accent);
+        ui.label(
+            RichText::new(title)
+                .font(theme::section_header_font())
+                .strong()
+                .color(theme::secondary_label(dark)),
+        );
+    });
+}
+
+/// 分组内容框（无标题），始终拉满父级可用宽度。
 pub fn grouped_section_frame<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
     let dark = ui.style().visuals.dark_mode;
+    // 锁定在可视 max_rect 内，避免 set_min_width 把父级撑出裁切区
+    let outer_w = ui
+        .available_width()
+        .min(ui.max_rect().width())
+        .max(80.0);
+    ui.set_max_width(outer_w);
+    ui.set_width(outer_w);
+
     Frame::new()
         .fill(theme::grouped_fill(dark))
+        .stroke(theme::separator_stroke(dark))
         .corner_radius(CornerRadius::same(theme::GROUP_RADIUS))
-        .inner_margin(Margin::symmetric(16, 14))
+        .inner_margin(Margin::symmetric(12, 12))
         .show(ui, |ui| {
-            ui.set_width(ui.available_width());
+            let inner_w = ui
+                .available_width()
+                .min(ui.max_rect().width())
+                .max(60.0);
+            ui.set_max_width(inner_w);
+            ui.set_width(inner_w);
             add_contents(ui)
         })
         .inner
+}
+
+/// 拉满当前行宽的主要按钮（侧栏操作区用）。
+pub fn full_width_primary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Response {
+    let w = ui
+        .available_width()
+        .min(ui.max_rect().width())
+        .max(40.0);
+    full_width_primary_button_in(ui, label, enabled, w)
+}
+
+/// 指定宽度的主要按钮。
+pub fn full_width_primary_button_in(
+    ui: &mut Ui,
+    label: &str,
+    enabled: bool,
+    width: f32,
+) -> egui::Response {
+    let dark = ui.style().visuals.dark_mode;
+    let accent = theme::accent(dark);
+    let btn = Button::new(
+        RichText::new(label)
+            .size(13.0)
+            .strong()
+            .color(Color32::WHITE),
+    )
+    .fill(if enabled {
+        accent
+    } else {
+        accent.linear_multiply(0.45)
+    })
+    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS));
+    // 必须 add_sized：min_size 会因文案撑破列宽导致右侧裁切
+    ui.add_enabled_ui(enabled, |ui| {
+        ui.add_sized(egui::vec2(width.max(40.0), TOOLBAR_ROW_HEIGHT), btn)
+    })
+    .inner
+}
+
+/// 拉满当前行宽的次要按钮（侧栏操作区用）。
+pub fn full_width_secondary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Response {
+    let w = ui
+        .available_width()
+        .min(ui.max_rect().width())
+        .max(40.0);
+    full_width_secondary_button_in(ui, label, enabled, w)
+}
+
+/// 指定宽度的次要按钮。
+pub fn full_width_secondary_button_in(
+    ui: &mut Ui,
+    label: &str,
+    enabled: bool,
+    width: f32,
+) -> egui::Response {
+    let dark = ui.style().visuals.dark_mode;
+    let btn = Button::new(
+        RichText::new(label)
+            .size(13.0)
+            .color(theme::primary_label(dark)),
+    )
+    .fill(theme::control_fill(dark))
+    .stroke(theme::control_stroke(dark))
+    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS));
+    ui.add_enabled_ui(enabled, |ui| {
+        ui.add_sized(egui::vec2(width.max(40.0), TOOLBAR_ROW_HEIGHT), btn)
+    })
+    .inner
+}
+
+/// 空状态：标题 + 一句指引（产品页惯例）。
+pub fn empty_state(ui: &mut Ui, headline: &str, detail: &str) {
+    let dark = ui.style().visuals.dark_mode;
+    Frame::new()
+        .fill(theme::log_fill(dark))
+        .stroke(theme::separator_stroke(dark))
+        .corner_radius(CornerRadius::same(theme::GROUP_RADIUS))
+        .inner_margin(Margin::symmetric(18, 16))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(
+                RichText::new(headline)
+                    .size(14.0)
+                    .strong()
+                    .color(theme::primary_label(dark)),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(detail)
+                    .size(13.0)
+                    .color(theme::secondary_label(dark)),
+            );
+        });
+}
+
+/// 状态徽章（成功 / 警告 / 失败 / 信息）。
+pub fn status_badge(ui: &mut Ui, label: &str, color: Color32) {
+    Frame::new()
+        .fill(color.linear_multiply(0.18))
+        .stroke(Stroke::new(1.0, color.linear_multiply(0.7)))
+        .corner_radius(CornerRadius::same(theme::BADGE_RADIUS))
+        .inner_margin(Margin::symmetric(8, 3))
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(label)
+                    .font(theme::badge_font())
+                    .strong()
+                    .color(color),
+            );
+        });
 }
 
 /// 内容层分组（inset grouped list），宽度随父级拉伸。
@@ -233,7 +471,7 @@ pub fn glass_toolbar_frame(dark: bool) -> Frame {
         .fill(theme::window_fill(dark))
         .stroke(Stroke::NONE)
         .shadow(theme::toolbar_shadow(dark))
-        .inner_margin(Margin::symmetric(20, 10))
+        .inner_margin(Margin::symmetric(16, 12))
         .corner_radius(CornerRadius::ZERO)
 }
 
@@ -245,57 +483,104 @@ pub enum ToolbarClick {
     OpenOutput,
 }
 
-/// egui 回退工具栏：宽屏居中，窄屏自动换行。
+/// egui 回退工具栏：整组按钮相对底栏水平居中；两侧等宽、中间主按钮。
 pub fn action_toolbar_row(ui: &mut Ui, enabled: bool, running: bool) -> Option<ToolbarClick> {
     let narrow = ui.available_width() < theme::NARROW_BREAKPOINT;
     let mut clicked = None;
 
-    ui.with_layout(
-        if narrow {
-            Layout::top_down(egui::Align::Center)
-        } else {
-            Layout::left_to_right(egui::Align::Center)
-        },
-        |ui| {
-            if narrow {
-                if primary_button(ui, "开始转换", enabled).clicked() {
+    const SIDE_W: f32 = 120.0;
+    const PRIMARY_W: f32 = 140.0;
+    const GAP: f32 = 12.0;
+    const BAR_H: f32 = 46.0;
+
+    ui.set_width(ui.available_width());
+    ui.set_min_height(BAR_H);
+
+    if narrow {
+        ui.with_layout(Layout::top_down(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.y = 8.0;
+            if toolbar_primary_button(ui, "开始转换", enabled, PRIMARY_W).clicked() {
+                clicked = Some(ToolbarClick::Start);
+            }
+            let side_group_w = SIDE_W * 2.0 + GAP;
+            centered_button_row(ui, side_group_w, GAP, |ui| {
+                if toolbar_side_button(ui, "取消", running, SIDE_W).clicked() {
+                    clicked = Some(ToolbarClick::Cancel);
+                }
+                if toolbar_side_button(ui, "打开输出", true, SIDE_W).clicked() {
+                    clicked = Some(ToolbarClick::OpenOutput);
+                }
+            });
+        });
+    } else {
+        let group_w = SIDE_W * 2.0 + PRIMARY_W + GAP * 2.0;
+        ui.with_layout(Layout::top_down(egui::Align::Center), |ui| {
+            ui.set_width(ui.available_width());
+            centered_button_row(ui, group_w, GAP, |ui| {
+                if toolbar_side_button(ui, "取消", running, SIDE_W).clicked() {
+                    clicked = Some(ToolbarClick::Cancel);
+                }
+                if toolbar_primary_button(ui, "开始转换", enabled, PRIMARY_W).clicked() {
                     clicked = Some(ToolbarClick::Start);
                 }
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if secondary_button(ui, "取消", running).clicked() {
-                        clicked = Some(ToolbarClick::Cancel);
-                    }
-                    ui.add_space(8.0);
-                    if secondary_button(ui, "打开输出", true).clicked() {
-                        clicked = Some(ToolbarClick::OpenOutput);
-                    }
-                });
-            } else {
-                ui.horizontal_centered(|ui| {
-                    if primary_button(ui, "开始转换", enabled).clicked() {
-                        clicked = Some(ToolbarClick::Start);
-                    }
-                    ui.add_space(8.0);
-                    if secondary_button(ui, "取消", running).clicked() {
-                        clicked = Some(ToolbarClick::Cancel);
-                    }
-                    ui.add_space(8.0);
-                    if secondary_button(ui, "打开输出", true).clicked() {
-                        clicked = Some(ToolbarClick::OpenOutput);
-                    }
-                });
-            }
-        },
-    );
+                if toolbar_side_button(ui, "打开输出", true, SIDE_W).clicked() {
+                    clicked = Some(ToolbarClick::OpenOutput);
+                }
+            });
+        });
+    }
 
     clicked
+}
+
+/// 在可用宽度内用左右等宽留白，把固定宽度的按钮组居中。
+fn centered_button_row(ui: &mut Ui, group_w: f32, gap: f32, add_buttons: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.x = 0.0;
+        let pad = ((ui.available_width() - group_w) * 0.5).max(0.0);
+        ui.allocate_exact_size(egui::vec2(pad, 1.0), egui::Sense::hover());
+        ui.spacing_mut().item_spacing.x = gap;
+        add_buttons(ui);
+    });
+}
+
+fn toolbar_primary_button(ui: &mut Ui, label: &str, enabled: bool, width: f32) -> egui::Response {
+    let dark = ui.style().visuals.dark_mode;
+    let accent = theme::accent(dark);
+    let btn = Button::new(
+        RichText::new(label)
+            .size(15.0)
+            .strong()
+            .color(Color32::WHITE),
+    )
+    .fill(if enabled {
+        accent
+    } else {
+        accent.linear_multiply(0.45)
+    })
+    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
+    .min_size(egui::vec2(width, 38.0));
+    ui.add_enabled(enabled, btn)
+}
+
+fn toolbar_side_button(ui: &mut Ui, label: &str, enabled: bool, width: f32) -> egui::Response {
+    let dark = ui.style().visuals.dark_mode;
+    let btn = Button::new(
+        RichText::new(label)
+            .size(14.0)
+            .color(theme::primary_label(dark)),
+    )
+    .fill(theme::control_fill(dark))
+    .stroke(theme::control_stroke(dark))
+    .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
+    .min_size(egui::vec2(width, 38.0));
+    ui.add_enabled(enabled, btn)
 }
 
 pub fn folder_field(ui: &mut Ui, label: &str, path: &mut String, enabled: bool) {
     let dark = ui.style().visuals.dark_mode;
     let narrow = ui.available_width() < theme::NARROW_BREAKPOINT;
-    const BROWSE_WIDTH: f32 = 88.0;
 
     if narrow {
         ui.label(
@@ -304,19 +589,17 @@ pub fn folder_field(ui: &mut Ui, label: &str, path: &mut String, enabled: bool) 
                 .color(theme::primary_label(dark)),
         );
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            let edit_w = (ui.available_width() - BROWSE_WIDTH - 8.0).max(80.0);
-            let edit = TextEdit::singleline(path)
-                .hint_text("选择或拖入文件夹…")
-                .margin(egui::vec2(12.0, 10.0))
-                .desired_width(edit_w);
-            ui.add_enabled(enabled, edit);
-            browse_button(ui, enabled, path, dark);
-        });
+        if path_field_fill(ui, path, "选择或拖入文件夹…", enabled, true) {
+            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                *path = folder.display().to_string();
+            }
+        }
     } else {
         ui.horizontal(|ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.x = 0.0;
             ui.allocate_ui_with_layout(
-                egui::vec2(52.0, ui.spacing().interact_size.y),
+                egui::vec2(theme::SETTINGS_LABEL_WIDTH, TOOLBAR_ROW_HEIGHT),
                 Layout::left_to_right(egui::Align::Center),
                 |ui| {
                     ui.label(
@@ -326,36 +609,77 @@ pub fn folder_field(ui: &mut Ui, label: &str, path: &mut String, enabled: bool) 
                     );
                 },
             );
-            let edit_w = (ui.available_width() - BROWSE_WIDTH - 8.0).max(120.0);
-            let edit = TextEdit::singleline(path)
-                .hint_text("选择或拖入文件夹…")
-                .margin(egui::vec2(12.0, 10.0))
-                .desired_width(edit_w);
-            ui.add_enabled(enabled, edit);
-            browse_button(ui, enabled, path, dark);
+            ui.add_space(8.0);
+            if path_field_fill(ui, path, "选择或拖入文件夹…", enabled, true) {
+                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                    *path = folder.display().to_string();
+                }
+            }
         });
     }
-
-    ui.add_space(4.0);
-    ui.separator();
-    ui.add_space(4.0);
 }
 
-fn browse_button(ui: &mut Ui, enabled: bool, path: &mut String, dark: bool) {
-    if ui
-        .add_enabled(
-            enabled,
-            Button::new(RichText::new("浏览…").size(13.0))
-                .fill(theme::control_fill(dark))
-                .stroke(theme::control_stroke(dark))
-                .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS)),
-        )
-        .clicked()
-    {
-        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-            *path = folder.display().to_string();
-        }
+/// 路径输入，可选右侧「浏览…」。整行占满当前 `available_width()`，右缘与全宽控件对齐。
+///
+/// 返回是否点击了浏览（由调用方打开目录对话框）。
+pub fn path_field_fill(
+    ui: &mut Ui,
+    path: &mut String,
+    hint: &str,
+    enabled: bool,
+    with_browse: bool,
+) -> bool {
+    const BROWSE_W: f32 = 88.0;
+    const GAP: f32 = 8.0;
+    let h = TOOLBAR_ROW_HEIGHT;
+    let dark = ui.style().visuals.dark_mode;
+    let total_w = ui.available_width().max(80.0);
+    let (row_rect, _) = ui.allocate_exact_size(egui::vec2(total_w, h), egui::Sense::hover());
+
+    let mut browse_clicked = false;
+    if with_browse {
+        let browse_rect = egui::Rect::from_min_size(
+            egui::pos2(row_rect.max.x - BROWSE_W, row_rect.min.y),
+            egui::vec2(BROWSE_W, h),
+        );
+        let edit_rect = egui::Rect::from_min_max(
+            row_rect.min,
+            egui::pos2((browse_rect.min.x - GAP).max(row_rect.min.x), row_rect.max.y),
+        );
+
+        ui.allocate_ui_at_rect(edit_rect, |ui| {
+            ui.set_enabled(enabled);
+            ui.add_sized(
+                edit_rect.size(),
+                TextEdit::singleline(path)
+                    .hint_text(hint)
+                    .margin(egui::vec2(12.0, 8.0)),
+            );
+        });
+        ui.allocate_ui_at_rect(browse_rect, |ui| {
+            ui.set_enabled(enabled);
+            browse_clicked = ui
+                .add_sized(
+                    browse_rect.size(),
+                    Button::new(RichText::new("浏览…").size(13.0))
+                        .fill(theme::control_fill(dark))
+                        .stroke(theme::control_stroke(dark))
+                        .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS)),
+                )
+                .clicked();
+        });
+    } else {
+        ui.allocate_ui_at_rect(row_rect, |ui| {
+            ui.set_enabled(enabled);
+            ui.add_sized(
+                row_rect.size(),
+                TextEdit::singleline(path)
+                    .hint_text(hint)
+                    .margin(egui::vec2(12.0, 8.0)),
+            );
+        });
     }
+    browse_clicked
 }
 
 pub fn primary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Response {
@@ -526,11 +850,17 @@ pub fn tab_grid_selector<R>(
 {
     const COLS: usize = 2;
     let gap = 6.0;
-    let avail = (ui.available_width() - 2.0).max(128.0);
-    let cell_w = ((avail - gap * (COLS as f32 - 1.0)) / COLS as f32).max(64.0);
+    let avail = ui
+        .available_width()
+        .min(ui.max_rect().width())
+        .max(80.0);
+    let cell_w = equal_cell_width(avail, gap, COLS);
 
+    ui.set_max_width(avail);
+    ui.set_width(avail);
     for (row_idx, chunk) in tabs.chunks(COLS).enumerate() {
         ui.horizontal(|ui| {
+            ui.set_max_width(avail);
             ui.spacing_mut().item_spacing.x = gap;
             for (tab, label) in chunk {
                 if tab_chip_sized(ui, label, cell_w, current == *tab, true) {
@@ -628,7 +958,7 @@ pub fn status_dot(ui: &Ui, center: egui::Pos2, rgba: [u8; 4], radius: f32) {
     );
 }
 
-/// 顶部模式切换条：紧凑横向分段，宽度随内容收缩（不撑满父级）。
+/// 顶部模式切换条：轨道拉满父级宽度，与下方内容列左右对齐；分段等分。
 pub fn mode_tab_bar<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T, &str)]) {
     if options.len() < 2 {
         return;
@@ -636,70 +966,72 @@ pub fn mode_tab_bar<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[
 
     let dark = ui.style().visuals.dark_mode;
     let accent = theme::accent(dark);
-    let seg_w = if ui.available_width() < theme::NARROW_BREAKPOINT {
-        108.0
-    } else {
-        120.0
-    };
-    let seg_h = 36.0;
+    let seg_h = 34.0;
+    let n = options.len() as f32;
+    let track_w = ui.available_width();
+    ui.set_width(track_w);
 
-    ui.horizontal(|ui| {
-        Frame::new()
-            .fill(theme::segment_track_fill(dark))
-            .stroke(theme::separator_stroke(dark))
-            .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
-            .inner_margin(Margin::same(4))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    for (option, label) in options {
-                        let selected = *value == *option;
-                        let (fill, stroke, fg) = if selected {
-                            (accent, Stroke::NONE, Color32::WHITE)
-                        } else {
-                            (
-                                Color32::TRANSPARENT,
-                                Stroke::NONE,
-                                theme::primary_label(dark),
-                            )
-                        };
+    Frame::new()
+        .fill(theme::segment_track_fill(dark))
+        .stroke(theme::separator_stroke(dark))
+        .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
+        .inner_margin(Margin::same(3))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let gap = 3.0;
+            let inner_w = ui.available_width();
+            let seg_w = ((inner_w - gap * (n - 1.0)) / n).max(64.0);
 
-                        let text = RichText::new(*label).size(14.0).color(fg);
-                        let text = if selected { text.strong() } else { text };
-                        let btn = Button::new(text)
-                            .fill(fill)
-                            .stroke(stroke)
-                            .corner_radius(CornerRadius::same(
-                                theme::CONTROL_RADIUS.saturating_sub(2),
-                            ))
-                            .min_size(egui::vec2(seg_w, seg_h));
+            ui.horizontal(|ui| {
+                ui.set_width(inner_w);
+                ui.spacing_mut().item_spacing.x = gap;
+                for (option, label) in options {
+                    let selected = *value == *option;
+                    let (fill, stroke, fg) = if selected {
+                        (accent, Stroke::NONE, Color32::WHITE)
+                    } else {
+                        (
+                            Color32::TRANSPARENT,
+                            Stroke::NONE,
+                            theme::secondary_label(dark),
+                        )
+                    };
 
-                        if ui.add(btn).clicked() {
-                            *value = *option;
-                        }
+                    let text = RichText::new(*label).size(13.5).color(fg);
+                    let text = if selected { text.strong() } else { text };
+                    let btn = Button::new(text)
+                        .fill(fill)
+                        .stroke(stroke)
+                        .corner_radius(CornerRadius::same(
+                            theme::CONTROL_RADIUS.saturating_sub(2),
+                        ))
+                        .min_size(egui::vec2(seg_w, seg_h));
+
+                    if ui.add_sized(egui::vec2(seg_w, seg_h), btn).clicked() {
+                        *value = *option;
                     }
-                });
+                }
             });
-    });
+        });
 }
 
 pub fn error_banner(ui: &mut Ui, text: &str) {
-    let dark = ui.style().visuals.dark_mode;
+    semantic_banner(ui, text, theme::error_color(ui.style().visuals.dark_mode));
+}
+
+pub fn warning_banner(ui: &mut Ui, text: &str) {
+    semantic_banner(ui, text, theme::warning_color(ui.style().visuals.dark_mode));
+}
+
+fn semantic_banner(ui: &mut Ui, text: &str, color: Color32) {
     Frame::new()
-        .fill(theme::error_color(dark).linear_multiply(0.12))
+        .fill(color.linear_multiply(0.12))
         .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
         .inner_margin(Margin::symmetric(14, 10))
-        .stroke(Stroke::new(
-            1.0,
-            theme::error_color(dark).linear_multiply(0.55),
-        ))
+        .stroke(Stroke::new(1.0, color.linear_multiply(0.55)))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(
-                RichText::new(text)
-                    .size(13.5)
-                    .color(theme::error_color(dark)),
-            );
+            ui.label(RichText::new(text).size(13.5).color(color));
         });
 }
 
@@ -762,23 +1094,49 @@ pub fn settings_labeled_row<R>(
         add_contents(ui)
     } else {
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
             settings_label(ui, label, dark);
             ui.add_space(8.0);
-            add_contents(ui)
+            let w = ui.available_width().max(40.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(w, ui.available_height().max(1.0)),
+                Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_width(w);
+                    add_contents(ui)
+                },
+            )
+            .inner
         })
         .inner
     }
 }
 
-/// 与 [`settings_labeled_row`] 标签列对齐的缩进区域（用于预设按钮等）。
+/// 与 [`settings_labeled_row`] 标签列对齐的缩进区域（用于操作按钮等）。
 pub fn settings_indented<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
     let narrow = ui.available_width() < theme::NARROW_BREAKPOINT;
     if narrow {
         add_contents(ui)
     } else {
+        // 与 settings_labeled_row 完全同一套间距，避免多出/少出 item_spacing 导致左右不齐
         ui.horizontal(|ui| {
-            ui.add_space(theme::SETTINGS_LABEL_WIDTH + 8.0);
-            add_contents(ui)
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.allocate_ui_with_layout(
+                egui::vec2(theme::SETTINGS_LABEL_WIDTH, ui.spacing().interact_size.y),
+                Layout::left_to_right(egui::Align::Center),
+                |_| {},
+            );
+            ui.add_space(8.0);
+            let w = ui.available_width().max(40.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(w, ui.spacing().interact_size.y.max(TOOLBAR_ROW_HEIGHT)),
+                Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_width(w);
+                    add_contents(ui)
+                },
+            )
+            .inner
         })
         .inner
     }
@@ -850,23 +1208,36 @@ pub fn quality_presets_row(ui: &mut Ui, quality: &mut u8, enabled: bool) {
 
 pub fn status_banner(ui: &mut Ui, text: &str, running: bool) {
     let dark = ui.style().visuals.dark_mode;
-    let (fill, fg) = if running {
+    let (fill, stroke, fg) = if running {
         (
-            theme::accent(dark).linear_multiply(0.16),
+            theme::accent(dark).linear_multiply(0.14),
+            Stroke::new(1.0, theme::accent(dark).linear_multiply(0.45)),
             theme::accent(dark),
         )
     } else {
-        (theme::log_fill(dark), theme::secondary_label(dark))
+        (
+            theme::log_fill(dark),
+            theme::separator_stroke(dark),
+            theme::secondary_label(dark),
+        )
     };
 
     Frame::new()
         .fill(fill)
         .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS))
         .inner_margin(Margin::symmetric(14, 10))
-        .stroke(theme::separator_stroke(dark))
+        .stroke(stroke)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new(text).size(13.5).color(fg));
+            ui.horizontal(|ui| {
+                if running {
+                    let (dot, _) =
+                        ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
+                    ui.painter()
+                        .circle_filled(dot.center(), 3.5, theme::accent(dark));
+                }
+                ui.label(RichText::new(text).size(13.5).color(fg));
+            });
         });
 }
 
@@ -913,11 +1284,10 @@ pub fn log_panel(ui: &mut Ui, lines: &[String], max_height: f32) {
 
 pub fn drop_hint(ui: &mut Ui) {
     let dark = ui.style().visuals.dark_mode;
-    ui.add_space(4.0);
+    ui.add_space(2.0);
     ui.label(
-        RichText::new("提示：可将文件夹拖入窗口以选择输入目录")
+        RichText::new("可将文件夹拖入窗口，或点「浏览…」选择路径")
             .size(12.0)
-            .italics()
             .color(theme::secondary_label(dark)),
     );
 }

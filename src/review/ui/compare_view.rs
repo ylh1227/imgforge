@@ -413,11 +413,43 @@ impl CompareView {
 
         let original_entry = self.textures.get(original_path).cloned();
         let Some(original) = original_entry else {
-            ui.colored_label(
-                theme::error_color(ui.style().visuals.dark_mode),
-                "正在加载原图…",
-            );
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            if crate::review::service::is_non_filesystem_path(original_path) {
+                // 尝试先显示本地缩略图
+                if let Some(thumb) = thumb_path.filter(|p| p.exists()) {
+                    self.textures.request(thumb, None, ImageLoadTier::Thumb);
+                    let _ = self.textures.poll(ctx);
+                    if let Some(preview) = self.textures.get(thumb).cloned() {
+                        self.left.set_image_size(preview.size);
+                        ui.colored_label(
+                            theme::warning_color(ui.style().visuals.dark_mode),
+                            "原图下载中…（当前显示缩略图）",
+                        );
+                        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                        // 继续用缩略图路径渲染会很复杂；这里先提示并等待
+                        return Vec::new();
+                    }
+                }
+                ui.colored_label(
+                    theme::warning_color(ui.style().visuals.dark_mode),
+                    "正在下载原图…",
+                );
+            } else if let Some(err) = self.textures.load_error(original_path) {
+                ui.colored_label(
+                    theme::error_color(ui.style().visuals.dark_mode),
+                    format!("无法打开图片：{err}"),
+                );
+                ui.label(
+                    RichText::new(original_path.display().to_string())
+                        .weak()
+                        .size(11.0),
+                );
+            } else {
+                ui.colored_label(
+                    theme::error_color(ui.style().visuals.dark_mode),
+                    "正在加载原图…",
+                );
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
             return Vec::new();
         };
         self.left.set_image_size(original.size);

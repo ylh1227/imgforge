@@ -16,6 +16,8 @@ pub async fn run_batch(
     cancelled: Arc<AtomicBool>,
     progress: Option<Arc<dyn ProgressReporter>>,
 ) -> AppResult<ProcessReport> {
+    let config = crate::mobile::prepare_inputs(config, Arc::clone(&cancelled), progress.clone())?;
+
     let scan_options = ScanOptions {
         input_dir: config.input_dir.clone(),
         output_dir: config.output_dir.clone(),

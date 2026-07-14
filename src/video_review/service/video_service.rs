@@ -6,12 +6,19 @@ use std::sync::Arc;
 use jwalk::WalkDir;
 
 use crate::review::domain::image_item::ReviewStatus;
+use crate::ui::progress::ProgressReporter;
 use crate::video_review::domain::{
     is_video_extension, BatchStats, MarkerKind, VideoBatch, VideoFilter, VideoItem, VideoMarker,
     VideoSegment, VideoTag,
 };
 use crate::video_review::error::{VideoReviewError, VideoReviewResult};
+use crate::video_review::service::align_service::{
+    AlignBatchResult, AlignService, DEFAULT_ALIGN_SECONDS,
+};
 use crate::video_review::service::contact_sheet::{ContactSheetResult, FrameProvider};
+use crate::video_review::service::defect_package::{
+    create_defect_package, CreateDefectRequest, CreateDefectResult,
+};
 use crate::video_review::service::export_service::{ContactSheetExportRequest, VideoExportService};
 use crate::video_review::service::ffmpeg_backend::{
     FfmpegAvailability, FfmpegBackend, VideoBackend,
@@ -23,8 +30,34 @@ use crate::video_review::service::grid_video::{
 use crate::video_review::service::screenshot_service::{
     BatchScreenshotRequest, BatchScreenshotResult, BatchScreenshotService,
 };
-use crate::ui::progress::ProgressReporter;
 use crate::video_review::storage::{NewVideoItem, SqliteVideoRepository, VideoRepository};
+
+#[derive(Debug, Clone, Default)]
+pub struct ImportFolderOptions {
+    /// 导入时是否立刻抽首帧缩略图（关闭可大幅减少 ffmpeg 调用）。
+    pub generate_thumbnails: bool,
+}
+
+impl ImportFolderOptions {
+    pub fn fast() -> Self {
+        Self {
+            generate_thumbnails: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportSkip {
+    pub path: PathBuf,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportFolderResult {
+    pub batch_id: i64,
+    pub imported: usize,
+    pub skipped: Vec<ImportSkip>,
+}
 
 pub struct VideoReviewService {
     repo: SqliteVideoRepository,
@@ -107,7 +140,26 @@ impl VideoReviewService {
         self.repo.get_video(id)
     }
 
-    pub fn import_folder(&self, folder: &Path, batch_name: Option<&str>) -> VideoReviewResult<i64> {
+    pub fn import_folder(
+        &self,
+        folder: &Path,
+        batch_name: Option<&str>,
+    ) -> VideoReviewResult<ImportFolderResult> {
+        self.import_folder_with_options(
+            folder,
+            batch_name,
+            ImportFolderOptions::fast(),
+            None,
+        )
+    }
+
+    pub fn import_folder_with_options(
+        &self,
+        folder: &Path,
+        batch_name: Option<&str>,
+        options: ImportFolderOptions,
+        progress: Option<&dyn ProgressReporter>,
+    ) -> VideoReviewResult<ImportFolderResult> {
         let name = batch_name
             .map(str::to_string)
             .or_else(|| folder.file_name().map(|n| n.to_string_lossy().to_string()))
@@ -120,16 +172,36 @@ impl VideoReviewService {
             ));
         }
 
+        if let Some(p) = progress {
+            p.set_total(paths.len().max(1));
+            p.set_current_label("探测视频元数据");
+        }
+
         let mut items = Vec::with_capacity(paths.len());
+        let mut skipped = Vec::new();
         for path in paths {
+            if let Some(p) = progress {
+                p.set_current_label(&format!("{}", path.display()));
+            }
             let meta = match self.backend.probe_metadata(&path) {
                 Ok(m) => m,
                 Err(e) => {
                     tracing::warn!("跳过 {}: {}", path.display(), e);
+                    skipped.push(ImportSkip {
+                        path: path.clone(),
+                        reason: e.to_string(),
+                    });
+                    if let Some(p) = progress {
+                        p.inc(None);
+                    }
                     continue;
                 }
             };
-            let thumb = self.frame_cache.ensure_frame(&path, 0, 320).ok().map(|p| p);
+            let thumb = if options.generate_thumbnails {
+                self.frame_cache.ensure_frame(&path, 0, 320).ok()
+            } else {
+                None
+            };
             let device_model = meta
                 .device_model
                 .or_else(|| infer_device_model_from_filename(&path));
@@ -145,15 +217,39 @@ impl VideoReviewService {
                 bitrate_kbps: meta.bitrate_kbps,
                 device_model,
             });
+            if let Some(p) = progress {
+                p.inc(None);
+            }
         }
 
         if items.is_empty() {
-            return Err(VideoReviewError::Message(
-                "未能读取任何视频元数据，请确认已安装 ffprobe".into(),
-            ));
+            let detail = if skipped.is_empty() {
+                "未能读取任何视频元数据，请确认已安装 ffprobe".to_string()
+            } else {
+                let sample: Vec<_> = skipped
+                    .iter()
+                    .take(3)
+                    .map(|s| format!("{} ({})", s.path.display(), s.reason))
+                    .collect();
+                format!(
+                    "未能导入任何视频（跳过 {} 个）。示例：{}",
+                    skipped.len(),
+                    sample.join("；")
+                )
+            };
+            return Err(VideoReviewError::Message(detail));
         }
 
-        self.repo.create_batch_with_videos(&name, &items)
+        let imported = items.len();
+        let batch_id = self.repo.create_batch_with_videos(&name, &items)?;
+        if let Some(p) = progress {
+            p.finish();
+        }
+        Ok(ImportFolderResult {
+            batch_id,
+            imported,
+            skipped,
+        })
     }
 
     pub fn update_status(&self, id: i64, status: ReviewStatus) -> VideoReviewResult<()> {
@@ -314,6 +410,42 @@ impl VideoReviewService {
             quality,
             caption_mode,
         })
+    }
+
+    /// 音频互相关对齐到主视频（第一路）。`around_ms` 为当前对比时间，用于截取分析窗。
+    pub fn align_videos(
+        &self,
+        reference: &VideoItem,
+        others: &[VideoItem],
+        around_ms: Option<u64>,
+    ) -> VideoReviewResult<AlignBatchResult> {
+        AlignService::new(self.backend.ffmpeg_bin()).align_to_reference(
+            reference,
+            others,
+            DEFAULT_ALIGN_SECONDS,
+            around_ms,
+        )
+    }
+
+    /// 从当前对比视频打包缺陷（目录 + zip + DB 记录）。
+    pub fn create_defect(
+        &self,
+        req: CreateDefectRequest,
+        progress: Option<&dyn ProgressReporter>,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+    ) -> VideoReviewResult<CreateDefectResult> {
+        create_defect_package(
+            self,
+            self.backend.as_ref(),
+            &self.repo,
+            req,
+            progress,
+            cancel,
+        )
+    }
+
+    pub fn list_defects(&self, batch_id: i64) -> VideoReviewResult<Vec<crate::video_review::domain::VideoDefect>> {
+        self.repo.list_defects(batch_id)
     }
 
     pub fn batch_update_status(&self, ids: &[i64], status: ReviewStatus) -> VideoReviewResult<()> {

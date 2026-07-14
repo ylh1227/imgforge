@@ -6,6 +6,8 @@ mod compare_view;
 mod list_thumbnail_cache;
 mod properties_panel;
 mod review_panel;
+mod review_panel_helpers;
+mod review_panel_types;
 mod shortcut_panel;
 mod shortcuts;
 mod sidebar;

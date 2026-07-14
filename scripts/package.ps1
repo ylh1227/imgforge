@@ -21,6 +21,15 @@ Copy-Item "scripts\QUICKSTART.txt" $Stage
 Copy-Item "README.md" $Stage
 Copy-Item "LICENSE" $Stage
 
+$PlatformTools = Join-Path $Root "assets\platform-tools\windows"
+if (Test-Path $PlatformTools) {
+  $Dest = Join-Path $Stage "platform-tools\windows"
+  New-Item -ItemType Directory -Path $Dest -Force | Out-Null
+  Copy-Item "$PlatformTools\*" $Dest -Recurse -Force
+} else {
+  Write-Host "note: bundled adb skipped; missing $PlatformTools"
+}
+
 $Archive = Join-Path $Root "dist\imgforge-$Version-$Suffix.zip"
 if (Test-Path $Archive) { Remove-Item -Force $Archive }
 Compress-Archive -Path "$Stage\*" -DestinationPath $Archive

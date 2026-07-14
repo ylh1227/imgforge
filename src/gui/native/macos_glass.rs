@@ -148,8 +148,8 @@ impl NativeGlassToolbar {
         );
 
         let button_views = [
-            btn_start.as_ref() as &NSView,
             btn_cancel.as_ref() as &NSView,
+            btn_start.as_ref() as &NSView,
             btn_open.as_ref() as &NSView,
         ];
         let buttons = NSArray::from_slice(&button_views);

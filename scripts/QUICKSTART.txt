@@ -15,6 +15,15 @@ macOS / Linux (终端):
   ./imgforge -i ./photos -o ./output -f webp
   ./imgforge doctor
 
+图形界面版
+----------
+若包内含 ImgForge.app / ImgForge.exe：
+  - 格式转换：选文件夹 → 选格式 → 开始转换
+  - 图片评审：批次导入、状态/标签/标注、多图对比、导出
+  - 视频评审：需系统安装 ffmpeg/ffprobe
+  - 数据提取：Imatest 结果汇总/对比/阈值；OCR 截图需 tesseract
+  - 任务中心：历史与失败重试
+
 常用参数
 --------
   -i, --input      输入目录
@@ -30,9 +39,35 @@ macOS / Linux (终端):
   复制 config.example.toml 为 imgforge.toml 后编辑，运行：
   imgforge -c imgforge.toml -i ./photos -o ./output
 
+环境诊断
+--------
+  imgforge doctor
+  会显示已启用 feature，以及 ffmpeg / ffprobe / tesseract / libvips 可用性。
+
+远端接入（生产远端栈）
+----------------------
+  # 服务器：Postgres + Redis Streams + MinIO + imgforge-server
+  docker compose -f deploy/docker-compose.yml up --build
+  # SQLite / 磁盘 / 内存队列只作为测试和单机开发后备。
+
+  # 客户端
+  export IMGFORGE_REMOTE_ENABLED=true
+  export IMGFORGE_REMOTE_BASE_URL=http://127.0.0.1:8787
+  export IMGFORGE_REMOTE_AUTH_MODE=env_bearer
+  export IMGFORGE_REMOTE_TOKEN=change-me
+  imgforge remote status
+  imgforge remote submit -i ./photos -o ./output -f webp
+  imgforge -i ./photos -o ./output -f webp --remote
+  # 流程：上传文件 → 服务器/Worker 处理 → 下载到输出目录。
+  配置见 config.example.toml 的 [remote] 段；部署见 docs/remote-deploy.md。
+  服务端可用 IMGFORGE_RATE_LIMIT_PER_MINUTE 调整每 token/IP 限流（默认 120）。
+  API：/v1/jobs*、/v1/uploads:*、PUT /v1/uploads/{id}/bytes、/v1/artifacts/{id}/content。
+
 macOS 首次运行
 --------------
 若系统提示「无法验证开发者」，在终端执行：
   xattr -dr com.apple.quarantine ./imgforge
+  # 或对 GUI：
+  xattr -dr com.apple.quarantine ./ImgForge.app
 
 更多说明见 README.md 或项目主页。

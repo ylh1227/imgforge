@@ -10,6 +10,13 @@ use crate::video_review::service::VideoReviewService;
 
 pub const MAX_COMPARE_VIDEOS: usize = 6;
 
+/// 对比面板交互：按帧微调偏移。
+#[derive(Debug, Clone, Default)]
+pub struct CompareUiAction {
+    /// `(video_id, frames)`：frames>0 表示该路画面应更早（offset 减小）。
+    pub frame_nudges: Vec<(i64, i64)>,
+}
+
 #[derive(Clone, Default)]
 pub struct MultiVideoCompare {
     pub current_time_ms: u64,
@@ -36,7 +43,8 @@ impl MultiVideoCompare {
         service: &VideoReviewService,
         videos: &[VideoItem],
         area: Vec2,
-    ) {
+    ) -> CompareUiAction {
+        let mut action = CompareUiAction::default();
         let selected: Vec<&VideoItem> = self
             .compare_ids
             .iter()
@@ -47,12 +55,12 @@ impl MultiVideoCompare {
             ui.centered_and_justified(|ui| {
                 ui.label(RichText::new("在左侧勾选 2–6 个视频后进入对比").weak());
             });
-            return;
+            return action;
         }
 
         if selected.len() == 1 {
-            self.draw_single_pane(ctx, ui, service, selected[0], area);
-            return;
+            self.draw_video_pane(ctx, ui, service, selected[0], area, &mut action);
+            return action;
         }
 
         if selected.len() == 2 {
@@ -61,12 +69,12 @@ impl MultiVideoCompare {
                 let pane = Vec2::new(half.max(120.0), area.y);
                 for video in &selected {
                     ui.vertical(|ui| {
-                        self.draw_video_pane(ctx, ui, service, video, pane);
+                        self.draw_video_pane(ctx, ui, service, video, pane, &mut action);
                     });
                     ui.add_space(6.0);
                 }
             });
-            return;
+            return action;
         }
 
         let cols = if selected.len() <= 4 { 2 } else { 3 };
@@ -81,24 +89,14 @@ impl MultiVideoCompare {
             .show(ui, |ui| {
                 for (i, video) in selected.iter().enumerate() {
                     ui.vertical(|ui| {
-                        self.draw_video_pane(ctx, ui, service, video, cell);
+                        self.draw_video_pane(ctx, ui, service, video, cell, &mut action);
                     });
                     if (i + 1) % cols == 0 {
                         ui.end_row();
                     }
                 }
             });
-    }
-
-    fn draw_single_pane(
-        &mut self,
-        ctx: &Context,
-        ui: &mut Ui,
-        service: &VideoReviewService,
-        video: &VideoItem,
-        area: Vec2,
-    ) {
-        self.draw_video_pane(ctx, ui, service, video, area);
+        action
     }
 
     fn draw_video_pane(
@@ -108,6 +106,7 @@ impl MultiVideoCompare {
         service: &VideoReviewService,
         video: &VideoItem,
         area: Vec2,
+        action: &mut CompareUiAction,
     ) {
         let name = video
             .file_path
@@ -119,16 +118,28 @@ impl MultiVideoCompare {
             let c = video.status.color_rgba();
             ui.colored_label(Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]), "●");
             ui.label(RichText::new(&name).strong().size(12.0));
-            if video.offset_ms != 0 {
-                ui.label(
-                    RichText::new(format!("偏移 {}ms", video.offset_ms))
-                        .weak()
-                        .size(11.0),
-                );
+            ui.label(
+                RichText::new(format!("{}ms", video.offset_ms))
+                    .weak()
+                    .size(11.0),
+            );
+            if ui
+                .add_enabled(true, egui::Button::new("−1帧").small())
+                .on_hover_text("该路画面提前 1 帧（减小偏移）")
+                .clicked()
+            {
+                action.frame_nudges.push((video.id, 1));
+            }
+            if ui
+                .add_enabled(true, egui::Button::new("+1帧").small())
+                .on_hover_text("该路画面延后 1 帧（增大偏移）")
+                .clicked()
+            {
+                action.frame_nudges.push((video.id, -1));
             }
         });
 
-        let frame_area = Vec2::new(area.x, (area.y - 22.0).max(60.0));
+        let frame_area = Vec2::new(area.x, (area.y - 40.0).max(60.0));
         let (rect, _) = ui.allocate_exact_size(frame_area, egui::Sense::hover());
 
         let effective = video
@@ -205,9 +216,9 @@ impl MultiVideoCompare {
 }
 
 pub fn format_ms(ms: u64) -> String {
-    let total = ms / 1000;
-    let m = total / 60;
-    let s = total % 60;
-    let frac = ms % 1000;
-    format!("{m:02}:{s:02}.{frac:03}")
+    let total_secs = ms / 1000;
+    let mins = total_secs / 60;
+    let secs = total_secs % 60;
+    let millis = ms % 1000;
+    format!("{mins:02}:{secs:02}.{millis:03}")
 }

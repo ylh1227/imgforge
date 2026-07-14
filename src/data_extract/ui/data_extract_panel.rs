@@ -51,6 +51,13 @@ pub struct DataExtractPanel {
     error: Option<String>,
     status_hint: String,
     output: DataExtractPanelOutput,
+    remote_config: crate::remote::RemoteConfig,
+    data_source: crate::remote::DataSource,
+    remote_results: Vec<crate::remote::RemoteExtractResultSummary>,
+    results_fetch:
+        Option<crate::remote::RemoteFetch<Vec<crate::remote::RemoteExtractResultSummary>>>,
+    report_fetch: Option<crate::remote::RemoteFetch<(String, std::path::PathBuf)>>,
+    remote_loading: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -113,7 +120,12 @@ impl DataTableView {
 
 impl DataExtractPanel {
     pub fn new() -> Self {
-        Self {
+        let mut remote_config = crate::remote::RemoteConfig::default();
+        remote_config.apply_env_overrides();
+        let data_source = crate::remote::DataSource::from_remote_enabled(
+            crate::remote::remote_enabled(&remote_config),
+        );
+        let mut panel = Self {
             batches: Vec::new(),
             current_batch: None,
             baseline_batch: None,
@@ -138,60 +150,133 @@ impl DataExtractPanel {
             error: None,
             status_hint: String::from("导入 Imatest 结果目录或文件开始提取"),
             output: DataExtractPanelOutput::default(),
+            remote_config,
+            data_source,
+            remote_results: Vec::new(),
+            results_fetch: None,
+            report_fetch: None,
+            remote_loading: false,
+        };
+        if panel.data_source == crate::remote::DataSource::Remote {
+            panel.start_remote_results_fetch();
         }
+        panel
     }
 
     pub fn take_output(&mut self) -> DataExtractPanelOutput {
         std::mem::take(&mut self.output)
     }
 
-    pub fn ui(&mut self, _ctx: &Context, ui: &mut egui::Ui) {
+    pub fn set_remote_config(&mut self, remote_config: crate::remote::RemoteConfig) {
+        if self.remote_config == remote_config {
+            return;
+        }
+        self.remote_config = remote_config;
+        let want = crate::remote::DataSource::from_remote_enabled(crate::remote::remote_enabled(
+            &self.remote_config,
+        ));
+        if self.data_source != want {
+            self.data_source = want;
+            if want == crate::remote::DataSource::Remote {
+                self.start_remote_results_fetch();
+            } else {
+                self.switch_to_local("远程未启用，已使用本地结果");
+            }
+        }
+    }
+
+    pub fn refresh_remote_catalog(&mut self) {
+        self.data_source = crate::remote::DataSource::Remote;
+        self.start_remote_results_fetch();
+    }
+
+    pub fn ui(&mut self, ctx: &Context, ui: &mut egui::Ui) {
+        self.poll_remote_fetches(ctx);
         if let Some(err) = self.error.take() {
             widgets::error_banner(ui, &err);
             ui.add_space(6.0);
         }
 
+        widgets::navigation_header(ui, "导入指标、阈值判定与批次对比");
+        widgets::page_header_gap(ui);
         self.filter_toolbar_ui(ui);
-        ui.add_space(6.0);
+        widgets::section_gap(ui);
         self.main_body_ui(ui);
     }
 
     fn main_body_ui(&mut self, ui: &mut egui::Ui) {
-        const LEFT_W: f32 = 260.0;
-        const GAP: f32 = 8.0;
-        const TABLE_RIGHT_INSET: f32 = 28.0;
-        let row_h = ui.available_height();
-        let total_w = ui.available_width();
-        let center_w = (total_w - LEFT_W - GAP - TABLE_RIGHT_INSET).max(200.0);
+        let geo = widgets::SideMainGeometry::compute(
+            ui.available_size(),
+            theme::DATA_EXTRACT_WIDE_BREAKPOINT,
+            theme::DATA_EXTRACT_LEFT_W,
+        );
 
-        ui.horizontal_top(|ui| {
-            ui.allocate_ui_with_layout(
-                egui::vec2(LEFT_W, row_h),
-                egui::Layout::top_down(egui::Align::LEFT),
-                |ui| {
-                    ui.set_min_height(row_h);
-                    self.left_sidebar_ui(ui);
-                },
-            );
-            ui.allocate_ui_with_layout(
-                egui::vec2(GAP, row_h),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |_ui| {},
-            );
-            ui.allocate_ui_with_layout(
-                egui::vec2(center_w, row_h),
-                egui::Layout::top_down(egui::Align::LEFT),
-                |ui| {
-                    ui.set_max_width(center_w);
-                    match self.active_table_view() {
-                        DataTableView::Summary => self.summary_table_ui(ui, center_w),
-                        DataTableView::Detail => self.detail_table_ui(ui, center_w),
-                        DataTableView::Compare => self.comparison_table_ui(ui, center_w),
-                    }
-                },
-            );
-            ui.allocate_exact_size(egui::vec2(TABLE_RIGHT_INSET, row_h), egui::Sense::hover());
-        });
+        match geo.mode {
+            widgets::SideMainMode::SideBySide => {
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(geo.left_w, geo.row_h),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_min_width(geo.left_w);
+                            ui.set_max_width(geo.left_w);
+                            ui.set_width(geo.left_w);
+                            egui::ScrollArea::vertical()
+                                .id_salt("de_left_sidebar")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    let content_w = ui
+                                        .available_width()
+                                        .min(ui.max_rect().width())
+                                        .max(120.0);
+                                    ui.set_width(content_w);
+                                    self.left_sidebar_ui(ui);
+                                });
+                        },
+                    );
+                    ui.add_space(geo.gap);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(geo.main_w, geo.row_h),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_min_width(geo.main_w);
+                            ui.set_max_width(geo.main_w);
+                            ui.set_width(geo.main_w);
+                            self.render_active_table(ui, geo.main_w);
+                        },
+                    );
+                    ui.allocate_exact_size(
+                        egui::vec2(geo.right_inset, geo.row_h),
+                        egui::Sense::hover(),
+                    );
+                });
+            }
+            widgets::SideMainMode::Stacked => {
+                let side_w = ui.available_width();
+                egui::ScrollArea::vertical()
+                    .id_salt("de_left_sidebar_narrow")
+                    .max_height(geo.side_max_h)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.set_width(side_w);
+                        self.left_sidebar_ui(ui);
+                    });
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(8.0);
+                let table_w = ui.available_width().max(160.0);
+                self.render_active_table(ui, table_w);
+            }
+        }
+    }
+
+    fn render_active_table(&mut self, ui: &mut egui::Ui, table_w: f32) {
+        match self.active_table_view() {
+            DataTableView::Summary => self.summary_table_ui(ui, table_w),
+            DataTableView::Detail => self.detail_table_ui(ui, table_w),
+            DataTableView::Compare => self.comparison_table_ui(ui, table_w),
+        }
     }
 
     fn active_table_view(&self) -> DataTableView {
@@ -211,23 +296,51 @@ impl DataExtractPanel {
         let has_comparison = self.comparison.is_some();
         let has_export_rows = self.has_export_rows();
         let can_export_json = self.active_table_view() != DataTableView::Compare && has_export_rows;
+        let narrow = ui.available_width() < theme::DATA_EXTRACT_WIDE_BREAKPOINT;
 
-        widgets::toolbar_row(ui, |ui| {
-            for view in [
-                DataTableView::Summary,
-                DataTableView::Detail,
-                DataTableView::Compare,
-            ] {
-                let enabled = view != DataTableView::Compare || has_comparison;
-                if widgets::toggle_chip(ui, view.label(), self.active_table_view() == view, enabled)
-                {
-                    self.table_view = view;
-                }
+        // 视图切换：窄屏用等分分段条，宽屏用芯片行
+        if narrow {
+            widgets::mode_tab_bar(
+                ui,
+                &mut self.table_view,
+                &[
+                    (DataTableView::Summary, DataTableView::Summary.label()),
+                    (DataTableView::Detail, DataTableView::Detail.label()),
+                    (DataTableView::Compare, DataTableView::Compare.label()),
+                ],
+            );
+            if self.table_view == DataTableView::Compare && !has_comparison {
+                self.table_view = DataTableView::Summary;
             }
-            widgets::toolbar_separator(ui);
+            ui.add_space(8.0);
+        }
+
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.spacing_mut().item_spacing.y = 6.0;
+
+            if !narrow {
+                for view in [
+                    DataTableView::Summary,
+                    DataTableView::Detail,
+                    DataTableView::Compare,
+                ] {
+                    let enabled = view != DataTableView::Compare || has_comparison;
+                    if widgets::toggle_chip(
+                        ui,
+                        view.label(),
+                        self.active_table_view() == view,
+                        enabled,
+                    ) {
+                        self.table_view = view;
+                    }
+                }
+                widgets::toolbar_separator(ui);
+            }
 
             widgets::toolbar_field_label(ui, "模块", ui.style().visuals.dark_mode);
-            widgets::toolbar_combo_box(ui, "de_module_filter", &module_label, 100.0, |ui| {
+            let combo_w = if narrow { 88.0 } else { 100.0 };
+            widgets::toolbar_combo_box(ui, "de_module_filter", &module_label, combo_w, |ui| {
                 if ui
                     .selectable_label(self.module_filter.is_none(), "全部")
                     .clicked()
@@ -245,7 +358,7 @@ impl DataExtractPanel {
                 }
             });
 
-            ui.add_space(8.0);
+            ui.add_space(4.0);
             widgets::toolbar_field_label(ui, "状态", ui.style().visuals.dark_mode);
             let all_status = self.status_filter.is_none();
             if widgets::toggle_chip(ui, "全部", all_status, true) {
@@ -261,13 +374,19 @@ impl DataExtractPanel {
                     self.status_filter = Some(st);
                 }
             }
+        });
 
-            widgets::toolbar_separator(ui);
+        ui.add_space(6.0);
 
-            let search_w = (ui.available_width() - 420.0).max(100.0);
-            widgets::toolbar_search_edit(ui, &mut self.search_buf, "搜索指标…", search_w);
-
-            widgets::toolbar_separator(ui);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.spacing_mut().item_spacing.y = 6.0;
+            let search_w = if narrow {
+                (ui.available_width() - 8.0).max(120.0)
+            } else {
+                (ui.available_width() - 360.0).max(120.0)
+            };
+            widgets::toolbar_search_edit(ui, &mut self.search_buf, "搜索指标…", search_w.min(ui.available_width()));
 
             if widgets::compact_secondary_button(ui, "重新解析", has_batch).clicked() {
                 self.reparse_current();
@@ -285,43 +404,56 @@ impl DataExtractPanel {
     }
 
     fn left_sidebar_ui(&mut self, ui: &mut egui::Ui) {
+        ui.set_width(ui.available_width());
         widgets::grouped_section(ui, "导入", |ui| {
-            if widgets::compact_primary_button(ui, "导入目录…", true).clicked() {
+            if widgets::full_width_primary_button(ui, "导入目录…", true).clicked() {
                 if let Some(path) = rfd::FileDialog::new().pick_folder() {
                     self.import_path(path);
                 }
             }
-            ui.add_space(4.0);
-            if widgets::compact_secondary_button(ui, "导入文件…", true).clicked() {
+            ui.add_space(6.0);
+            if widgets::full_width_secondary_button(ui, "导入文件…", true).clicked() {
                 if let Some(path) = rfd::FileDialog::new().pick_file() {
                     self.import_path(path);
                 }
             }
-            ui.add_space(4.0);
-            if widgets::compact_secondary_button(ui, "批量导入文件…", true).clicked() {
+            ui.add_space(6.0);
+            if widgets::full_width_secondary_button(ui, "批量导入文件…", true).clicked() {
                 if let Some(paths) = rfd::FileDialog::new().pick_files() {
                     self.import_paths(paths);
                 }
             }
-            ui.add_space(4.0);
+            ui.add_space(6.0);
+            let half = ((ui.available_width() - 6.0) * 0.5).max(72.0);
             ui.horizontal(|ui| {
-                if widgets::compact_secondary_button(ui, "保存草稿", !self.batches.is_empty())
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.vertical(|ui| {
+                    ui.set_width(half);
+                    if widgets::full_width_secondary_button(
+                        ui,
+                        "保存草稿",
+                        !self.batches.is_empty(),
+                    )
                     .clicked()
-                {
-                    self.save_project_draft();
-                }
-                if widgets::compact_secondary_button(ui, "恢复草稿…", true).clicked() {
-                    if let Some(root) = rfd::FileDialog::new().pick_folder() {
-                        self.load_project_draft(root);
+                    {
+                        self.save_project_draft();
                     }
-                }
+                });
+                ui.vertical(|ui| {
+                    ui.set_width(half);
+                    if widgets::full_width_secondary_button(ui, "恢复草稿…", true).clicked() {
+                        if let Some(root) = rfd::FileDialog::new().pick_folder() {
+                            self.load_project_draft(root);
+                        }
+                    }
+                });
             });
             #[cfg(feature = "ocr")]
             {
-                ui.add_space(4.0);
+                ui.add_space(6.0);
                 let avail = check_availability();
                 let ocr_ok = avail.tesseract_ok;
-                if widgets::compact_secondary_button(ui, "导入截图 OCR…", ocr_ok).clicked() {
+                if widgets::full_width_secondary_button(ui, "导入截图 OCR…", ocr_ok).clicked() {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("图片", &["png", "jpg", "jpeg", "tiff", "bmp", "webp"])
                         .pick_file()
@@ -339,27 +471,57 @@ impl DataExtractPanel {
         ui.add_space(8.0);
         widgets::grouped_section(ui, "阈值", |ui| {
             ui.label(format!("规则数：{}", self.threshold_profile.rules.len()));
+            ui.add_space(4.0);
+            let gap = 6.0;
+            let cell = ((ui.available_width() - gap) * 0.5).max(64.0);
             ui.horizontal(|ui| {
-                if widgets::compact_secondary_button(ui, "加载", true).clicked() {
-                    self.load_thresholds();
-                }
-                if widgets::compact_secondary_button(ui, "保存", true).clicked() {
-                    self.save_thresholds();
-                }
-                if widgets::compact_secondary_button(ui, "默认", true).clicked() {
-                    self.threshold_profile = ThresholdProfile::default_rules();
-                    self.reapply_thresholds();
-                }
-                if widgets::compact_secondary_button(ui, "全部重算", !self.batches.is_empty())
+                ui.spacing_mut().item_spacing.x = gap;
+                ui.vertical(|ui| {
+                    ui.set_width(cell);
+                    if widgets::full_width_secondary_button(ui, "加载", true).clicked() {
+                        self.load_thresholds();
+                    }
+                });
+                ui.vertical(|ui| {
+                    ui.set_width(cell);
+                    if widgets::full_width_secondary_button(ui, "保存", true).clicked() {
+                        self.save_thresholds();
+                    }
+                });
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                ui.vertical(|ui| {
+                    ui.set_width(cell);
+                    if widgets::full_width_secondary_button(ui, "默认", true).clicked() {
+                        self.threshold_profile = ThresholdProfile::default_rules();
+                        self.reapply_thresholds();
+                    }
+                });
+                ui.vertical(|ui| {
+                    ui.set_width(cell);
+                    if widgets::full_width_secondary_button(
+                        ui,
+                        "全部重算",
+                        !self.batches.is_empty(),
+                    )
                     .clicked()
-                {
-                    self.reapply_thresholds_all();
-                }
+                    {
+                        self.reapply_thresholds_all();
+                    }
+                });
             });
         });
 
         ui.add_space(8.0);
         widgets::grouped_section(ui, "批次", |ui| {
+            self.remote_results_source_ui(ui);
+            if crate::remote::remote_enabled(&self.remote_config) {
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(6.0);
+            }
             if self.batches.is_empty() {
                 ui.label("暂无批次");
             } else {
@@ -514,7 +676,7 @@ impl DataExtractPanel {
                         for row in rows {
                             let selected = self.current_batch == Some(row.batch_index);
                             let status =
-                                RichText::new(row.status.label()).color(status_color(row.status));
+                                RichText::new(row.status.label()).color(status_color(row.status, ui.visuals().dark_mode));
                             if ui.selectable_label(selected, status).clicked() {
                                 self.select_summary_row(row);
                             }
@@ -554,7 +716,7 @@ impl DataExtractPanel {
                             for col in &table.columns {
                                 if let Some(cell) = row.values.get(&col.key) {
                                     let text = RichText::new(&cell.display)
-                                        .color(status_color(cell.status));
+                                        .color(status_color(cell.status, ui.visuals().dark_mode));
                                     if ui.selectable_label(selected, text).clicked() {
                                         self.current_batch = Some(cell.record_ref.batch_index);
                                         self.selected_record = Some(cell.record_ref.record_index);
@@ -789,7 +951,7 @@ impl DataExtractPanel {
                                 let selected = self.current_batch == Some(*batch_idx)
                                     && self.selected_record == Some(*record_idx);
                                 let st = rec.evaluation_status();
-                                let st_label = RichText::new(st.label()).color(status_color(st));
+                                let st_label = RichText::new(st.label()).color(status_color(st, ui.visuals().dark_mode));
                                 if ui.selectable_label(selected, st_label).clicked() {
                                     self.current_batch = Some(*batch_idx);
                                     self.selected_record = Some(*record_idx);
@@ -915,14 +1077,15 @@ impl DataExtractPanel {
                                         .map(|p| format!("{p:.1}%"))
                                         .unwrap_or_else(|| "—".into()),
                                 );
+                                let dark = ui.visuals().dark_mode;
                                 let trend_color = match row.trend {
                                     crate::data_extract::domain::TrendStatus::Improved => {
-                                        Color32::from_rgb(52, 199, 89)
+                                        theme::success_color(dark)
                                     }
                                     crate::data_extract::domain::TrendStatus::Regressed => {
-                                        Color32::from_rgb(255, 59, 48)
+                                        theme::error_color(dark)
                                     }
-                                    _ => Color32::GRAY,
+                                    _ => theme::secondary_label(dark),
                                 };
                                 ui.label(RichText::new(row.trend.label()).color(trend_color));
                                 ui.label(format!(
@@ -955,7 +1118,7 @@ impl DataExtractPanel {
                     }
                     if !batch.unmapped_fields.is_empty() {
                         ui.add_space(4.0);
-                        ui.label(RichText::new("未映射字段").color(Color32::from_rgb(255, 149, 0)));
+                        ui.label(RichText::new("未映射字段").color(theme::warning_color(ui.visuals().dark_mode)));
                         ScrollArea::vertical()
                             .id_salt("unmapped_fields")
                             .max_height(120.0)
@@ -972,7 +1135,7 @@ impl DataExtractPanel {
                     }
                     if !batch.warnings.is_empty() {
                         ui.add_space(4.0);
-                        ui.label(RichText::new("警告").color(Color32::from_rgb(255, 149, 0)));
+                        ui.label(RichText::new("警告").color(theme::warning_color(ui.visuals().dark_mode)));
                         for w in batch.warnings.iter().take(10) {
                             ui.label(format!("• {}", w.message));
                         }
@@ -982,7 +1145,7 @@ impl DataExtractPanel {
             };
 
             let st = rec.evaluation_status();
-            ui.label(RichText::new(format!("状态：{}", st.label())).color(status_color(st)));
+            ui.label(RichText::new(format!("状态：{}", st.label())).color(status_color(st, ui.visuals().dark_mode)));
             ui.label(format!("模块：{}", rec.module.label()));
             ui.label(format!("指标键：{}", rec.metric_key));
             ui.label(format!("原始字段：{}", rec.raw_name));
@@ -1013,10 +1176,11 @@ impl DataExtractPanel {
                 ui.label(RichText::new("OCR").strong());
                 ui.label(format!("引擎：{}", ocr.engine));
                 if let Some(c) = ocr.confidence {
+                    let dark = ui.visuals().dark_mode;
                     let color = if c < 60.0 {
-                        Color32::from_rgb(255, 149, 0)
+                        theme::warning_color(dark)
                     } else {
-                        Color32::GRAY
+                        theme::secondary_label(dark)
                     };
                     ui.label(RichText::new(format!("置信度：{c:.1}%")).color(color));
                 }
@@ -1036,7 +1200,7 @@ impl DataExtractPanel {
 
             if !rec.warnings.is_empty() {
                 ui.add_space(6.0);
-                ui.label(RichText::new("记录警告").color(Color32::from_rgb(255, 149, 0)));
+                ui.label(RichText::new("记录警告").color(theme::warning_color(ui.visuals().dark_mode)));
                 for w in &rec.warnings {
                     ui.label(format!("• {}", w.message));
                 }
@@ -1048,6 +1212,7 @@ impl DataExtractPanel {
         let started = Instant::now();
         match DataExtractService::extract_with_thresholds(&path, Some(&self.threshold_profile)) {
             Ok(batch) => {
+                let batch_name = batch.name.clone();
                 self.status_hint = format!("已导入：{}", batch.summary_line());
                 let total = batch.records.len();
                 self.batch_rename_buf = batch.name.clone();
@@ -1057,6 +1222,9 @@ impl DataExtractPanel {
                 self.selected_record = None;
                 self.comparison = None;
                 self.table_view = DataTableView::Summary;
+                if let Some(note) = self.submit_remote_data_extract(&[path.clone()], &batch_name) {
+                    self.status_hint.push_str(&format!(" · {note}"));
+                }
                 self.output.status_message = self.status_hint.clone();
                 self.record_action(
                     "导入",
@@ -1095,9 +1263,8 @@ impl DataExtractPanel {
             total: paths.len(),
             ..Default::default()
         };
-        for path in paths {
-            match DataExtractService::extract_with_thresholds(&path, Some(&self.threshold_profile))
-            {
+        for path in &paths {
+            match DataExtractService::extract_with_thresholds(path, Some(&self.threshold_profile)) {
                 Ok(batch) => {
                     self.batches.insert(0, batch);
                     result.successes += 1;
@@ -1122,6 +1289,11 @@ impl DataExtractPanel {
             result.successes,
             result.failures.len()
         );
+        if result.successes > 0 {
+            if let Some(note) = self.submit_remote_data_extract(&paths, "批量数据提取") {
+                self.status_hint.push_str(&format!(" · {note}"));
+            }
+        }
         self.output.status_message = self.status_hint.clone();
         if !result.failures.is_empty() {
             self.error = Some(
@@ -1220,10 +1392,16 @@ impl DataExtractPanel {
             Ok(new_batch) => {
                 if let Some(idx) = self.current_batch {
                     let total = new_batch.records.len();
+                    let batch_name = new_batch.name.clone();
                     self.batch_rename_buf = new_batch.name.clone();
                     self.batches[idx] = new_batch;
                     self.mark_summary_dirty();
                     self.status_hint = format!("已重新解析：{}", self.batches[idx].summary_line());
+                    if let Some(note) =
+                        self.submit_remote_data_extract(&[batch.source_root.clone()], &batch_name)
+                    {
+                        self.status_hint.push_str(&format!(" · {note}"));
+                    }
                     self.record_action(
                         "重新解析",
                         batch.source_root.display().to_string(),
@@ -1780,6 +1958,277 @@ impl DataExtractPanel {
         let _ = prefs.save();
     }
 
+    fn remote_results_source_ui(&mut self, ui: &mut egui::Ui) {
+        if !crate::remote::remote_enabled(&self.remote_config) {
+            return;
+        }
+
+        ui.horizontal_wrapped(|ui| {
+            ui.label("数据源");
+            if ui
+                .selectable_label(
+                    self.data_source == crate::remote::DataSource::Remote,
+                    crate::remote::DataSource::Remote.label(),
+                )
+                .clicked()
+            {
+                if self.data_source != crate::remote::DataSource::Remote {
+                    self.data_source = crate::remote::DataSource::Remote;
+                    self.start_remote_results_fetch();
+                }
+            }
+            if ui
+                .selectable_label(
+                    self.data_source == crate::remote::DataSource::Local,
+                    crate::remote::DataSource::Local.label(),
+                )
+                .clicked()
+            {
+                if self.data_source != crate::remote::DataSource::Local {
+                    self.switch_to_local("已切换到本地结果");
+                }
+            }
+            if widgets::compact_secondary_button(
+                ui,
+                "刷新远程",
+                self.data_source == crate::remote::DataSource::Remote && !self.remote_loading,
+            )
+            .clicked()
+            {
+                self.start_remote_results_fetch();
+            }
+        });
+
+        if self.remote_loading {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(RichText::new("远程加载中…").small().weak());
+            });
+        }
+
+        if self.data_source != crate::remote::DataSource::Remote {
+            return;
+        }
+
+        ui.add_space(4.0);
+        ui.label(RichText::new("远程结果").strong());
+        if self.remote_results.is_empty() {
+            ui.label(RichText::new("暂无远程结果").small().weak());
+            return;
+        }
+
+        ScrollArea::vertical()
+            .id_salt("data_extract_remote_results")
+            .max_height(130.0)
+            .show(ui, |ui| {
+                for result in self.remote_results.clone() {
+                    let label = format!(
+                        "{}\n{} · 更新 {}",
+                        result.batch_name, result.module, result.updated_at
+                    );
+                    let enabled = result.report_asset.is_some() && !self.remote_loading;
+                    let clicked = ui
+                        .add_enabled(enabled, egui::Button::new(label).frame(false))
+                        .clicked();
+                    if clicked {
+                        self.start_remote_report_fetch(result.clone());
+                    }
+                    if !enabled && result.report_asset.is_none() {
+                        ui.label(RichText::new("无可下载报告").small().weak());
+                    }
+                    ui.add_space(3.0);
+                }
+            });
+    }
+
+    fn start_remote_results_fetch(&mut self) {
+        if !crate::remote::remote_enabled(&self.remote_config) {
+            self.switch_to_local("远程未配置，已回退本地");
+            return;
+        }
+        let cfg = self.remote_config.clone();
+        self.remote_loading = true;
+        self.results_fetch = Some(crate::remote::RemoteFetch::spawn(move || {
+            let _ = crate::remote::probe_remote_health(&cfg)?;
+            crate::remote::list_remote_extract_results(&cfg)
+        }));
+    }
+
+    fn start_remote_report_fetch(&mut self, result: crate::remote::RemoteExtractResultSummary) {
+        let Some(asset) = result.report_asset.clone() else {
+            self.status_hint = "远程结果没有可下载报告".into();
+            self.output.status_message = self.status_hint.clone();
+            return;
+        };
+        let cfg = self.remote_config.clone();
+        let result_id = result.result_id.clone();
+        self.remote_loading = true;
+        self.report_fetch = Some(crate::remote::RemoteFetch::spawn(move || {
+            let local_path = crate::remote::ensure_remote_asset_local(&cfg, &asset)?;
+            Ok((result_id, local_path))
+        }));
+    }
+
+    fn poll_remote_fetches(&mut self, ctx: &egui::Context) {
+        let results_result = self.results_fetch.as_ref().and_then(|fetch| fetch.poll());
+        if let Some(result) = results_result {
+            self.results_fetch = None;
+            self.remote_loading = self.report_fetch.is_some();
+            match result {
+                Ok(results) => {
+                    self.remote_results = results;
+                    self.status_hint =
+                        format!("已加载 {} 个远程数据提取结果", self.remote_results.len());
+                    self.output.status_message = self.status_hint.clone();
+                }
+                Err(e) => self.switch_to_local(format!("远程结果加载失败，已回退本地：{e}")),
+            }
+            ctx.request_repaint();
+        } else if self.results_fetch.is_some() {
+            ctx.request_repaint();
+        }
+
+        let report_result = self.report_fetch.as_ref().and_then(|fetch| fetch.poll());
+        if let Some(result) = report_result {
+            self.report_fetch = None;
+            self.remote_loading = self.results_fetch.is_some();
+            match result {
+                Ok((result_id, path)) => self.import_remote_report(&result_id, path),
+                Err(e) => {
+                    self.status_hint = format!("远程报告下载失败：{e}");
+                    self.output.status_message = self.status_hint.clone();
+                }
+            }
+            ctx.request_repaint();
+        } else if self.report_fetch.is_some() {
+            ctx.request_repaint();
+        }
+    }
+
+    fn import_remote_report(&mut self, result_id: &str, path: PathBuf) {
+        let batch_name = self
+            .remote_results
+            .iter()
+            .find(|result| result.result_id == result_id)
+            .map(|result| result.batch_name.clone())
+            .unwrap_or_else(|| {
+                path.file_stem()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| result_id.to_string())
+            });
+
+        match DataExtractService::extract_with_thresholds(&path, Some(&self.threshold_profile)) {
+            Ok(mut batch) => {
+                batch.name = format!("[远程] {batch_name}");
+                let total = batch.records.len();
+                self.batch_rename_buf = batch.name.clone();
+                self.batches.insert(0, batch);
+                self.current_batch = Some(0);
+                self.selected_record = None;
+                self.comparison = None;
+                self.table_view = DataTableView::Summary;
+                self.mark_summary_dirty();
+                self.status_hint = format!("已打开远程结果：{batch_name}（{total} 条指标）");
+                self.output.status_message = self.status_hint.clone();
+                self.record_action(
+                    "打开远程结果",
+                    batch_name,
+                    ActionHistoryStatus::Succeeded,
+                    total,
+                    0,
+                    total,
+                    0,
+                    Some(path.display().to_string()),
+                );
+            }
+            Err(e) => {
+                let msg = format!("远程报告解析失败：{e}");
+                self.record_action(
+                    "打开远程结果",
+                    result_id.to_string(),
+                    ActionHistoryStatus::Failed,
+                    0,
+                    1,
+                    1,
+                    0,
+                    Some(msg.clone()),
+                );
+                self.error = Some(msg);
+            }
+        }
+    }
+
+    fn switch_to_local(&mut self, reason: impl Into<String>) {
+        self.data_source = crate::remote::DataSource::Local;
+        self.results_fetch = None;
+        self.report_fetch = None;
+        self.remote_loading = false;
+        self.status_hint = reason.into();
+        self.output.status_message = self.status_hint.clone();
+    }
+
+    fn submit_remote_data_extract(
+        &mut self,
+        paths: &[PathBuf],
+        batch_name: &str,
+    ) -> Option<String> {
+        if !crate::remote::remote_enabled(&self.remote_config) {
+            return None;
+        }
+        let candidates = data_extract_candidate_paths(paths);
+        if candidates.is_empty() {
+            return Some("远程数据提取跳过：无候选文件".into());
+        }
+        let assets = match crate::remote::upload_paths_as_assets(&self.remote_config, &candidates) {
+            Ok(assets) => assets,
+            Err(e) => return Some(format!("远程数据提取上传失败：{e}")),
+        };
+        let extras = vec![
+            ("batch_name".into(), batch_name.to_string()),
+            ("module".into(), "imatest".into()),
+            ("export_formats".into(), "csv,json,html".into()),
+        ];
+        match crate::remote::submit_module_job(
+            &self.remote_config,
+            crate::remote::RemoteJobSource::DataExtract,
+            assets,
+            extras,
+        ) {
+            Ok((status, result)) => {
+                let mut note = format!("远程数据提取任务 {}", status.job_id);
+                if result.phase == crate::remote::RemoteJobPhase::Succeeded {
+                    note = format!("远程数据提取完成 {}", status.job_id);
+                }
+                if let Some(report) = result.artifacts.first() {
+                    match self.download_remote_extract_report(report) {
+                        Ok(path) => note.push_str(&format!(" · 报告 {}", path.display())),
+                        Err(e) => note.push_str(&format!(" · 报告下载失败：{e}")),
+                    }
+                }
+                self.start_remote_results_fetch();
+                Some(note)
+            }
+            Err(e) => Some(format!("远程数据提取提交失败：{e}")),
+        }
+    }
+
+    fn download_remote_extract_report(
+        &self,
+        asset: &crate::remote::RemoteAssetRef,
+    ) -> crate::remote::RemoteResult<PathBuf> {
+        let client = crate::remote::try_build_http_client(&self.remote_config)?;
+        let service = crate::remote::RemoteAssetService::new(self.remote_config.clone(), client);
+        let file_name = std::path::Path::new(&asset.name)
+            .file_name()
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_else(|| format!("{}.csv", asset.id));
+        let dest = std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("remote_data_extract_reports")
+            .join(file_name);
+        service.download_to(&asset.id, &dest)
+    }
+
     fn current_batch(&self) -> Option<&ExtractionBatch> {
         self.current_batch.and_then(|i| self.batches.get(i))
     }
@@ -1856,12 +2305,22 @@ fn summary_row_storage_key(row: &crate::data_extract::domain::SummaryRow) -> Str
     )
 }
 
-fn status_color(status: EvaluationStatus) -> Color32 {
+fn data_extract_candidate_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut out = std::collections::BTreeSet::new();
+    for path in paths {
+        for candidate in crate::data_extract::service::scanner::scan_directory(path) {
+            out.insert(candidate);
+        }
+    }
+    out.into_iter().collect()
+}
+
+fn status_color(status: EvaluationStatus, dark: bool) -> Color32 {
     match status {
-        EvaluationStatus::Pass => Color32::from_rgb(52, 199, 89),
-        EvaluationStatus::Warn => Color32::from_rgb(255, 149, 0),
-        EvaluationStatus::Fail => Color32::from_rgb(255, 59, 48),
-        EvaluationStatus::Unknown => Color32::GRAY,
+        EvaluationStatus::Pass => theme::success_color(dark),
+        EvaluationStatus::Warn => theme::warning_color(dark),
+        EvaluationStatus::Fail => theme::error_color(dark),
+        EvaluationStatus::Unknown => theme::secondary_label(dark),
     }
 }
 

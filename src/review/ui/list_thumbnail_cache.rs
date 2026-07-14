@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use eframe::egui::{self, Context, TextureHandle};
 
 use crate::review::service::{
-    cache_key, AsyncImageLoader, AsyncThumbnailGenerator, ImageLoadTier, ThumbnailService,
+    cache_key, AsyncImageLoader, AsyncThumbnailGenerator, ImageLoadTier, LoadOutcome,
+    ThumbnailService,
 };
 
 const TEXTURE_PREFIX: &str = "review_list_thumb_";
@@ -66,23 +67,33 @@ impl ListThumbnailCache {
         }
         let mut uploaded = 0;
         while uploaded < MAX_LIST_TEXTURE_UPLOADS_PER_FRAME {
-            let Some(img) = self.loader.try_recv_one() else {
+            let Some(outcome) = self.loader.try_recv_one() else {
                 break;
             };
-            if let Some(id) = self.decode_id_by_key.remove(&img.key) {
-                let color = egui::ColorImage::from_rgba_unmultiplied(
-                    [img.width as usize, img.height as usize],
-                    &img.rgba,
-                );
-                let tex = ctx.load_texture(
-                    format!("{TEXTURE_PREFIX}{id}"),
-                    color,
-                    egui::TextureOptions::LINEAR,
-                );
-                self.textures.insert(id, tex);
-                self.inflight.remove(&id);
-                dirty = true;
-                uploaded += 1;
+            match outcome {
+                LoadOutcome::Ok(img) => {
+                    if let Some(id) = self.decode_id_by_key.remove(&img.key) {
+                        let color = egui::ColorImage::from_rgba_unmultiplied(
+                            [img.width as usize, img.height as usize],
+                            &img.rgba,
+                        );
+                        let tex = ctx.load_texture(
+                            format!("{TEXTURE_PREFIX}{id}"),
+                            color,
+                            egui::TextureOptions::LINEAR,
+                        );
+                        self.textures.insert(id, tex);
+                        self.inflight.remove(&id);
+                        dirty = true;
+                        uploaded += 1;
+                    }
+                }
+                LoadOutcome::Err(fail) => {
+                    if let Some(id) = self.decode_id_by_key.remove(&fail.key) {
+                        self.inflight.remove(&id);
+                        dirty = true;
+                    }
+                }
             }
         }
         dirty

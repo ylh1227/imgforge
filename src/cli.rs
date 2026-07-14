@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Shell};
 
 use imgforge::core::types::ImageFormat;
+use imgforge::mobile::{AdbBinaryMode, MobilePullBackend};
 
 /// imgforge — 跨平台高性能批量图片格式转换工具
 #[derive(Parser, Debug)]
@@ -160,6 +161,38 @@ pub struct Cli {
     #[arg(long, value_enum)]
     pub watermark_position: Option<imgforge::core::types::WatermarkPosition>,
 
+    /// 是否优先远端执行（默认 false）
+    #[arg(long, env = "IMGFORGE_REMOTE")]
+    pub remote: bool,
+
+    /// 转换前从移动设备拉取媒体到本地暂存目录
+    #[arg(long, env = "IMGFORGE_MOBILE_PULL")]
+    pub mobile_pull: bool,
+
+    /// 移动设备拉取后端
+    #[arg(long, value_enum, env = "IMGFORGE_MOBILE_BACKEND")]
+    pub mobile_backend: Option<MobilePullBackend>,
+
+    /// 移动设备来源路径；ADB 默认为 /sdcard/DCIM，本地挂载模式为本地目录
+    #[arg(long, value_name = "PATH", env = "IMGFORGE_MOBILE_SOURCE")]
+    pub mobile_source: Option<String>,
+
+    /// 移动设备拉取暂存目录
+    #[arg(long, value_name = "DIR", env = "IMGFORGE_MOBILE_STAGING")]
+    pub mobile_staging: Option<PathBuf>,
+
+    /// ADB 多设备连接时指定 serial
+    #[arg(long, value_name = "SERIAL", env = "IMGFORGE_ADB_SERIAL")]
+    pub adb_serial: Option<String>,
+
+    /// ADB 二进制选择策略
+    #[arg(long, value_enum, env = "IMGFORGE_ADB_MODE")]
+    pub adb_mode: Option<AdbBinaryMode>,
+
+    /// 自定义 ADB 路径；未指定时优先使用程序内置 ADB
+    #[arg(long, value_name = "FILE", env = "IMGFORGE_ADB_PATH")]
+    pub adb_path: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -173,6 +206,40 @@ pub enum Commands {
     },
     /// 检查环境与 feature 状态
     Doctor,
+    /// 远端服务器接入（预留）：状态检查与任务同步
+    Remote {
+        #[command(subcommand)]
+        command: RemoteCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RemoteCommands {
+    /// 显示远端配置与健康状态
+    Status,
+    /// 拉取远端任务列表（未配置时回退本地缓存）
+    Pull {
+        /// 最多返回条数
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+    /// 提交远端任务；默认按当前转换参数提交 convert
+    Submit {
+        /// 任务来源
+        #[arg(long, value_enum, default_value_t = RemoteSubmitSource::Convert)]
+        source: RemoteSubmitSource,
+        /// review/video/extract 输入路径；为空时使用 -i/--input
+        #[arg(value_name = "PATH")]
+        paths: Vec<PathBuf>,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum, Debug, PartialEq, Eq)]
+pub enum RemoteSubmitSource {
+    Convert,
+    Review,
+    Video,
+    Extract,
 }
 
 #[derive(Clone, ValueEnum, Debug)]

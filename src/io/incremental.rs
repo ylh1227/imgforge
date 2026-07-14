@@ -1,7 +1,7 @@
 //! 增量处理：基于文件哈希与修改时间跳过已处理文件（feature: incremental）。
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +10,8 @@ use crate::scheduler::task::ConversionTask;
 
 #[cfg(feature = "incremental")]
 use sha2::{Digest, Sha256};
+#[cfg(feature = "incremental")]
+use std::path::Path;
 
 /// 增量处理记录。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -29,6 +31,9 @@ pub struct IncrementalProcessor {
     state_path: PathBuf,
     state: IncrementalState,
     enabled: bool,
+    /// 过滤阶段缓存的输入哈希，供 `record_success` 复用，避免二次全文件 SHA-256。
+    #[cfg(feature = "incremental")]
+    hash_cache: HashMap<String, (String, u64)>,
 }
 
 /// 增量任务过滤结果。
@@ -45,6 +50,8 @@ impl IncrementalProcessor {
                 state_path,
                 state: IncrementalState::default(),
                 enabled: false,
+                #[cfg(feature = "incremental")]
+                hash_cache: HashMap::new(),
             });
         }
 
@@ -59,10 +66,12 @@ impl IncrementalProcessor {
             state_path,
             state,
             enabled: true,
+            #[cfg(feature = "incremental")]
+            hash_cache: HashMap::new(),
         })
     }
 
-    pub fn filter_tasks(&self, tasks: Vec<ConversionTask>) -> AppResult<TaskFilterResult> {
+    pub fn filter_tasks(&mut self, tasks: Vec<ConversionTask>) -> AppResult<TaskFilterResult> {
         if !self.enabled {
             return Ok(TaskFilterResult { tasks, skipped: 0 });
         }
@@ -74,6 +83,7 @@ impl IncrementalProcessor {
 
         #[cfg(feature = "incremental")]
         {
+            self.hash_cache.clear();
             let total = tasks.len();
             let mut filtered = Vec::new();
             for task in tasks {
@@ -89,10 +99,11 @@ impl IncrementalProcessor {
     }
 
     #[cfg(feature = "incremental")]
-    fn should_process(&self, task: &ConversionTask) -> AppResult<bool> {
+    fn should_process(&mut self, task: &ConversionTask) -> AppResult<bool> {
         let hash = compute_file_hash(&task.input_path)?;
         let mtime = file_mtime_secs(&task.input_path)?;
         let key = task.input_path.to_string_lossy().to_string();
+        self.hash_cache.insert(key.clone(), (hash.clone(), mtime));
 
         if let Some(entry) = self.state.entries.get(&key) {
             if entry.hash == hash
@@ -112,9 +123,15 @@ impl IncrementalProcessor {
 
         #[cfg(feature = "incremental")]
         {
-            let hash = compute_file_hash(&task.input_path)?;
-            let mtime = file_mtime_secs(&task.input_path)?;
             let key = task.input_path.to_string_lossy().to_string();
+            let (hash, mtime) = if let Some(cached) = self.hash_cache.remove(&key) {
+                cached
+            } else {
+                (
+                    compute_file_hash(&task.input_path)?,
+                    file_mtime_secs(&task.input_path)?,
+                )
+            };
             self.state.entries.insert(
                 key,
                 IncrementalEntry {

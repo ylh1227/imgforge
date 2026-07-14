@@ -48,10 +48,13 @@ pub fn batch_list_ui(
 ) -> Option<i64> {
     let dark = ui.style().visuals.dark_mode;
     let mut picked = None;
+    ui.set_width(ui.available_width());
     egui::ScrollArea::vertical()
         .id_salt("review_batch_list")
         .max_height(160.0)
+        .auto_shrink([false, true])
         .show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             for batch in batches {
                 let stats = stats_cache
                     .iter()
@@ -66,7 +69,11 @@ pub fn batch_list_ui(
                     format!("{} · {} 张", batch.name, batch.total_count)
                 };
                 let selected = current == Some(batch.id);
-                if ui.selectable_label(selected, label).clicked() {
+                let row = ui.add_sized(
+                    egui::vec2(ui.available_width(), 22.0),
+                    egui::SelectableLabel::new(selected, label),
+                );
+                if row.clicked() {
                     picked = Some(batch.id);
                 }
             }
@@ -83,35 +90,67 @@ pub fn batch_list_ui(
 
 pub fn filter_sort_ui(ui: &mut Ui, sidebar: &mut SidebarState) -> bool {
     let mut changed = false;
+    ui.set_max_width(ui.available_width());
+    ui.set_width(ui.available_width());
+
+    const LABEL_W: f32 = 36.0;
+    let gap = 6.0;
+    let row_h = widgets::TOOLBAR_ROW_HEIGHT;
+
+    // 筛选：固定标签列 + 拉满剩余宽度的下拉
     ui.horizontal(|ui| {
-        widgets::section_label(ui, "筛选");
-        egui::ComboBox::from_id_salt("status_filter")
-            .selected_text(sidebar.filter.status.map(|s| s.label()).unwrap_or("全部"))
-            .show_ui(ui, |ui| {
+        ui.spacing_mut().item_spacing.x = gap;
+        ui.add_sized(
+            egui::vec2(LABEL_W, row_h),
+            egui::Label::new(
+                RichText::new("筛选")
+                    .size(13.0)
+                    .color(theme::primary_label(ui.style().visuals.dark_mode)),
+            ),
+        );
+        let selected = sidebar.filter.status.map(|s| s.label()).unwrap_or("全部");
+        let combo_w = ui.available_width().max(80.0);
+        widgets::toolbar_combo_box(ui, "status_filter", selected, combo_w, |ui| {
+            if ui
+                .selectable_label(sidebar.filter.status.is_none(), "全部")
+                .clicked()
+            {
+                sidebar.filter.status = None;
+                changed = true;
+            }
+            for s in ReviewStatus::all() {
                 if ui
-                    .selectable_label(sidebar.filter.status.is_none(), "全部")
+                    .selectable_label(sidebar.filter.status == Some(s), s.label())
                     .clicked()
                 {
-                    sidebar.filter.status = None;
+                    sidebar.filter.status = Some(s);
                     changed = true;
                 }
-                for s in ReviewStatus::all() {
-                    if ui
-                        .selectable_label(sidebar.filter.status == Some(s), s.label())
-                        .clicked()
-                    {
-                        sidebar.filter.status = Some(s);
-                        changed = true;
-                    }
-                }
-            });
+            }
+        });
     });
 
+    ui.add_space(gap);
+
+    // 排序：下拉 + 升序芯片对齐同一行高
     ui.horizontal(|ui| {
-        widgets::section_label(ui, "排序");
-        egui::ComboBox::from_id_salt("sort_key")
-            .selected_text(sidebar.filter.sort_by.label())
-            .show_ui(ui, |ui| {
+        ui.spacing_mut().item_spacing.x = gap;
+        ui.add_sized(
+            egui::vec2(LABEL_W, row_h),
+            egui::Label::new(
+                RichText::new("排序")
+                    .size(13.0)
+                    .color(theme::primary_label(ui.style().visuals.dark_mode)),
+            ),
+        );
+        let asc_w = 56.0;
+        let combo_w = (ui.available_width() - asc_w - gap).max(72.0);
+        widgets::toolbar_combo_box(
+            ui,
+            "sort_key",
+            sidebar.filter.sort_by.label(),
+            combo_w,
+            |ui| {
                 for key in [
                     ImageSortKey::FilePath,
                     ImageSortKey::Status,
@@ -128,69 +167,106 @@ pub fn filter_sort_ui(ui: &mut Ui, sidebar: &mut SidebarState) -> bool {
                         changed = true;
                     }
                 }
-            });
-        if ui.checkbox(&mut sidebar.filter.sort_asc, "升序").changed() {
+            },
+        );
+        if widgets::tab_chip_sized(ui, "升序", asc_w, sidebar.filter.sort_asc, true) {
+            sidebar.filter.sort_asc = !sidebar.filter.sort_asc;
             changed = true;
         }
     });
 
-    ui.add(
-        egui::TextEdit::singleline(&mut sidebar.filter.search)
-            .hint_text("搜索文件名…")
-            .margin(egui::vec2(12.0, 10.0)),
-    );
+    ui.add_space(gap);
+
+    // 搜索 / 备注：同宽同高输入框
+    if widgets::toolbar_search_edit(
+        ui,
+        &mut sidebar.filter.search,
+        "搜索文件名…",
+        ui.available_width(),
+    )
+    .changed()
+    {
+        changed = true;
+    }
+    ui.add_space(gap);
+    if widgets::toolbar_search_edit(
+        ui,
+        &mut sidebar.filter.remark_contains,
+        "备注包含…",
+        ui.available_width(),
+    )
+    .changed()
+    {
+        changed = true;
+    }
+
+    ui.add_space(8.0);
+
+    // 操作区：2×2 等分网格（回收站并入按钮区）
+    let cell = ((ui.available_width() - gap) * 0.5).max(64.0);
     ui.horizontal(|ui| {
-        ui.label("备注包含");
-        if ui
-            .text_edit_singleline(&mut sidebar.filter.remark_contains)
-            .changed()
-        {
-            changed = true;
-        }
-    });
-    // 快捷键：仅显示未评审 / 重置
-    ui.horizontal(|ui| {
-        if widgets::compact_secondary_button(ui, "仅显示未评审", true).clicked() {
+        ui.spacing_mut().item_spacing.x = gap;
+        if widgets::full_width_secondary_button_in(ui, "未评审", true, cell).clicked() {
             sidebar.filter.status = Some(ReviewStatus::Pending);
             changed = true;
         }
-        if widgets::compact_secondary_button(ui, "重置筛选", true).clicked() {
+        if widgets::full_width_secondary_button_in(ui, "重置", true, cell).clicked() {
             sidebar.filter.reset_filters();
             sidebar.show_recycle = false;
             changed = true;
         }
-        let arrow = if sidebar.filter_expanded {
-            "收起 ▲"
+    });
+    ui.add_space(gap);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = gap;
+        let more = if sidebar.filter_expanded {
+            "收起"
         } else {
-            "更多筛选 ▼"
+            "更多"
         };
-        if widgets::compact_secondary_button(ui, arrow, true).clicked() {
+        if widgets::full_width_secondary_button_in(ui, more, true, cell).clicked() {
             sidebar.filter_expanded = !sidebar.filter_expanded;
+        }
+        if widgets::tab_chip_sized(ui, "回收站", cell, sidebar.show_recycle, true) {
+            sidebar.show_recycle = !sidebar.show_recycle;
+            changed = true;
         }
     });
 
     if sidebar.filter_expanded {
+        ui.add_space(8.0);
+        widgets::inset_separator(ui);
         if filter_advanced_ui(ui, sidebar) {
             changed = true;
         }
     }
 
-    if ui.checkbox(&mut sidebar.show_recycle, "回收站").changed() {
-        changed = true;
-    }
     changed
 }
+
 
 /// 高级组合筛选：标注数量 / 分辨率 / 文件大小 / 标签。
 fn filter_advanced_ui(ui: &mut Ui, sidebar: &mut SidebarState) -> bool {
     let mut changed = false;
+    const LABEL_W: f32 = 36.0;
+    let gap = 6.0;
+    let row_h = widgets::TOOLBAR_ROW_HEIGHT;
+    let dark = ui.style().visuals.dark_mode;
 
-    // 标注数量
+    // 标注：与上方「筛选」同款标签列 + 全宽下拉
     ui.horizontal(|ui| {
-        ui.label("标注");
-        egui::ComboBox::from_id_salt("anno_filter")
-            .selected_text(sidebar.filter.annotation_filter.label())
-            .show_ui(ui, |ui| {
+        ui.spacing_mut().item_spacing.x = gap;
+        filter_side_label(ui, "标注", LABEL_W, row_h, dark);
+
+        let show_min = sidebar.filter.annotation_filter == AnnotationFilter::AtLeast;
+        let count_w = if show_min { 64.0 } else { 0.0 };
+        let combo_w = (ui.available_width() - count_w - if show_min { gap } else { 0.0 }).max(72.0);
+        widgets::toolbar_combo_box(
+            ui,
+            "anno_filter",
+            sidebar.filter.annotation_filter.label(),
+            combo_w,
+            |ui| {
                 for f in [
                     AnnotationFilter::Any,
                     AnnotationFilter::None,
@@ -205,11 +281,15 @@ fn filter_advanced_ui(ui: &mut Ui, sidebar: &mut SidebarState) -> bool {
                         changed = true;
                     }
                 }
-            });
-        if sidebar.filter.annotation_filter == AnnotationFilter::AtLeast {
+            },
+        );
+        if show_min {
             let mut min = sidebar.filter.min_annotations.unwrap_or(1);
             if ui
-                .add(egui::DragValue::new(&mut min).range(1..=999))
+                .add_sized(
+                    egui::vec2(count_w, row_h),
+                    egui::DragValue::new(&mut min).range(1..=999).suffix("条"),
+                )
                 .changed()
             {
                 sidebar.filter.min_annotations = Some(min);
@@ -218,127 +298,103 @@ fn filter_advanced_ui(ui: &mut Ui, sidebar: &mut SidebarState) -> bool {
         }
     });
 
-    // 分辨率（宽度像素）
-    ui.horizontal(|ui| {
-        ui.label("宽度 ≥");
-        let mut minw = sidebar.filter.min_width.unwrap_or(0) as i32;
-        if ui
-            .add(
-                egui::DragValue::new(&mut minw)
-                    .range(0..=100000)
-                    .suffix("px"),
-            )
-            .changed()
-        {
-            sidebar.filter.min_width = if minw <= 0 { None } else { Some(minw as u32) };
-            changed = true;
-        }
-        ui.label("≤");
-        let mut maxw = sidebar.filter.max_width.unwrap_or(0) as i32;
-        if ui
-            .add(
-                egui::DragValue::new(&mut maxw)
-                    .range(0..=100000)
-                    .suffix("px"),
-            )
-            .changed()
-        {
-            sidebar.filter.max_width = if maxw <= 0 { None } else { Some(maxw as u32) };
-            changed = true;
-        }
-    });
+    ui.add_space(gap);
 
-    // 分辨率（高度像素）
-    ui.horizontal(|ui| {
-        ui.label("高度 ≥");
-        let mut minh = sidebar.filter.min_height.unwrap_or(0) as i32;
-        if ui
-            .add(
-                egui::DragValue::new(&mut minh)
-                    .range(0..=100000)
-                    .suffix("px"),
-            )
-            .changed()
-        {
-            sidebar.filter.min_height = if minh <= 0 { None } else { Some(minh as u32) };
-            changed = true;
-        }
-        ui.label("≤");
-        let mut maxh = sidebar.filter.max_height.unwrap_or(0) as i32;
-        if ui
-            .add(
-                egui::DragValue::new(&mut maxh)
-                    .range(0..=100000)
-                    .suffix("px"),
-            )
-            .changed()
-        {
-            sidebar.filter.max_height = if maxh <= 0 { None } else { Some(maxh as u32) };
-            changed = true;
-        }
-    });
+    // 宽度 / 高度 / 大小：标签 + 等宽 min–max，去掉重复 ≥≤ 符号
+    if filter_range_i32(
+        ui,
+        "宽度",
+        LABEL_W,
+        gap,
+        row_h,
+        dark,
+        sidebar.filter.min_width.unwrap_or(0) as i32,
+        sidebar.filter.max_width.unwrap_or(0) as i32,
+        "px",
+        |min, max| {
+            sidebar.filter.min_width = if min <= 0 { None } else { Some(min as u32) };
+            sidebar.filter.max_width = if max <= 0 { None } else { Some(max as u32) };
+        },
+    ) {
+        changed = true;
+    }
+    ui.add_space(gap);
+    if filter_range_i32(
+        ui,
+        "高度",
+        LABEL_W,
+        gap,
+        row_h,
+        dark,
+        sidebar.filter.min_height.unwrap_or(0) as i32,
+        sidebar.filter.max_height.unwrap_or(0) as i32,
+        "px",
+        |min, max| {
+            sidebar.filter.min_height = if min <= 0 { None } else { Some(min as u32) };
+            sidebar.filter.max_height = if max <= 0 { None } else { Some(max as u32) };
+        },
+    ) {
+        changed = true;
+    }
+    ui.add_space(gap);
 
-    // 文件大小（MB）
-    ui.horizontal(|ui| {
-        ui.label("大小 ≥");
-        let mut min_mb = sidebar
-            .filter
-            .min_file_size
-            .map(|b| (b as f64 / (1024.0 * 1024.0)) as f32)
-            .unwrap_or(0.0);
-        if ui
-            .add(
-                egui::DragValue::new(&mut min_mb)
-                    .range(0.0..=100000.0)
-                    .suffix("MB")
-                    .speed(0.5),
-            )
-            .changed()
-        {
-            sidebar.filter.min_file_size = if min_mb <= 0.0 {
+    let min_mb = sidebar
+        .filter
+        .min_file_size
+        .map(|b| (b as f64 / (1024.0 * 1024.0)) as f32)
+        .unwrap_or(0.0);
+    let max_mb = sidebar
+        .filter
+        .max_file_size
+        .map(|b| (b as f64 / (1024.0 * 1024.0)) as f32)
+        .unwrap_or(0.0);
+    if filter_range_f32(
+        ui,
+        "大小",
+        LABEL_W,
+        gap,
+        row_h,
+        dark,
+        min_mb,
+        max_mb,
+        "MB",
+        0.5,
+        |min, max| {
+            sidebar.filter.min_file_size = if min <= 0.0 {
                 None
             } else {
-                Some((min_mb as f64 * 1024.0 * 1024.0) as u64)
+                Some((min as f64 * 1024.0 * 1024.0) as u64)
             };
-            changed = true;
-        }
-        ui.label("≤");
-        let mut max_mb = sidebar
-            .filter
-            .max_file_size
-            .map(|b| (b as f64 / (1024.0 * 1024.0)) as f32)
-            .unwrap_or(0.0);
-        if ui
-            .add(
-                egui::DragValue::new(&mut max_mb)
-                    .range(0.0..=100000.0)
-                    .suffix("MB")
-                    .speed(0.5),
-            )
-            .changed()
-        {
-            sidebar.filter.max_file_size = if max_mb <= 0.0 {
+            sidebar.filter.max_file_size = if max <= 0.0 {
                 None
             } else {
-                Some((max_mb as f64 * 1024.0 * 1024.0) as u64)
+                Some((max as f64 * 1024.0 * 1024.0) as u64)
             };
-            changed = true;
-        }
-    });
+        },
+    ) {
+        changed = true;
+    }
 
-    // 标签多选
+    // 标签：模式等分 + 色点芯片换行
     if !sidebar.available_tags.is_empty() {
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
-            ui.label("标签模式");
+            ui.spacing_mut().item_spacing.x = gap;
+            filter_side_label(ui, "标签", LABEL_W, row_h, dark);
+            let cell = ((ui.available_width() - gap) * 0.5).max(48.0);
             for m in [TagFilterMode::Any, TagFilterMode::All] {
-                if widgets::toggle_chip(ui, m.label(), sidebar.filter.tag_mode == m, true) {
+                if widgets::tab_chip_sized(ui, m.label(), cell, sidebar.filter.tag_mode == m, true)
+                {
                     sidebar.filter.tag_mode = m;
                     changed = true;
                 }
             }
         });
+        ui.add_space(gap);
         let tags = sidebar.available_tags.clone();
         ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            ui.spacing_mut().item_spacing.y = gap;
             for tag in &tags {
                 let on = sidebar.filter.tag_ids.contains(&tag.id);
                 if widgets::colored_toggle_chip(ui, &tag.name, tag.color, on, true) {
@@ -353,6 +409,128 @@ fn filter_advanced_ui(ui: &mut Ui, sidebar: &mut SidebarState) -> bool {
         });
     }
 
+    changed
+}
+
+fn filter_side_label(ui: &mut Ui, text: &str, width: f32, height: f32, dark: bool) {
+    ui.add_sized(
+        egui::vec2(width, height),
+        egui::Label::new(
+            RichText::new(text)
+                .size(13.0)
+                .color(theme::primary_label(dark)),
+        ),
+    );
+}
+
+fn filter_range_i32(
+    ui: &mut Ui,
+    label: &str,
+    label_w: f32,
+    gap: f32,
+    row_h: f32,
+    dark: bool,
+    mut min: i32,
+    mut max: i32,
+    suffix: &str,
+    mut commit: impl FnMut(i32, i32),
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = gap;
+        filter_side_label(ui, label, label_w, row_h, dark);
+        let dash_w = 12.0;
+        let field = ((ui.available_width() - dash_w - gap * 2.0) * 0.5).max(48.0);
+        if ui
+            .add_sized(
+                egui::vec2(field, row_h),
+                egui::DragValue::new(&mut min).range(0..=100_000).suffix(suffix),
+            )
+            .changed()
+        {
+            changed = true;
+        }
+        ui.add_sized(
+            egui::vec2(dash_w, row_h),
+            egui::Label::new(
+                RichText::new("–")
+                    .size(13.0)
+                    .color(theme::secondary_label(dark)),
+            )
+            .halign(egui::Align::Center),
+        );
+        if ui
+            .add_sized(
+                egui::vec2(field, row_h),
+                egui::DragValue::new(&mut max).range(0..=100_000).suffix(suffix),
+            )
+            .changed()
+        {
+            changed = true;
+        }
+        if changed {
+            commit(min, max);
+        }
+    });
+    changed
+}
+
+fn filter_range_f32(
+    ui: &mut Ui,
+    label: &str,
+    label_w: f32,
+    gap: f32,
+    row_h: f32,
+    dark: bool,
+    mut min: f32,
+    mut max: f32,
+    suffix: &str,
+    speed: f32,
+    mut commit: impl FnMut(f32, f32),
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = gap;
+        filter_side_label(ui, label, label_w, row_h, dark);
+        let dash_w = 12.0;
+        let field = ((ui.available_width() - dash_w - gap * 2.0) * 0.5).max(48.0);
+        if ui
+            .add_sized(
+                egui::vec2(field, row_h),
+                egui::DragValue::new(&mut min)
+                    .range(0.0..=100_000.0)
+                    .suffix(suffix)
+                    .speed(speed),
+            )
+            .changed()
+        {
+            changed = true;
+        }
+        ui.add_sized(
+            egui::vec2(dash_w, row_h),
+            egui::Label::new(
+                RichText::new("–")
+                    .size(13.0)
+                    .color(theme::secondary_label(dark)),
+            )
+            .halign(egui::Align::Center),
+        );
+        if ui
+            .add_sized(
+                egui::vec2(field, row_h),
+                egui::DragValue::new(&mut max)
+                    .range(0.0..=100_000.0)
+                    .suffix(suffix)
+                    .speed(speed),
+            )
+            .changed()
+        {
+            changed = true;
+        }
+        if changed {
+            commit(min, max);
+        }
+    });
     changed
 }
 
@@ -470,30 +648,65 @@ pub fn image_list_ui(
     sidebar: &mut SidebarState,
     thumbs: &mut crate::review::ui::ListThumbnailCache,
 ) -> ImageListAction {
-    let dark = ui.style().visuals.dark_mode;
     let mut filter_changed = filter_sort_ui(ui, sidebar);
 
     ui.add_space(4.0);
     ui.separator();
     ui.add_space(4.0);
 
+    let mut body = image_list_body_ui(ui, ctx, images, current, sidebar, thumbs, None);
+    if sidebar.filter.search.len() == 1 {
+        filter_changed = true;
+    }
+    body.reload = body.reload || filter_changed;
+    body
+}
+
+/// 仅图片列表（不含筛选栏）。`list_max_h` 限制虚拟列表高度，供定高侧栏使用。
+pub fn image_list_body_ui(
+    ui: &mut Ui,
+    ctx: &egui::Context,
+    images: &[ReviewImageItem],
+    current: Option<i64>,
+    sidebar: &mut SidebarState,
+    thumbs: &mut crate::review::ui::ListThumbnailCache,
+    list_max_h: Option<f32>,
+) -> ImageListAction {
+    let dark = ui.style().visuals.dark_mode;
     let mut picked = None;
     let total = images.len();
     let scroll_id = ui.id().with("review_image_list");
 
     if images.is_empty() {
-        ui.label(
-            RichText::new("暂无图片")
-                .size(12.0)
-                .color(theme::secondary_label(dark)),
+        let list_h = match list_max_h {
+            Some(h) => h.max(48.0),
+            // 非定高（整页滚动）时只留一小段沉底，避免把页面撑得过高
+            None => ui.available_height().clamp(56.0, 120.0),
+        };
+        let width = ui.available_width().min(ui.max_rect().width()).max(80.0);
+        ui.allocate_ui_with_layout(
+            egui::vec2(width, list_h),
+            egui::Layout::bottom_up(egui::Align::Center),
+            |ui| {
+                ui.set_width(width);
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("暂无图片")
+                        .size(12.0)
+                        .color(theme::secondary_label(dark)),
+                );
+            },
         );
     } else {
         let mut thumb_requests = 0usize;
-        egui::ScrollArea::vertical().id_salt(scroll_id).show_rows(
-            ui,
-            ROW_HEIGHT,
-            total,
-            |ui, row_range| {
+        let list_h = list_max_h
+            .unwrap_or_else(|| ui.available_height())
+            .max(96.0);
+        egui::ScrollArea::vertical()
+            .id_salt(scroll_id)
+            .max_height(list_h)
+            .auto_shrink([false, false])
+            .show_rows(ui, ROW_HEIGHT, total, |ui, row_range| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 for row in row_range {
                     if let Some(id) = render_image_list_row(
@@ -508,20 +721,15 @@ pub fn image_list_ui(
                         picked = Some(id);
                     }
                 }
-            },
-        );
+            });
 
         if thumbs.poll(ctx) {
             ctx.request_repaint_after(std::time::Duration::from_millis(48));
         }
     }
 
-    if sidebar.filter.search.len() == 1 {
-        filter_changed = true;
-    }
-
     ImageListAction {
-        reload: filter_changed,
+        reload: false,
         selected: picked,
     }
 }

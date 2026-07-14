@@ -18,7 +18,9 @@
 - 选择目标格式、质量、是否保留目录结构
 - 实时进度条与日志
 - 完成后一键打开输出文件夹
-- **图片评审** Tab：批次导入、状态/标签/标注、多图对比、导出 CSV
+- **图片评审** Tab：批次导入、状态/标签/标注、多图对比、导出 CSV/JSON，可与转换队列联动
+- **数据提取** Tab：解析 Imatest 测试结果（13 类模块），汇总/对比/阈值评估，导出 CSV/JSON/HTML；可选 OCR 识别截图结果（需系统安装 `tesseract`）
+- **任务中心** Tab：转换历史、失败重试、各模块操作日志
 - **视频评审** Tab（需系统安装 `ffmpeg` / `ffprobe`）：
   - 从文件夹导入 mp4/mov/mkv/webm/avi/m4v
   - ffprobe 读取时长、分辨率、编码等元数据
@@ -66,6 +68,27 @@ winget install Gyan.FFmpeg
 ```
 
 未安装时 App 可正常启动，顶部会提示；导入与抽帧功能不可用。
+
+#### 数据提取（Imatest）
+
+GUI「数据提取」Tab 面向相机/镜头测试工作流：
+
+1. 选择包含 Imatest 导出结果的目录（CSV / JSON / TXT）
+2. 自动识别 13 类模块并汇总关键指标
+3. 可做批次对比、阈值评估与洞察报告
+4. 导出 CSV / JSON / HTML
+
+若结果以截图形式存在，可启用 OCR（需本机安装 Tesseract）：
+
+```bash
+# macOS (Homebrew)
+brew install tesseract
+
+# Windows (winget / 官方安装包)
+winget install UB-Mannheim.TesseractOCR
+```
+
+未安装 Tesseract 时，文件解析仍可用；仅 OCR 截图识别不可用。可用 `imgforge doctor` 检查依赖。
 
 ### macOS 首次打开
 
@@ -122,7 +145,9 @@ cargo run --release --features gui --bin imgforge-app
 - **多尺寸缩略图**：一次生成多个规格（如 `256,512x384`）
 - **图片评审**（`review` feature，GUI 默认开启）
 - **视频评审**（`video-review` feature，GUI 默认开启；依赖外部 ffmpeg/ffprobe）
-- **libvips 后端**：占位实现，当前回退原生后端
+- **数据提取**（`data-extract` feature，GUI 默认开启；OCR 依赖外部 tesseract）
+- **Bayer/RAW**（`bayer` feature，GUI 默认开启）
+- **libvips 后端**：占位实现，当前回退原生后端（`doctor` 会标注可用性）
 
 ## 下载预编译版本
 
@@ -241,12 +266,37 @@ cargo build --release --features thumbnails
 # 全量 P2 功能
 cargo build --release --features "incremental,rename,thumbnails,watermark,jpegxl,vips"
 
+# GUI（捆绑 review / video-review / data-extract / jpegxl / bayer 等）
+cargo build --release --features gui --bin imgforge-app
+
+# Bayer/RAW 马赛克解码
+cargo build --release --features bayer
+
 # libvips 后端（需系统安装 libvips，如 `brew install vips`）
 cargo build --release --features vips
 ```
 
 > **注意**：`--features vips` 需要系统已安装 libvips 开发库；运行时若初始化失败会自动回退原生后端。
+>
+> **Feature 差异**：本地 `cargo build` 默认不含 P2/GUI；预编译 CLI 包通常启用 `incremental,rename,thumbnails,watermark,jpegxl,bayer`；GUI 包启用 `gui`。用 `imgforge doctor` 查看当前二进制实际启用的 feature 与运行时依赖。
 
+### 测试与基准
+
+```bash
+# 默认 feature 单元/集成测试
+cargo test
+
+# 含增量等常见 P2 feature
+cargo test --features "incremental,rename,thumbnails,watermark"
+
+# GUI 相关模块测试（需本机 GUI 依赖）
+cargo test --features gui
+
+# 转换/缩放/扫描性能基准
+cargo bench --bench conversion_bench
+```
+
+大图策略：执行器会按最大输入体积动态收紧并发（约 ≥32 MiB 限 2，≥128 MiB 限 1），降低全量读入内存时的峰值占用。
 ## Windows 使用方法
 
 以下示例均在 **PowerShell** 中运行。PowerShell 多行命令用反引号 `` ` `` 续行；路径含空格时需加引号。
@@ -371,7 +421,85 @@ imgforge -i .\photos -o .\output -f webp --width 800 --resize-mode fill
 imgforge doctor
 ```
 
-检查运行时平台、已启用 feature 和后端状态。
+检查运行时平台、已启用 feature、后端状态，以及远端接入配置摘要。
+
+### 远端服务器接入
+
+远端模式以服务器栈为主：客户端上传素材，`imgforge-server` 通过 Postgres / Redis Streams / S3-MinIO 管理任务、队列与产物，Worker 完成转换、评审、视频评审和数据提取。SQLite / 磁盘 / 内存队列仅作为测试和单机开发后备，不作为产品架构推荐。
+
+```powershell
+# 1) 启动远端栈（Postgres + Redis + MinIO + imgforge-server）
+docker compose -f deploy/docker-compose.yml up --build
+
+# 2) 客户端配置（另一终端 / 另一台机器）
+$env:IMGFORGE_REMOTE_ENABLED = "true"
+$env:IMGFORGE_REMOTE_BASE_URL = "http://127.0.0.1:8787"
+$env:IMGFORGE_REMOTE_AUTH_MODE = "env_bearer"
+$env:IMGFORGE_REMOTE_TOKEN = "change-me"
+
+# 查看健康状态
+imgforge remote status
+
+# 上传、远端转换并下载结果
+imgforge remote submit -i .\photos -o .\output -f webp
+
+# 或在普通转换命令上加 --remote（同样会等待完成并下载）
+imgforge -i .\photos -o .\output -f webp --remote
+```
+
+相关环境变量：
+
+| 变量 | 说明 |
+|------|------|
+| `IMGFORGE_REMOTE_ENABLED` | 启用远端（`true`/`1`） |
+| `IMGFORGE_REMOTE_BASE_URL` | API 根地址（如 `http://127.0.0.1:8787`） |
+| `IMGFORGE_REMOTE_WORKSPACE_ID` | 工作区 ID |
+| `IMGFORGE_REMOTE_AUTH_MODE` | `none` / `env_bearer` / `keychain` |
+| `IMGFORGE_REMOTE_TOKEN` | Bearer token（勿写入 TOML） |
+| `IMGFORGE_REMOTE_TIMEOUT_SECS` | 超时秒数 |
+| `IMGFORGE_SERVER_BIND` | 服务端监听地址（默认 `127.0.0.1:8787`） |
+| `IMGFORGE_SERVER_TOKEN` | 服务端可选 Bearer |
+| `IMGFORGE_PUBLIC_BASE` | 对外 API base（默认 `http://127.0.0.1:8787`） |
+| `IMGFORGE_SERVER_DATA_DIR` | 服务器数据目录（默认 `~/.imgforge/server`） |
+| `IMGFORGE_INLINE_WORKER` | 是否在 API 进程内跑 Worker（默认开） |
+| `IMGFORGE_RATE_LIMIT_PER_MINUTE` | 每 token/IP 轻量限流（默认 `120`） |
+| `IMGFORGE_DATABASE_URL` / `DATABASE_URL` | Postgres 元数据 |
+| `IMGFORGE_REDIS_URL` / `REDIS_URL` | Redis Streams 队列 |
+| `IMGFORGE_S3_ENDPOINT` / `IMGFORGE_S3_BUCKET` | S3/MinIO 对象存储 |
+
+GUI：转换页勾选「优先提交远端任务」后，开始转换会上传文件、等待远端完成并下载到输出目录；任务中心可同步/刷新远端任务，并可从完成的评审 / 视频评审 / 数据提取任务跳转到对应模块。配置 `remote.enabled` + `remote.base_url` 后，模块侧边栏会提供「远程 / 本地」数据源切换；远端目录不可达时回退本地，下载的缩略图与数据提取报告缓存到 `~/.imgforge/remote_cache/assets`。
+
+约定 API（schema v1）：
+
+**控制面**
+
+- `GET /v1/health`
+- `POST /v1/jobs`（body: `RemoteJobRequest`，支持 `client_request_id` 幂等）
+- `GET /v1/jobs?limit=`
+- `GET /v1/jobs/{id}`
+- `GET /v1/jobs/{id}/result`
+- `POST /v1/jobs/{id}/cancel`
+- `GET /v1/jobs/{id}/events`（SSE）
+- `GET /v1/jobs/{id}/events/poll?after=`（轮询兼容）
+
+统一错误体：`{ code, message, retryable, details?, request_id? }`。客户端对 429/5xx / `retryable` 错误做有限次退避重试。
+
+**数据面**
+
+- `POST /v1/uploads:init` → `RemoteUploadSession`（含 `PUT` URL）
+- `PUT /v1/uploads/{id}/bytes` → 上传文件内容
+- `POST /v1/uploads:complete` → `RemoteAssetRef`
+- `POST /v1/uploads:abort`
+- `GET /v1/artifacts/{id}/download` → 短期下载凭证
+- `GET /v1/artifacts/{id}/content` → 直接下载文件字节
+
+**数据加载**
+
+- `GET /v1/assets`
+- `GET /v1/review/batches`
+- `GET /v1/extract/results`
+
+服务端（`src/server/`，feature `server`）：axum 路由、Postgres `JobStore`、Redis Streams 队列、S3/MinIO `ObjectStore`、内联 Worker（复用 `run_batch`）。未配置远端依赖时会回退 SQLite / 磁盘 / 内存队列，仅用于测试和开发。部署细节见 `docs/remote-deploy.md`。
 
 ### PowerShell 命令补全
 
