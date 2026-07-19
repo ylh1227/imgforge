@@ -511,18 +511,11 @@ mod tests {
     #[test]
     fn raw_resolves_via_paired_even_in_global_mode() {
         use std::fs;
-        use std::time::{SystemTime, UNIX_EPOCH};
 
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!("imgforge_bm_raw_{nanos}"));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
+        let dir = tempfile::tempdir().unwrap();
 
         // 1×1 JPG as companion
-        let jpg = dir.join("shot.jpg");
+        let jpg = dir.path().join("shot.jpg");
         DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
             1,
             1,
@@ -530,9 +523,9 @@ mod tests {
         ))
         .save(&jpg)
         .unwrap();
-        let raw = dir.join("shot.CR2");
+        let raw = dir.path().join("shot.CR2");
         fs::write(&raw, b"not-a-real-raw").unwrap();
-        let global = dir.join("global.jpg");
+        let global = dir.path().join("global.jpg");
         DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
             1,
             1,
@@ -554,8 +547,6 @@ mod tests {
         // 应使用同名 JPG（亮），而非全局参考（暗）
         let p = resolved.to_rgba8().get_pixel(0, 0).0;
         assert!(p[0] > 100, "expected paired jpg luma, got {:?}", p);
-
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

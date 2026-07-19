@@ -108,21 +108,6 @@ fn collect_images(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) {
 mod tests {
     use super::*;
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn temp_dir() -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let dir =
-            std::env::temp_dir().join(format!("imgforge_ref_pick_{nanos}_{}", std::process::id()));
-        // 再拼一层随机，避免并行同 nanos 冲突
-        let dir = dir.join(format!("{:x}", nanos.wrapping_mul(0x9e37_79b9)));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 
     fn touch(path: &Path) {
         fs::write(path, b"x").unwrap();
@@ -130,74 +115,67 @@ mod tests {
 
     #[test]
     fn prefers_filename_with_ref() {
-        let dir = temp_dir();
-        touch(&dir.join("a.jpg"));
-        touch(&dir.join("scene_ref.png"));
-        touch(&dir.join("b.webp"));
-        let picked = pick_reference_from_input(&dir, false).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        touch(&dir.path().join("a.jpg"));
+        touch(&dir.path().join("scene_ref.png"));
+        touch(&dir.path().join("b.webp"));
+        let picked = pick_reference_from_input(dir.path(), false).unwrap();
         assert_eq!(picked.file_name().unwrap(), "scene_ref.png");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn falls_back_to_sorted_first() {
-        let dir = temp_dir();
-        touch(&dir.join("z.jpg"));
-        touch(&dir.join("a.png"));
-        let picked = pick_reference_from_input(&dir, false).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        touch(&dir.path().join("z.jpg"));
+        touch(&dir.path().join("a.png"));
+        let picked = pick_reference_from_input(dir.path(), false).unwrap();
         assert_eq!(picked.file_name().unwrap(), "a.png");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn empty_dir_returns_none() {
-        let dir = temp_dir();
-        assert!(pick_reference_from_input(&dir, false).is_none());
-        let _ = fs::remove_dir_all(&dir);
+        let dir = tempfile::tempdir().unwrap();
+        assert!(pick_reference_from_input(dir.path(), false).is_none());
     }
 
     #[test]
     fn recursive_finds_nested_ref() {
-        let dir = temp_dir();
-        let nested = dir.join("sub");
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("sub");
         fs::create_dir_all(&nested).unwrap();
-        touch(&dir.join("top.jpg"));
+        touch(&dir.path().join("top.jpg"));
         touch(&nested.join("reference_shot.jpeg"));
-        let picked = pick_reference_from_input(&dir, true).unwrap();
+        let picked = pick_reference_from_input(dir.path(), true).unwrap();
         assert_eq!(picked.file_name().unwrap(), "reference_shot.jpeg");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn paired_prefers_jpg_over_png() {
-        let dir = temp_dir();
-        let raw = dir.join("shot.CR2");
+        let dir = tempfile::tempdir().unwrap();
+        let raw = dir.path().join("shot.CR2");
         touch(&raw);
-        touch(&dir.join("shot.png"));
-        touch(&dir.join("shot.jpg"));
+        touch(&dir.path().join("shot.png"));
+        touch(&dir.path().join("shot.jpg"));
         let paired = find_paired_reference(&raw).unwrap();
         assert_eq!(paired.file_name().unwrap(), "shot.jpg");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn paired_skips_self_when_source_is_jpg() {
-        let dir = temp_dir();
-        let jpg = dir.join("a.jpg");
+        let dir = tempfile::tempdir().unwrap();
+        let jpg = dir.path().join("a.jpg");
         touch(&jpg);
         assert!(find_paired_reference(&jpg).is_none());
-        touch(&dir.join("a.png"));
+        touch(&dir.path().join("a.png"));
         let paired = find_paired_reference(&jpg).unwrap();
         assert_eq!(paired.file_name().unwrap(), "a.png");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn paired_missing_returns_none() {
-        let dir = temp_dir();
-        let raw = dir.join("lonely.NEF");
+        let dir = tempfile::tempdir().unwrap();
+        let raw = dir.path().join("lonely.NEF");
         touch(&raw);
         assert!(find_paired_reference(&raw).is_none());
-        let _ = fs::remove_dir_all(&dir);
     }
 }
