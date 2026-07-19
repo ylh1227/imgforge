@@ -95,10 +95,7 @@ pub fn format_annotation_summary(
     for ann in annotations.iter().take(MAX_ANNOTATION_SUMMARY) {
         let line = match (&ann.kind, &ann.position) {
             (AnnotationKind::Rectangle, AnnotationPosition::Rectangle(r)) => {
-                format!(
-                    "- rect ({:.2},{:.2})-({:.2},{:.2})",
-                    r.x0, r.y0, r.x1, r.y1
-                )
+                format!("- rect ({:.2},{:.2})-({:.2},{:.2})", r.x0, r.y0, r.x1, r.y1)
             }
             (AnnotationKind::Arrow, AnnotationPosition::Arrow(a)) => {
                 format!(
@@ -112,7 +109,12 @@ pub fn format_annotation_summary(
                 } else {
                     ann.content.trim()
                 };
-                format!("- text @({:.2},{:.2}): \"{}\"", t.x, t.y, truncate(content, 60))
+                format!(
+                    "- text @({:.2},{:.2}): \"{}\"",
+                    t.x,
+                    t.y,
+                    truncate(content, 60)
+                )
             }
             _ => format!("- {:?}", ann.kind),
         };
@@ -220,10 +222,7 @@ pub fn try_load_defect_manifest_summary(package_path: Option<&Path>) -> Option<S
             format!("- videos: {}", manifest.videos.len()),
         ];
         for v in manifest.videos.iter().take(8) {
-            let device = v
-                .device_model
-                .as_deref()
-                .unwrap_or("-");
+            let device = v.device_model.as_deref().unwrap_or("-");
             lines.push(format!(
                 "  · id={} offset={}ms fps={:.1} device={} path={}",
                 v.id, v.offset_ms, v.fps, device, v.path
@@ -246,12 +245,7 @@ pub fn description_field(api: JiraApiVersion, text: &str) -> Value {
 }
 
 pub fn build_create_fields(cfg: &JiraConfig, mapped: &MappedIssue) -> Value {
-    let project_key = cfg
-        .project_key
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let project_key = cfg.project_key.as_deref().unwrap_or("").trim().to_string();
     let mut fields = json!({
         "project": { "key": project_key },
         "summary": mapped.summary,

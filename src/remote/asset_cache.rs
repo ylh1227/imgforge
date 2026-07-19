@@ -95,10 +95,12 @@ impl RemoteAssetCache {
 }
 
 fn sanitize_filename(name: &str) -> String {
-    let base = Path::new(name)
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "asset.bin".into());
+    // 同时按 `/` 与 `\` 取最后一段，避免 Unix 上把 Windows 路径里的 `\` 当成文件名字符。
+    let base = name
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("asset.bin");
     let cleaned: String = base
         .chars()
         .map(|c| match c {

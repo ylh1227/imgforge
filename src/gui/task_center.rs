@@ -103,7 +103,11 @@ pub fn task_center_ui(
             ui.label(
                 RichText::new(format!(
                     "{} · {}",
-                    if snap.from_cache { "来自缓存" } else { "实时" },
+                    if snap.from_cache {
+                        "来自缓存"
+                    } else {
+                        "实时"
+                    },
                     sync_label
                 ))
                 .size(12.5)
@@ -133,7 +137,11 @@ pub fn task_center_ui(
         if let Some(snap) = &remote.snapshot {
             ui.add_space(8.0);
             if snap.jobs.is_empty() {
-                widgets::empty_state(ui, "暂无远端任务", "同步后，进行中与已完成的作业会显示在这里。");
+                widgets::empty_state(
+                    ui,
+                    "暂无远端任务",
+                    "同步后，进行中与已完成的作业会显示在这里。",
+                );
             } else {
                 ScrollArea::vertical()
                     .id_salt("task_center_remote_jobs")
@@ -179,7 +187,11 @@ pub fn task_center_ui(
     widgets::section_gap(ui);
     widgets::grouped_section(ui, "转换历史", |ui| {
         if prefs.history.is_empty() {
-            widgets::empty_state(ui, "暂无转换历史", "完成一次批量转换后，可从这里载入参数重跑。");
+            widgets::empty_state(
+                ui,
+                "暂无转换历史",
+                "完成一次批量转换后，可从这里载入参数重跑。",
+            );
         } else {
             ScrollArea::vertical()
                 .id_salt("task_center_convert_history")

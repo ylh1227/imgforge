@@ -21,8 +21,8 @@ use crate::review::error::ReviewResult;
 use crate::review::is_irreversible_transition;
 use crate::review::service::{
     format_roi_label, scan_images, BatchAnnotateRequest, BatchImageScreenshotRequest,
-    BatchImageScreenshotResult, BatchImageScreenshotService, BatchRemarkRequest, BatchStatusRequest,
-    ExportService, ShortcutAction, StatusTransitionWarning,
+    BatchImageScreenshotResult, BatchImageScreenshotService, BatchRemarkRequest,
+    BatchStatusRequest, ExportService, ShortcutAction, StatusTransitionWarning,
 };
 use crate::review::service::{ImageAnalysis, ImageAnalysisService, ReviewModuleConfig};
 use crate::review::storage::SqliteReviewRepository;
@@ -321,10 +321,7 @@ impl ReviewPanel {
                 .id_salt("review_page_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    let page_w = ui
-                        .available_width()
-                        .min(ui.max_rect().width())
-                        .max(200.0);
+                    let page_w = ui.available_width().min(ui.max_rect().width()).max(200.0);
                     ui.set_max_width(page_w);
                     ui.set_width(page_w);
                     self.paint_chrome(ui, ctx, host, dark, true);
@@ -504,7 +501,8 @@ impl ReviewPanel {
                 if widgets::full_width_secondary_button_in(ui, "快捷键", true, cell).clicked() {
                     self.show_shortcut_panel = !self.show_shortcut_panel;
                 }
-                if widgets::full_width_secondary_button_in(ui, "备份数据", true, cell).clicked() {
+                if widgets::full_width_secondary_button_in(ui, "备份数据", true, cell).clicked()
+                {
                     match crate::review::storage::create_backup() {
                         Ok(p) => self.set_status(format!("已备份：{}", p.display())),
                         Err(e) => self.error = Some(e.to_string()),
@@ -735,12 +733,8 @@ impl ReviewPanel {
                 {
                     self.compare_view.fit_to_window(canvas);
                 }
-                if widgets::compact_secondary_button(
-                    ui,
-                    "100%",
-                    has_image || selected_count >= 2,
-                )
-                .clicked()
+                if widgets::compact_secondary_button(ui, "100%", has_image || selected_count >= 2)
+                    .clicked()
                 {
                     self.compare_view.set_zoom_100(canvas);
                 }
@@ -874,10 +868,8 @@ impl ReviewPanel {
                         .max_height(row_h)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            let content_w = ui
-                                .available_width()
-                                .min(ui.max_rect().width())
-                                .max(160.0);
+                            let content_w =
+                                ui.available_width().min(ui.max_rect().width()).max(160.0);
                             ui.set_max_width(content_w);
                             ui.set_width(content_w);
                             self.right_column(ctx, ui, dark);
@@ -918,10 +910,8 @@ impl ReviewPanel {
                         .id_salt("review_two_col_left")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            let content_w = ui
-                                .available_width()
-                                .min(ui.max_rect().width())
-                                .max(120.0);
+                            let content_w =
+                                ui.available_width().min(ui.max_rect().width()).max(120.0);
                             ui.set_width(content_w);
                             self.left_column(ui, ctx, dark);
                         });
@@ -1042,10 +1032,7 @@ impl ReviewPanel {
             .max_height(top_budget)
             .auto_shrink([false, true])
             .show(ui, |ui| {
-                let content_w = ui
-                    .available_width()
-                    .min(ui.max_rect().width())
-                    .max(120.0);
+                let content_w = ui.available_width().min(ui.max_rect().width()).max(120.0);
                 ui.set_width(content_w);
                 self.left_batch_section(ui, dark);
                 ui.add_space(10.0);
@@ -1060,10 +1047,7 @@ impl ReviewPanel {
         ui.add_space(6.0);
         let list_h = (ui.available_height() - 8.0).max(48.0);
         widgets::grouped_section_frame(ui, |ui| {
-            let list_w = ui
-                .available_width()
-                .min(ui.max_rect().width())
-                .max(120.0);
+            let list_w = ui.available_width().min(ui.max_rect().width()).max(120.0);
             ui.set_width(list_w);
             // 扣除分组框内边距，避免高度溢出裁切
             let body_h = (list_h - 28.0).max(40.0);
@@ -1115,7 +1099,10 @@ impl ReviewPanel {
         }
     }
 
-    fn apply_image_list_action(&mut self, list_action: crate::review::ui::sidebar::ImageListAction) {
+    fn apply_image_list_action(
+        &mut self,
+        list_action: crate::review::ui::sidebar::ImageListAction,
+    ) {
         if list_action.reload {
             let _ = self.reload_images();
         }
@@ -1177,11 +1164,7 @@ impl ReviewPanel {
             if let Some(item) = self.current_item().cloned() {
                 let cache_thumb =
                     crate::review::service::ThumbnailService::valid_cache_path(&item.file_path);
-                let item_thumb = item
-                    .thumbnail_path
-                    .as_ref()
-                    .filter(|p| p.exists())
-                    .cloned();
+                let item_thumb = item.thumbnail_path.as_ref().filter(|p| p.exists()).cloned();
                 let thumb_owned = item_thumb.or(cache_thumb);
                 let thumb_ref = thumb_owned.as_deref();
                 let display_path =
@@ -1582,10 +1565,7 @@ impl ReviewPanel {
     }
 
     fn right_column(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, dark: bool) {
-        let col_w = ui
-            .available_width()
-            .min(ui.max_rect().width())
-            .max(120.0);
+        let col_w = ui.available_width().min(ui.max_rect().width()).max(120.0);
         ui.set_max_width(col_w);
         ui.set_width(col_w);
 
@@ -1614,17 +1594,11 @@ impl ReviewPanel {
     }
 
     fn batch_ops_ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, dark: bool) {
-        let section_w = ui
-            .available_width()
-            .min(ui.max_rect().width())
-            .max(100.0);
+        let section_w = ui.available_width().min(ui.max_rect().width()).max(100.0);
         ui.set_max_width(section_w);
         ui.set_width(section_w);
         widgets::grouped_section(ui, "批量操作", |ui| {
-            let inner_w = ui
-                .available_width()
-                .min(ui.max_rect().width())
-                .max(80.0);
+            let inner_w = ui.available_width().min(ui.max_rect().width()).max(80.0);
             ui.set_max_width(inner_w);
             ui.set_width(inner_w);
             ui.label(
@@ -1673,17 +1647,20 @@ impl ReviewPanel {
             let gap = 6.0;
             let cell = widgets::equal_cell_width(inner_w, gap, 2);
             widgets::equal_height_row(ui, gap, |ui| {
-                if widgets::full_width_secondary_button_in(ui, "更新状态", true, cell).clicked() {
+                if widgets::full_width_secondary_button_in(ui, "更新状态", true, cell).clicked()
+                {
                     self.dialog = Some(DialogState::ConfirmBatchOp(BatchOpKind::SetStatus(
                         self.batch_target_status,
                     )));
                 }
-                if widgets::full_width_secondary_button_in(ui, "清空标注", true, cell).clicked() {
+                if widgets::full_width_secondary_button_in(ui, "清空标注", true, cell).clicked()
+                {
                     self.dialog = Some(DialogState::ConfirmBatchOp(BatchOpKind::ClearAnnotations));
                 }
             });
             ui.add_space(gap);
-            if widgets::full_width_secondary_button(ui, "复制当前标注到所选", true).clicked() {
+            if widgets::full_width_secondary_button(ui, "复制当前标注到所选", true).clicked()
+            {
                 self.dialog = Some(DialogState::ConfirmBatchOp(
                     BatchOpKind::CopyCurrentAnnotations,
                 ));
@@ -1732,9 +1709,8 @@ impl ReviewPanel {
                 .size(12.0)
                 .color(theme::secondary_label(dark)),
             );
-            let jira_enabled = !self.sidebar.selected_ids.is_empty()
-                && jira_ready
-                && !self.jira_job.is_running();
+            let jira_enabled =
+                !self.sidebar.selected_ids.is_empty() && jira_ready && !self.jira_job.is_running();
             ui.add_space(6.0);
             if widgets::full_width_secondary_button(ui, "提交 JIRA", jira_enabled).clicked() {
                 self.dialog = Some(DialogState::ConfirmJiraSubmit {
@@ -1760,7 +1736,8 @@ impl ReviewPanel {
 
             if !self.last_batch_annotation_ids.is_empty() {
                 ui.add_space(gap);
-                if widgets::full_width_secondary_button(ui, "撤销上次批量标注", true).clicked() {
+                if widgets::full_width_secondary_button(ui, "撤销上次批量标注", true).clicked()
+                {
                     match self
                         .service
                         .undo_batch_annotations(&self.last_batch_annotation_ids)
@@ -1807,7 +1784,10 @@ impl ReviewPanel {
                 }
             });
             ui.add_space(6.0);
-            ui.checkbox(&mut self.screenshot_include_annotations, "包含标注（仅批次导出）");
+            ui.checkbox(
+                &mut self.screenshot_include_annotations,
+                "包含标注（仅批次导出）",
+            );
             widgets::equal_height_row(ui, gap, |ui| {
                 ui.add_sized(
                     egui::vec2(36.0, widgets::TOOLBAR_ROW_HEIGHT),
@@ -1851,7 +1831,10 @@ impl ReviewPanel {
                 &mut self.screenshot_write_contact_sheet,
                 "生成索引图（自动分页）",
             );
-            ui.checkbox(&mut self.screenshot_folder_recursive, "文件夹导出包含子目录");
+            ui.checkbox(
+                &mut self.screenshot_folder_recursive,
+                "文件夹导出包含子目录",
+            );
             ui.label(
                 RichText::new("默认生成 CSV；失败项不中断整批；文件夹导出不写评审库")
                     .weak()
@@ -2275,119 +2258,111 @@ impl ReviewPanel {
         let screenshot_format = self.screenshot_format;
         let total = items.len();
         self.set_status("正在提交 JIRA…");
-        self.jira_job
-            .spawn_with_context(ctx, total, move |job| {
-                use crate::ui::progress::ProgressReporter;
-                let progress = job.progress;
-                let options = crate::jira::JiraBatchOptions {
-                    force_recreate,
-                    attach,
+        self.jira_job.spawn_with_context(ctx, total, move |job| {
+            use crate::ui::progress::ProgressReporter;
+            let progress = job.progress;
+            let options = crate::jira::JiraBatchOptions {
+                force_recreate,
+                attach,
+            };
+            let mut temp_dir: Option<PathBuf> = None;
+            let attachments = if attach && jira_cfg.attach_screenshots {
+                let out_dir = std::env::temp_dir().join(format!(
+                    "imgforge-jira-{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0)
+                ));
+                std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+                temp_dir = Some(out_dir.clone());
+                progress.set_total(items.len());
+                progress.set_current_label(&format!("导出截图 0/{}", items.len()));
+                let request = BatchImageScreenshotRequest {
+                    items: items.iter().map(|i| (i.id, i.file_path.clone())).collect(),
+                    output_dir: out_dir,
+                    include_annotations,
+                    format: screenshot_format,
+                    quality: 85,
+                    naming_template: "{index}_{filename}.{ext}".into(),
+                    write_csv_manifest: false,
+                    write_json_manifest: false,
+                    write_contact_sheet: false,
+                    crop: None,
                 };
-                let mut temp_dir: Option<PathBuf> = None;
-                let attachments = if attach && jira_cfg.attach_screenshots {
-                    let out_dir = std::env::temp_dir().join(format!(
-                        "imgforge-jira-{}",
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_millis())
-                            .unwrap_or(0)
-                    ));
-                    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
-                    temp_dir = Some(out_dir.clone());
-                    progress.set_total(items.len());
-                    progress.set_current_label(&format!("导出截图 0/{}", items.len()));
-                    let request = BatchImageScreenshotRequest {
-                        items: items
-                            .iter()
-                            .map(|i| (i.id, i.file_path.clone()))
-                            .collect(),
-                        output_dir: out_dir,
-                        include_annotations,
-                        format: screenshot_format,
-                        quality: 85,
-                        naming_template: "{index}_{filename}.{ext}".into(),
-                        write_csv_manifest: false,
-                        write_json_manifest: false,
-                        write_contact_sheet: false,
-                        crop: None,
-                    };
-                    let repo = SqliteReviewRepository::open().map_err(|e| e.to_string())?;
-                    let shot =
-                        BatchImageScreenshotService::export(&repo, &request, Some(&*progress))
-                            .map_err(|e| e.to_string())?;
-                    shot.manifest_entries
-                        .into_iter()
-                        .filter(|e| e.success)
-                        .map(|e| (e.image_id, PathBuf::from(e.output_path)))
-                        .collect::<Vec<_>>()
-                } else {
-                    Vec::new()
-                };
-
-                if job.cancel.load(std::sync::atomic::Ordering::Relaxed) {
-                    if let Some(dir) = temp_dir {
-                        let _ = std::fs::remove_dir_all(dir);
-                    }
-                    let items: Vec<_> = items
-                        .iter()
-                        .map(|i| crate::jira::JiraSubmitItemResult {
-                            source: crate::jira::JiraSubmitSource::ReviewImage,
-                            local_id: i.id,
-                            skipped: true,
-                            skip_reason: Some("用户取消".into()),
-                            issue_key: None,
-                            browse_url: None,
-                            attachment_warning: None,
-                            persist_warning: None,
-                            error: None,
-                        })
-                        .collect();
-                    return Ok(crate::jira::JiraBatchSubmitResult { items });
-                }
-
-                progress.set_total(total);
-                progress.set_current_label(&format!("创建 Issue 0/{total}"));
-                let service = crate::jira::JiraIssueService::try_new(&jira_cfg)
-                    .map_err(|e| e.to_string())?;
-                let mut result = service
-                    .batch_create_from_review_items(
-                        &items,
-                        &attachments,
-                        &annotation_summaries,
-                        &options,
-                        Some(&|done, tot, label| {
-                            progress
-                                .completed
-                                .store(done, std::sync::atomic::Ordering::Relaxed);
-                            progress
-                                .total
-                                .store(tot, std::sync::atomic::Ordering::Relaxed);
-                            progress.set_current_label(label);
-                        }),
-                        Some(job.cancel.as_ref()),
-                    )
-                    .map_err(|e| e.to_string())?;
-
                 let repo = SqliteReviewRepository::open().map_err(|e| e.to_string())?;
-                for item in &mut result.items {
-                    if let Some(key) = &item.issue_key {
-                        if !item.skipped && item.error.is_none() {
-                            if let Err(e) = repo.update_image_jira(
-                                item.local_id,
-                                key,
-                                item.browse_url.as_deref(),
-                            ) {
-                                item.persist_warning =
-                                    Some(format!("已建单但本地未关联：{e}"));
-                            }
-                        }
-                    }
-                }
+                let shot = BatchImageScreenshotService::export(&repo, &request, Some(&*progress))
+                    .map_err(|e| e.to_string())?;
+                shot.manifest_entries
+                    .into_iter()
+                    .filter(|e| e.success)
+                    .map(|e| (e.image_id, PathBuf::from(e.output_path)))
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+
+            if job.cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 if let Some(dir) = temp_dir {
                     let _ = std::fs::remove_dir_all(dir);
                 }
-                Ok(result)
-            });
+                let items: Vec<_> = items
+                    .iter()
+                    .map(|i| crate::jira::JiraSubmitItemResult {
+                        source: crate::jira::JiraSubmitSource::ReviewImage,
+                        local_id: i.id,
+                        skipped: true,
+                        skip_reason: Some("用户取消".into()),
+                        issue_key: None,
+                        browse_url: None,
+                        attachment_warning: None,
+                        persist_warning: None,
+                        error: None,
+                    })
+                    .collect();
+                return Ok(crate::jira::JiraBatchSubmitResult { items });
+            }
+
+            progress.set_total(total);
+            progress.set_current_label(&format!("创建 Issue 0/{total}"));
+            let service =
+                crate::jira::JiraIssueService::try_new(&jira_cfg).map_err(|e| e.to_string())?;
+            let mut result = service
+                .batch_create_from_review_items(
+                    &items,
+                    &attachments,
+                    &annotation_summaries,
+                    &options,
+                    Some(&|done, tot, label| {
+                        progress
+                            .completed
+                            .store(done, std::sync::atomic::Ordering::Relaxed);
+                        progress
+                            .total
+                            .store(tot, std::sync::atomic::Ordering::Relaxed);
+                        progress.set_current_label(label);
+                    }),
+                    Some(job.cancel.as_ref()),
+                )
+                .map_err(|e| e.to_string())?;
+
+            let repo = SqliteReviewRepository::open().map_err(|e| e.to_string())?;
+            for item in &mut result.items {
+                if let Some(key) = &item.issue_key {
+                    if !item.skipped && item.error.is_none() {
+                        if let Err(e) =
+                            repo.update_image_jira(item.local_id, key, item.browse_url.as_deref())
+                        {
+                            item.persist_warning = Some(format!("已建单但本地未关联：{e}"));
+                        }
+                    }
+                }
+            }
+            if let Some(dir) = temp_dir {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+            Ok(result)
+        });
     }
 
     fn poll_jira_job(&mut self, ctx: &egui::Context) {
@@ -2420,7 +2395,10 @@ impl ReviewPanel {
                             if let Some(w) = &i.persist_warning {
                                 warn.push_str(&format!("（{w}）"));
                             }
-                            (format!("#{} → {key}{warn}", i.local_id), i.browse_url.clone())
+                            (
+                                format!("#{} → {key}{warn}", i.local_id),
+                                i.browse_url.clone(),
+                            )
                         } else {
                             (format!("#{} 未知结果", i.local_id), None)
                         };
@@ -3636,9 +3614,7 @@ impl ReviewPanel {
                     .cloned()
                     .or(cache_thumb);
                 let path = if crate::review::service::is_non_filesystem_path(&item.file_path) {
-                    thumb
-                        .clone()
-                        .unwrap_or_else(|| item.file_path.clone())
+                    thumb.clone().unwrap_or_else(|| item.file_path.clone())
                 } else {
                     item.file_path.clone()
                 };

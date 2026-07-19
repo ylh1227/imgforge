@@ -4,7 +4,9 @@
 
 use std::sync::OnceLock;
 
-use eframe::egui::{self, epaint::Shadow, style::ScrollStyle, Color32, CornerRadius, FontId, Stroke, Visuals};
+use eframe::egui::{
+    self, epaint::Shadow, style::ScrollStyle, Color32, CornerRadius, FontId, Stroke, Visuals,
+};
 
 use crate::gui::macos::{self, AccessibilityPrefs};
 

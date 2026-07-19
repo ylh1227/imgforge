@@ -240,7 +240,6 @@ pub fn filter_sort_ui(ui: &mut Ui, sidebar: &mut SidebarState) -> bool {
     changed
 }
 
-
 /// 高级组合筛选：标注数量 / 分辨率 / 文件大小 / 标签。
 fn filter_advanced_ui(ui: &mut Ui, sidebar: &mut SidebarState) -> bool {
     let mut changed = false;
@@ -440,7 +439,9 @@ fn filter_range_i32(
         if ui
             .add_sized(
                 egui::vec2(field, row_h),
-                egui::DragValue::new(&mut min).range(0..=100_000).suffix(suffix),
+                egui::DragValue::new(&mut min)
+                    .range(0..=100_000)
+                    .suffix(suffix),
             )
             .changed()
         {
@@ -458,7 +459,9 @@ fn filter_range_i32(
         if ui
             .add_sized(
                 egui::vec2(field, row_h),
-                egui::DragValue::new(&mut max).range(0..=100_000).suffix(suffix),
+                egui::DragValue::new(&mut max)
+                    .range(0..=100_000)
+                    .suffix(suffix),
             )
             .changed()
         {

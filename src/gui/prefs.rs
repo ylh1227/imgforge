@@ -221,7 +221,10 @@ pub struct GuiPrefs {
     #[serde(default)]
     pub custom_statuses: Vec<CustomReviewStatus>,
     /// JIRA 非 secret 偏好（token 永不写入）。
-    #[serde(default, skip_serializing_if = "crate::jira::JiraPrefsSnapshot::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::jira::JiraPrefsSnapshot::is_empty"
+    )]
     pub jira: crate::jira::JiraPrefsSnapshot,
     /// 最近亮度匹配偏好。
     #[serde(default, skip_serializing_if = "BrightnessMatchPrefs::is_empty")]

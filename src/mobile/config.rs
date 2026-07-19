@@ -310,8 +310,7 @@ impl MobilePullConfig {
         self.effective_serials_from_lists()
             .into_iter()
             .map(|serial| {
-                let staging_root =
-                    resolve_device_staging_root(&serial, None, &default_staging);
+                let staging_root = resolve_device_staging_root(&serial, None, &default_staging);
                 ResolvedDeviceTarget {
                     serial,
                     source_path: default_src.clone(),

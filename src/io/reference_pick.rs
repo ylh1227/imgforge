@@ -38,7 +38,9 @@ fn paths_same_file(a: &Path, b: &Path) -> bool {
     }
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(ca), Ok(cb)) => ca == cb,
-        _ => a.to_string_lossy().eq_ignore_ascii_case(&b.to_string_lossy()),
+        _ => a
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy()),
     }
 }
 
@@ -95,10 +97,7 @@ fn collect_images(dir: &Path, recursive: bool, out: &mut Vec<PathBuf>) {
         if !path.is_file() {
             continue;
         }
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         if is_reference_image_ext(ext) {
             out.push(path);
         }
@@ -116,10 +115,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!(
-            "imgforge_ref_pick_{nanos}_{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("imgforge_ref_pick_{nanos}_{}", std::process::id()));
         // 再拼一层随机，避免并行同 nanos 冲突
         let dir = dir.join(format!("{:x}", nanos.wrapping_mul(0x9e37_79b9)));
         let _ = fs::remove_dir_all(&dir);

@@ -51,8 +51,10 @@ impl SideMainGeometry {
         let gap = theme::SIDE_MAIN_GAP;
         let right_inset = theme::SIDE_MAIN_RIGHT_INSET;
         let mode = SideMainMode::from_width(avail.x, breakpoint);
-        let side_max_h = (avail.y * theme::SIDE_MAIN_STACK_SIDE_FRAC)
-            .clamp(theme::SIDE_MAIN_STACK_SIDE_MIN_H, theme::SIDE_MAIN_STACK_SIDE_MAX_H);
+        let side_max_h = (avail.y * theme::SIDE_MAIN_STACK_SIDE_FRAC).clamp(
+            theme::SIDE_MAIN_STACK_SIDE_MIN_H,
+            theme::SIDE_MAIN_STACK_SIDE_MAX_H,
+        );
         match mode {
             SideMainMode::SideBySide => {
                 let main_w = (avail.x - left_w - gap - right_inset).max(160.0);
@@ -93,7 +95,8 @@ fn add_toolbar_sized_button(
     // 用 add_sized 即可；勿先 allocate_exact_size 再 scope_builder，
     // 否则 Response 高度与占位不一致，horizontal 会出现阶梯错位。
     let size = egui::vec2(size.x.max(1.0), TOOLBAR_ROW_HEIGHT);
-    ui.add_enabled_ui(enabled, |ui| ui.add_sized(size, btn)).inner
+    ui.add_enabled_ui(enabled, |ui| ui.add_sized(size, btn))
+        .inner
 }
 
 /// 同行固定行高：锁 32px 后再排布，避免先后落盘导致高低不齐。
@@ -179,10 +182,7 @@ pub fn toolbar_left_zone<R>(ui: &mut Ui, width: f32, add_contents: impl FnOnce(&
 pub fn toolbar_field_label(ui: &mut Ui, text: &str, dark: bool) {
     ui.add_space(TOOLBAR_STROKE_INSET);
     ui.add_sized(
-        egui::vec2(
-            toolbar_text_width(ui, text) + 2.0,
-            TOOLBAR_ROW_HEIGHT,
-        ),
+        egui::vec2(toolbar_text_width(ui, text) + 2.0, TOOLBAR_ROW_HEIGHT),
         egui::Label::new(
             RichText::new(text)
                 .size(13.0)
@@ -335,8 +335,7 @@ pub fn section_header(ui: &mut Ui, title: &str) {
     let accent = theme::accent(dark);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        let (bar_rect, _) =
-            ui.allocate_exact_size(egui::vec2(3.0, 12.0), egui::Sense::hover());
+        let (bar_rect, _) = ui.allocate_exact_size(egui::vec2(3.0, 12.0), egui::Sense::hover());
         ui.painter()
             .rect_filled(bar_rect, CornerRadius::same(2), accent);
         ui.label(
@@ -352,10 +351,7 @@ pub fn section_header(ui: &mut Ui, title: &str) {
 pub fn grouped_section_frame<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
     let dark = ui.style().visuals.dark_mode;
     // 锁定在可视 max_rect 内，避免 set_min_width 把父级撑出裁切区
-    let outer_w = ui
-        .available_width()
-        .min(ui.max_rect().width())
-        .max(80.0);
+    let outer_w = ui.available_width().min(ui.max_rect().width()).max(80.0);
     ui.set_max_width(outer_w);
     ui.set_width(outer_w);
 
@@ -365,10 +361,7 @@ pub fn grouped_section_frame<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) 
         .corner_radius(CornerRadius::same(theme::GROUP_RADIUS))
         .inner_margin(Margin::symmetric(12, 12))
         .show(ui, |ui| {
-            let inner_w = ui
-                .available_width()
-                .min(ui.max_rect().width())
-                .max(60.0);
+            let inner_w = ui.available_width().min(ui.max_rect().width()).max(60.0);
             ui.set_max_width(inner_w);
             ui.set_width(inner_w);
             add_contents(ui)
@@ -378,10 +371,7 @@ pub fn grouped_section_frame<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) 
 
 /// 拉满当前行宽的主要按钮（侧栏操作区用）。
 pub fn full_width_primary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Response {
-    let w = ui
-        .available_width()
-        .min(ui.max_rect().width())
-        .max(40.0);
+    let w = ui.available_width().min(ui.max_rect().width()).max(40.0);
     full_width_primary_button_in(ui, label, enabled, w)
 }
 
@@ -407,15 +397,17 @@ pub fn full_width_primary_button_in(
     })
     .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS));
     // 必须固定宽高：min_size 会因文案撑破列宽导致右侧裁切 / 同行错位
-    add_toolbar_sized_button(ui, egui::vec2(width.max(40.0), TOOLBAR_ROW_HEIGHT), enabled, btn)
+    add_toolbar_sized_button(
+        ui,
+        egui::vec2(width.max(40.0), TOOLBAR_ROW_HEIGHT),
+        enabled,
+        btn,
+    )
 }
 
 /// 拉满当前行宽的次要按钮（侧栏操作区用）。
 pub fn full_width_secondary_button(ui: &mut Ui, label: &str, enabled: bool) -> egui::Response {
-    let w = ui
-        .available_width()
-        .min(ui.max_rect().width())
-        .max(40.0);
+    let w = ui.available_width().min(ui.max_rect().width()).max(40.0);
     full_width_secondary_button_in(ui, label, enabled, w)
 }
 
@@ -435,7 +427,12 @@ pub fn full_width_secondary_button_in(
     .fill(theme::control_fill(dark))
     .stroke(theme::control_stroke(dark))
     .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS));
-    add_toolbar_sized_button(ui, egui::vec2(width.max(40.0), TOOLBAR_ROW_HEIGHT), enabled, btn)
+    add_toolbar_sized_button(
+        ui,
+        egui::vec2(width.max(40.0), TOOLBAR_ROW_HEIGHT),
+        enabled,
+        btn,
+    )
 }
 
 /// 空状态：标题 + 一句指引（产品页惯例）。
@@ -660,12 +657,7 @@ fn path_trailing_button_width(total_w: f32) -> f32 {
 }
 
 /// 在精确矩形内绘制操作按钮（不用 Button 控件，避免文案撑破固定宽）。
-fn trailing_action_at(
-    ui: &mut Ui,
-    rect: egui::Rect,
-    label: &str,
-    enabled: bool,
-) -> bool {
+fn trailing_action_at(ui: &mut Ui, rect: egui::Rect, label: &str, enabled: bool) -> bool {
     let dark = ui.style().visuals.dark_mode;
     let id = ui
         .id()
@@ -1029,10 +1021,7 @@ pub fn tab_grid_selector<R>(
 {
     const COLS: usize = 2;
     let gap = 6.0;
-    let avail = ui
-        .available_width()
-        .min(ui.max_rect().width())
-        .max(80.0);
+    let avail = ui.available_width().min(ui.max_rect().width()).max(80.0);
     let cell_w = equal_cell_width(avail, gap, COLS);
 
     ui.set_max_width(avail);
@@ -1177,9 +1166,7 @@ pub fn mode_tab_bar<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[
                     let btn = Button::new(text)
                         .fill(fill)
                         .stroke(stroke)
-                        .corner_radius(CornerRadius::same(
-                            theme::CONTROL_RADIUS.saturating_sub(2),
-                        ))
+                        .corner_radius(CornerRadius::same(theme::CONTROL_RADIUS.saturating_sub(2)))
                         .min_size(egui::vec2(seg_w, seg_h));
 
                     if ui.add_sized(egui::vec2(seg_w, seg_h), btn).clicked() {
@@ -1458,20 +1445,12 @@ fn settings_fixed_label_in(ui: &mut Ui, text: &str, dark: bool, secondary: bool)
     };
     // 左对齐：各行标签左缘齐平（「质量」与「目标格式」同列起点）
     ui.with_layout(Layout::left_to_right(egui::Align::Center), |ui| {
-        ui.label(
-            RichText::new(text)
-                .font(theme::section_font())
-                .color(color),
-        );
+        ui.label(RichText::new(text).font(theme::section_font()).color(color));
     });
 }
 
 /// 主标签 + 拉满右侧（左右外缘与双栏行一致）。
-pub fn settings_span_row(
-    ui: &mut Ui,
-    label: &str,
-    add_contents: impl FnOnce(&mut Ui, f32),
-) {
+pub fn settings_span_row(ui: &mut Ui, label: &str, add_contents: impl FnOnce(&mut Ui, f32)) {
     let dark = ui.style().visuals.dark_mode;
     let m = SettingsPairMetrics::from_ui(ui);
     let h = TOOLBAR_ROW_HEIGHT;

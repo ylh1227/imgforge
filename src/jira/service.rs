@@ -53,12 +53,7 @@ impl JiraBatchSubmitResult {
     pub fn cancelled_count(&self) -> usize {
         self.items
             .iter()
-            .filter(|i| {
-                i.skipped
-                    && i.skip_reason
-                        .as_deref()
-                        .is_some_and(|r| r == CANCEL_REASON)
-            })
+            .filter(|i| i.skipped && i.skip_reason.as_deref().is_some_and(|r| r == CANCEL_REASON))
             .count()
     }
 
@@ -173,7 +168,7 @@ impl JiraIssueService {
                         error: None,
                     });
                     if let Some(cb) = progress {
-                        cb(idx + 1, total, &format!("跳过已关联 · #{}" , item.id));
+                        cb(idx + 1, total, &format!("跳过已关联 · #{}", item.id));
                     }
                     continue;
                 }
@@ -255,11 +250,7 @@ impl JiraIssueService {
                 manifest.as_deref(),
             );
             let attach_path = if options.attach && self.client.config().attach_defect_zip {
-                defect
-                    .package_path
-                    .as_ref()
-                    .filter(|p| p.exists())
-                    .cloned()
+                defect.package_path.as_ref().filter(|p| p.exists()).cloned()
             } else {
                 None
             };
@@ -310,7 +301,15 @@ impl JiraIssueService {
         if concurrency <= 1 {
             return self.run_serial(pending, slots, total, options, progress, cancel);
         }
-        self.run_concurrent(pending, slots, total, options, progress, cancel, concurrency)
+        self.run_concurrent(
+            pending,
+            slots,
+            total,
+            options,
+            progress,
+            cancel,
+            concurrency,
+        )
     }
 
     fn run_serial(
@@ -356,8 +355,7 @@ impl JiraIssueService {
                 }
                 Err(e) if e.is_auth_failure() => {
                     let msg = e.to_string();
-                    slots[work.index] =
-                        Some(failed_item(work.source, work.local_id, msg.clone()));
+                    slots[work.index] = Some(failed_item(work.source, work.local_id, msg.clone()));
                     for rest in iter {
                         slots[rest.index] =
                             Some(failed_item(rest.source, rest.local_id, msg.clone()));
@@ -386,7 +384,9 @@ impl JiraIssueService {
         let queue = Arc::new(Mutex::new(VecDeque::from(pending)));
         let results: Arc<Mutex<Vec<(usize, JiraSubmitItemResult)>>> =
             Arc::new(Mutex::new(Vec::new()));
-        let completed = Arc::new(AtomicUsize::new(slots.iter().filter(|s| s.is_some()).count()));
+        let completed = Arc::new(AtomicUsize::new(
+            slots.iter().filter(|s| s.is_some()).count(),
+        ));
         let auth_abort = Arc::new(AtomicBool::new(false));
         // Workers mirror the caller's cancel flag via this Arc (polled on the main thread).
         let cancel_shared = Arc::new(AtomicBool::new(is_cancelled(cancel)));
@@ -404,8 +404,7 @@ impl JiraIssueService {
             handles.push(thread::spawn(move || {
                 let svc = JiraIssueService { client };
                 loop {
-                    if cancel_shared.load(Ordering::Relaxed) || auth_abort.load(Ordering::Relaxed)
-                    {
+                    if cancel_shared.load(Ordering::Relaxed) || auth_abort.load(Ordering::Relaxed) {
                         break;
                     }
                     let work = {
@@ -414,10 +413,10 @@ impl JiraIssueService {
                     };
                     let Some(work) = work else { break };
                     if cancel_shared.load(Ordering::Relaxed) {
-                        results.lock().unwrap().push((
-                            work.index,
-                            cancelled_item(work.source, work.local_id),
-                        ));
+                        results
+                            .lock()
+                            .unwrap()
+                            .push((work.index, cancelled_item(work.source, work.local_id)));
                         continue;
                     }
                     if auth_abort.load(Ordering::Relaxed) {
@@ -470,7 +469,11 @@ impl JiraIssueService {
             }
             if let Some(cb) = progress {
                 let done = completed.load(Ordering::Relaxed);
-                cb(done.min(total), total, &format!("创建 Issue {done}/{total}"));
+                cb(
+                    done.min(total),
+                    total,
+                    &format!("创建 Issue {done}/{total}"),
+                );
             }
             thread::sleep(std::time::Duration::from_millis(50));
         }
@@ -513,9 +516,7 @@ impl JiraIssueService {
                 match self.client.attach_file(&created.key, &path) {
                     Ok(()) => {}
                     Err(JiraError::AttachmentTooLarge { path, size, limit }) => {
-                        warn = Some(format!(
-                            "附件过大已跳过（{path}，{size}/{limit} bytes）"
-                        ));
+                        warn = Some(format!("附件过大已跳过（{path}，{size}/{limit} bytes）"));
                     }
                     Err(e) => {
                         warn = Some(format!("附件上传失败：{e}"));
@@ -528,9 +529,7 @@ impl JiraIssueService {
 }
 
 fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
-    cancel
-        .map(|c| c.load(Ordering::Relaxed))
-        .unwrap_or(false)
+    cancel.map(|c| c.load(Ordering::Relaxed)).unwrap_or(false)
 }
 
 fn cancelled_item(source: JiraSubmitSource, local_id: i64) -> JiraSubmitItemResult {
@@ -803,4 +802,3 @@ mod tests {
         });
     }
 }
-

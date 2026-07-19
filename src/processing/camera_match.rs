@@ -44,11 +44,7 @@ pub struct CameraMatchModel {
 
 /// 将图像缩放到分析网格（fill），返回交错 RGB float 0..1，长度 `GW*GH*3`。
 pub fn image_to_grid(image: &DynamicImage) -> Vec<f64> {
-    let resized = image.resize_exact(
-        GW as u32,
-        GH as u32,
-        image::imageops::FilterType::Triangle,
-    );
+    let resized = image.resize_exact(GW as u32, GH as u32, image::imageops::FilterType::Triangle);
     let rgba = resized.to_rgba8();
     let mut grid = vec![0.0f64; GW * GH * 3];
     for i in 0..GW * GH {
@@ -133,19 +129,14 @@ pub fn fit_curve(us: &[f64], vs: &[f64], knots: usize) -> Vec<f64> {
     let mut sum = vec![0.0f64; knots];
     let mut cnt = vec![0.0f64; knots];
     for (&u, &v) in us.iter().zip(vs.iter()) {
-        let b = ((u * (knots - 1) as f64).round() as isize)
-            .clamp(0, (knots - 1) as isize) as usize;
+        let b = ((u * (knots - 1) as f64).round() as isize).clamp(0, (knots - 1) as isize) as usize;
         sum[b] += v;
         cnt[b] += 1.0;
     }
     let mut y = vec![0.0f64; knots];
     let mut last = 0.0;
     for b in 0..knots {
-        y[b] = if cnt[b] > 0.0 {
-            sum[b] / cnt[b]
-        } else {
-            last
-        };
+        y[b] = if cnt[b] > 0.0 { sum[b] / cnt[b] } else { last };
         last = y[b];
     }
 
@@ -155,10 +146,7 @@ pub fn fit_curve(us: &[f64], vs: &[f64], knots: usize) -> Vec<f64> {
         let mut v = y[b];
         let mut wt = cnt[b].max(1e-6);
         let mut n = 1usize;
-        while level
-            .last()
-            .is_some_and(|(pv, _, _)| *pv > v)
-        {
+        while level.last().is_some_and(|(pv, _, _)| *pv > v) {
             let (pv, pw, pn) = level.pop().unwrap();
             v = (pv * pw + v * wt) / (pw + wt);
             wt += pw;
@@ -279,7 +267,8 @@ pub fn fit_residual_lut(
                             nb += 1.0;
                             nb_sum += cur[idx(r, g, b + 1)];
                         }
-                        next[ii] = (t_sum[c][ii] + lambda * nb_sum) / (w_sum[ii] + lambda * nb + 1e-9);
+                        next[ii] =
+                            (t_sum[c][ii] + lambda * nb_sum) / (w_sum[ii] + lambda * nb + 1e-9);
                     }
                 }
             }
@@ -296,16 +285,8 @@ pub fn fit_transform(dec_grid: &[f64], cam_grid: &[f64]) -> Option<CameraMatchMo
 
     let mut pairs: Vec<([f64; 3], [f64; 3])> = Vec::new();
     for i in 0..GW * GH {
-        let s = [
-            dec_grid[i * 3],
-            dec_grid[i * 3 + 1],
-            dec_grid[i * 3 + 2],
-        ];
-        let t = [
-            cam_grid[i * 3],
-            cam_grid[i * 3 + 1],
-            cam_grid[i * 3 + 2],
-        ];
+        let s = [dec_grid[i * 3], dec_grid[i * 3 + 1], dec_grid[i * 3 + 2]];
+        let t = [cam_grid[i * 3], cam_grid[i * 3 + 1], cam_grid[i * 3 + 2]];
         if usable_cell(&s, &t) {
             pairs.push((
                 [s2l(s[0]), s2l(s[1]), s2l(s[2])],
@@ -337,16 +318,8 @@ pub fn fit_transform(dec_grid: &[f64], cam_grid: &[f64]) -> Option<CameraMatchMo
     let mut rsamples = Vec::with_capacity(GW * GH);
     let mut rweights = Vec::with_capacity(GW * GH);
     for i in 0..GW * GH {
-        let s = [
-            dec_grid[i * 3],
-            dec_grid[i * 3 + 1],
-            dec_grid[i * 3 + 2],
-        ];
-        let t = [
-            cam_grid[i * 3],
-            cam_grid[i * 3 + 1],
-            cam_grid[i * 3 + 2],
-        ];
+        let s = [dec_grid[i * 3], dec_grid[i * 3 + 1], dec_grid[i * 3 + 2]];
+        let t = [cam_grid[i * 3], cam_grid[i * 3 + 1], cam_grid[i * 3 + 2]];
         let mm = apply_m(&m, &[s2l(s[0]), s2l(s[1]), s2l(s[2])]);
         let a = [
             eval_curve(&curves[0], l2s(mm[0].clamp(0.0, 1.0))).clamp(0.0, 1.0),
@@ -509,11 +482,7 @@ mod tests {
 
     #[test]
     fn fit_matrix_recovers_known() {
-        let true_m = [
-            [0.9, 0.08, 0.02],
-            [0.05, 0.92, 0.03],
-            [0.01, 0.06, 0.93],
-        ];
+        let true_m = [[0.9, 0.08, 0.02], [0.05, 0.92, 0.03], [0.01, 0.06, 0.93]];
         let mut seed = 1u64;
         let mut rand = || {
             seed = seed.wrapping_mul(16807) % 2147483647;
@@ -521,7 +490,11 @@ mod tests {
         };
         let mut pairs = Vec::new();
         for _ in 0..2000 {
-            let s = [rand() * 0.9 + 0.02, rand() * 0.9 + 0.02, rand() * 0.9 + 0.02];
+            let s = [
+                rand() * 0.9 + 0.02,
+                rand() * 0.9 + 0.02,
+                rand() * 0.9 + 0.02,
+            ];
             let t = apply_m(&true_m, &s);
             pairs.push((s, t));
         }
@@ -566,7 +539,10 @@ mod tests {
         for u in [0.1, 0.3, 0.5, 0.7, 0.9] {
             let got = eval_curve(&curve, u);
             let expect = u.powf(0.8);
-            assert!((got - expect).abs() < 0.05, "u={u} got={got} expect={expect}");
+            assert!(
+                (got - expect).abs() < 0.05,
+                "u={u} got={got} expect={expect}"
+            );
         }
     }
 
@@ -575,11 +551,7 @@ mod tests {
         let dec = synthetic_grid();
         let mut cam = vec![0.0f64; dec.len()];
         for i in 0..GW * GH {
-            let lin = [
-                s2l(dec[i * 3]),
-                s2l(dec[i * 3 + 1]),
-                s2l(dec[i * 3 + 2]),
-            ];
+            let lin = [s2l(dec[i * 3]), s2l(dec[i * 3 + 1]), s2l(dec[i * 3 + 2])];
             let mixed = [
                 (1.32 * (0.95 * lin[0] + 0.05 * lin[1])).min(1.0),
                 (1.32 * (0.03 * lin[0] + 0.94 * lin[1] + 0.03 * lin[2])).min(1.0),
@@ -636,8 +608,7 @@ mod tests {
         for i in (0..GW * GH).step_by(7) {
             let s = [dec[i * 3], dec[i * 3 + 1], dec[i * 3 + 2]];
             let t = [cam[i * 3], cam[i * 3 + 1], cam[i * 3 + 2]];
-            if s.iter().any(|&v| v < 0.05 || v > 0.95) || t.iter().any(|&v| v < 0.05 || v > 0.95)
-            {
+            if s.iter().any(|&v| v < 0.05 || v > 0.95) || t.iter().any(|&v| v < 0.05 || v > 0.95) {
                 continue;
             }
             let o = apply_one(s[0], s[1], s[2]);

@@ -79,8 +79,7 @@ pub fn pull(
                 source_path: config.source_path.trim().to_string(),
                 staging_root: config.staging_dir.join(sanitize_serial(serial)),
             });
-        let remote_files =
-            list_remote_media(runner.as_ref(), serial, &target.source_path)?;
+        let remote_files = list_remote_media(runner.as_ref(), serial, &target.source_path)?;
         total_files += remote_files.len();
         device_plans.push((target, remote_files));
     }
@@ -108,25 +107,20 @@ pub fn pull(
     let device_concurrency = device_plans.len().max(1);
 
     // 设备全开并行；台内再用 file_concurrency
-    let device_results = run_parallel_jobs(
-        device_plans,
-        device_concurrency,
-        &cancelled,
-        |plan| {
-            let (target, remote_files) = plan;
-            pull_one_device(
-                runner.as_ref(),
-                &target.serial,
-                remote_files,
-                &target.staging_root,
-                &target.source_path,
-                preserve,
-                file_concurrency,
-                &cancelled_ref,
-                progress.as_ref(),
-            )
-        },
-    )?;
+    let device_results = run_parallel_jobs(device_plans, device_concurrency, &cancelled, |plan| {
+        let (target, remote_files) = plan;
+        pull_one_device(
+            runner.as_ref(),
+            &target.serial,
+            remote_files,
+            &target.staging_root,
+            &target.source_path,
+            preserve,
+            file_concurrency,
+            &cancelled_ref,
+            progress.as_ref(),
+        )
+    })?;
 
     let mut files = Vec::new();
     for mut batch in device_results {
@@ -405,10 +399,7 @@ mod tests {
         assert_eq!(devices.len(), 2);
         assert_eq!(devices[0].serial, "emulator-5554");
         assert_eq!(devices[0].state, "device");
-        assert_eq!(
-            devices[0].model.as_deref(),
-            Some("sdk gphone64 arm64")
-        );
+        assert_eq!(devices[0].model.as_deref(), Some("sdk gphone64 arm64"));
         assert_eq!(devices[1].state, "unauthorized");
     }
 
@@ -442,10 +433,7 @@ mod tests {
                 model: None,
             },
         ];
-        assert_eq!(
-            resolve_target_serials(&all, &[]).unwrap(),
-            vec!["a", "b"]
-        );
+        assert_eq!(resolve_target_serials(&all, &[]).unwrap(), vec!["a", "b"]);
     }
 
     #[test]

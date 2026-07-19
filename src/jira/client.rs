@@ -180,9 +180,7 @@ impl JiraClient {
     pub fn myself(&self) -> JiraResult<JiraMyself> {
         let url = format!("{}/myself", self.api_root());
         let resp = self.send_with_retry(Method::GET, &url, || self.http.get(&url))?;
-        let body: MyselfResponse = resp
-            .json()
-            .map_err(|e| JiraError::Parse(e.to_string()))?;
+        let body: MyselfResponse = resp.json().map_err(|e| JiraError::Parse(e.to_string()))?;
         let display_name = body
             .display_name
             .or(body.name)
@@ -201,9 +199,7 @@ impl JiraClient {
                 .header(CONTENT_TYPE, "application/json")
                 .json(&payload)
         })?;
-        let body: CreateIssueResponse = resp
-            .json()
-            .map_err(|e| JiraError::Parse(e.to_string()))?;
+        let body: CreateIssueResponse = resp.json().map_err(|e| JiraError::Parse(e.to_string()))?;
         Ok(CreatedIssue {
             key: body.key.clone(),
             id: body.id,
@@ -331,7 +327,10 @@ mod tests {
     #[test]
     fn try_new_requires_enabled() {
         let cfg = JiraConfig::default();
-        assert!(matches!(JiraClient::try_new(&cfg), Err(JiraError::Disabled)));
+        assert!(matches!(
+            JiraClient::try_new(&cfg),
+            Err(JiraError::Disabled)
+        ));
     }
 
     #[test]

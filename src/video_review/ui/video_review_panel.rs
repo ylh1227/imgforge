@@ -360,10 +360,8 @@ impl VideoReviewPanel {
                                 .id_salt("video_review_left")
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
-                                    let content_w = ui
-                                        .available_width()
-                                        .min(ui.max_rect().width())
-                                        .max(120.0);
+                                    let content_w =
+                                        ui.available_width().min(ui.max_rect().width()).max(120.0);
                                     ui.set_width(content_w);
                                     self.left_sidebar_ui(ctx, ui);
                                 });
@@ -668,7 +666,8 @@ impl VideoReviewPanel {
                         {
                             self.align_review_open = true;
                         }
-                        if widgets::compact_primary_button(ui, "导出宫格", can_export).clicked() {
+                        if widgets::compact_primary_button(ui, "导出宫格", can_export).clicked()
+                        {
                             self.export_contact_sheet();
                         }
                         if widgets::compact_secondary_button(
@@ -1829,10 +1828,7 @@ impl VideoReviewPanel {
         let Some(result) = self.import_job.poll(ctx) else {
             return;
         };
-        let started = self
-            .import_job_started
-            .take()
-            .unwrap_or_else(Instant::now);
+        let started = self.import_job_started.take().unwrap_or_else(Instant::now);
         let folder = self
             .import_job_folder
             .take()
@@ -2127,7 +2123,8 @@ impl VideoReviewPanel {
                     });
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    if widgets::compact_secondary_button(ui, "仅保留高置信度", true).clicked() {
+                    if widgets::compact_secondary_button(ui, "仅保留高置信度", true).clicked()
+                    {
                         apply_high = true;
                     }
                     if widgets::compact_secondary_button(ui, "撤销对齐", true).clicked() {
@@ -2206,9 +2203,7 @@ impl VideoReviewPanel {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     ui.label("标题");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.defect_title).desired_width(280.0),
-                    );
+                    ui.add(egui::TextEdit::singleline(&mut self.defect_title).desired_width(280.0));
                 });
                 ui.label("描述");
                 ui.add(
@@ -2229,7 +2224,10 @@ impl VideoReviewPanel {
                 ui.checkbox(&mut self.defect_include_grid, "宫格对比图 PNG");
                 ui.checkbox(&mut self.defect_include_clip, "对比拼接片段");
                 ui.checkbox(&mut self.defect_include_frames, "各路单帧 JPG");
-                ui.checkbox(&mut self.defect_include_sources, "打包原片（体积大，默认开启）");
+                ui.checkbox(
+                    &mut self.defect_include_sources,
+                    "打包原片（体积大，默认开启）",
+                );
                 ui.checkbox(&mut self.defect_lossless, "无损画质（关闭则为高质量）");
                 ui.checkbox(&mut self.defect_mark_issue, "写入 Issue 标记");
                 ui.checkbox(&mut self.defect_set_needs_fix, "标记为 NeedsFix");
@@ -2358,11 +2356,7 @@ impl VideoReviewPanel {
             .spawn_with_context(ctx, total.max(1), move |job| {
                 let service = VideoReviewService::open().map_err(|e| e.to_string())?;
                 service
-                    .create_defect(
-                        req,
-                        Some(job.progress.as_ref()),
-                        Some(job.cancel.as_ref()),
-                    )
+                    .create_defect(req, Some(job.progress.as_ref()), Some(job.cancel.as_ref()))
                     .map_err(|e| e.to_string())
             });
         self.status_hint = "正在打包缺陷…".into();
@@ -2426,8 +2420,7 @@ impl VideoReviewPanel {
                     .size(11.0)
                     .weak(),
             );
-            let submit_ok =
-                selected_n > 0 && jira_ready && !self.jira_job.is_running();
+            let submit_ok = selected_n > 0 && jira_ready && !self.jira_job.is_running();
             if widgets::compact_secondary_button(ui, "批量提交 JIRA", submit_ok).clicked() {
                 self.jira_dialog = Some(VideoJiraDialog::Confirm {
                     force_recreate: false,
@@ -2469,11 +2462,7 @@ impl VideoReviewPanel {
                                 }
                             }
                             ui.label(RichText::new(&d.title).strong().size(12.0));
-                            ui.label(
-                                RichText::new(format!("S{}", d.severity))
-                                    .weak()
-                                    .size(11.0),
-                            );
+                            ui.label(RichText::new(format!("S{}", d.severity)).weak().size(11.0));
                             ui.label(RichText::new(format_ms(d.time_ms)).weak().size(11.0));
                             if let Some(key) = &d.jira_issue_key {
                                 if ui
@@ -2521,7 +2510,8 @@ impl VideoReviewPanel {
                                     }
                                 }
                             }
-                            if widgets::compact_secondary_button(ui, "跳转时间", true).clicked() {
+                            if widgets::compact_secondary_button(ui, "跳转时间", true).clicked()
+                            {
                                 self.compare.current_time_ms = d.time_ms;
                                 if !self.compare_mode && self.selected_ids.len() >= 2 {
                                     self.compare_mode = true;
@@ -2628,49 +2618,45 @@ impl VideoReviewPanel {
         jira_cfg.apply_env_overrides();
         let total = selected.len();
         self.status_hint = "正在提交 JIRA…".into();
-        self.jira_job
-            .spawn_with_context(ctx, total, move |job| {
-                let progress = job.progress;
-                let options = crate::jira::JiraBatchOptions {
-                    force_recreate,
-                    attach,
-                };
-                let service = crate::jira::JiraIssueService::try_new(&jira_cfg)
-                    .map_err(|e| e.to_string())?;
-                let mut result = service
-                    .batch_create_from_defects(
-                        &selected,
-                        &options,
-                        Some(&|done, tot, label| {
-                            progress
-                                .completed
-                                .store(done, std::sync::atomic::Ordering::Relaxed);
-                            progress
-                                .total
-                                .store(tot, std::sync::atomic::Ordering::Relaxed);
-                            progress.set_current_label(label);
-                        }),
-                        Some(job.cancel.as_ref()),
-                    )
-                    .map_err(|e| e.to_string())?;
+        self.jira_job.spawn_with_context(ctx, total, move |job| {
+            let progress = job.progress;
+            let options = crate::jira::JiraBatchOptions {
+                force_recreate,
+                attach,
+            };
+            let service =
+                crate::jira::JiraIssueService::try_new(&jira_cfg).map_err(|e| e.to_string())?;
+            let mut result = service
+                .batch_create_from_defects(
+                    &selected,
+                    &options,
+                    Some(&|done, tot, label| {
+                        progress
+                            .completed
+                            .store(done, std::sync::atomic::Ordering::Relaxed);
+                        progress
+                            .total
+                            .store(tot, std::sync::atomic::Ordering::Relaxed);
+                        progress.set_current_label(label);
+                    }),
+                    Some(job.cancel.as_ref()),
+                )
+                .map_err(|e| e.to_string())?;
 
-                let svc = VideoReviewService::open().map_err(|e| e.to_string())?;
-                for item in &mut result.items {
-                    if let Some(key) = &item.issue_key {
-                        if !item.skipped && item.error.is_none() {
-                            if let Err(e) = svc.update_defect_jira(
-                                item.local_id,
-                                key,
-                                item.browse_url.as_deref(),
-                            ) {
-                                item.persist_warning =
-                                    Some(format!("已建单但本地未关联：{e}"));
-                            }
+            let svc = VideoReviewService::open().map_err(|e| e.to_string())?;
+            for item in &mut result.items {
+                if let Some(key) = &item.issue_key {
+                    if !item.skipped && item.error.is_none() {
+                        if let Err(e) =
+                            svc.update_defect_jira(item.local_id, key, item.browse_url.as_deref())
+                        {
+                            item.persist_warning = Some(format!("已建单但本地未关联：{e}"));
                         }
                     }
                 }
-                Ok(result)
-            });
+            }
+            Ok(result)
+        });
     }
 
     fn poll_jira_job(&mut self, ctx: &Context) {
@@ -2703,7 +2689,10 @@ impl VideoReviewPanel {
                             if let Some(w) = &i.persist_warning {
                                 warn.push_str(&format!("（{w}）"));
                             }
-                            (format!("#{} → {key}{warn}", i.local_id), i.browse_url.clone())
+                            (
+                                format!("#{} → {key}{warn}", i.local_id),
+                                i.browse_url.clone(),
+                            )
                         } else {
                             (format!("#{} 未知结果", i.local_id), None)
                         };

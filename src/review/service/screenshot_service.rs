@@ -79,10 +79,7 @@ pub fn format_roi_label(crop: Option<NormRect>) -> String {
 }
 
 /// 按归一化矩形裁切；坐标夹紧到图像边界。
-pub fn apply_norm_crop(
-    rgba: &image::RgbaImage,
-    roi: NormRect,
-) -> ReviewResult<image::RgbaImage> {
+pub fn apply_norm_crop(rgba: &image::RgbaImage, roi: NormRect) -> ReviewResult<image::RgbaImage> {
     let w = rgba.width();
     let h = rgba.height();
     if w == 0 || h == 0 {

@@ -226,10 +226,8 @@ impl DataExtractPanel {
                                 .id_salt("de_left_sidebar")
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
-                                    let content_w = ui
-                                        .available_width()
-                                        .min(ui.max_rect().width())
-                                        .max(120.0);
+                                    let content_w =
+                                        ui.available_width().min(ui.max_rect().width()).max(120.0);
                                     ui.set_width(content_w);
                                     self.left_sidebar_ui(ui);
                                 });
@@ -453,7 +451,8 @@ impl DataExtractPanel {
                 ui.add_space(6.0);
                 let avail = check_availability();
                 let ocr_ok = avail.tesseract_ok;
-                if widgets::full_width_secondary_button(ui, "导入截图 OCR…", ocr_ok).clicked() {
+                if widgets::full_width_secondary_button(ui, "导入截图 OCR…", ocr_ok).clicked()
+                {
                     if let Some(path) = rfd::FileDialog::new()
                         .add_filter("图片", &["png", "jpg", "jpeg", "tiff", "bmp", "webp"])
                         .pick_file()
@@ -671,8 +670,8 @@ impl DataExtractPanel {
 
                         for row in rows {
                             let selected = self.current_batch == Some(row.batch_index);
-                            let status =
-                                RichText::new(row.status.label()).color(status_color(row.status, ui.visuals().dark_mode));
+                            let status = RichText::new(row.status.label())
+                                .color(status_color(row.status, ui.visuals().dark_mode));
                             if ui.selectable_label(selected, status).clicked() {
                                 self.select_summary_row(row);
                             }
@@ -947,7 +946,8 @@ impl DataExtractPanel {
                                 let selected = self.current_batch == Some(*batch_idx)
                                     && self.selected_record == Some(*record_idx);
                                 let st = rec.evaluation_status();
-                                let st_label = RichText::new(st.label()).color(status_color(st, ui.visuals().dark_mode));
+                                let st_label = RichText::new(st.label())
+                                    .color(status_color(st, ui.visuals().dark_mode));
                                 if ui.selectable_label(selected, st_label).clicked() {
                                     self.current_batch = Some(*batch_idx);
                                     self.selected_record = Some(*record_idx);
@@ -1119,7 +1119,10 @@ impl DataExtractPanel {
                     }
                     if !batch.unmapped_fields.is_empty() {
                         ui.add_space(4.0);
-                        ui.label(RichText::new("未映射字段").color(theme::warning_color(ui.visuals().dark_mode)));
+                        ui.label(
+                            RichText::new("未映射字段")
+                                .color(theme::warning_color(ui.visuals().dark_mode)),
+                        );
                         ScrollArea::vertical()
                             .id_salt("unmapped_fields")
                             .max_height(120.0)
@@ -1136,7 +1139,10 @@ impl DataExtractPanel {
                     }
                     if !batch.warnings.is_empty() {
                         ui.add_space(4.0);
-                        ui.label(RichText::new("警告").color(theme::warning_color(ui.visuals().dark_mode)));
+                        ui.label(
+                            RichText::new("警告")
+                                .color(theme::warning_color(ui.visuals().dark_mode)),
+                        );
                         for w in batch.warnings.iter().take(10) {
                             ui.label(format!("• {}", w.message));
                         }
@@ -1146,7 +1152,10 @@ impl DataExtractPanel {
             };
 
             let st = rec.evaluation_status();
-            ui.label(RichText::new(format!("状态：{}", st.label())).color(status_color(st, ui.visuals().dark_mode)));
+            ui.label(
+                RichText::new(format!("状态：{}", st.label()))
+                    .color(status_color(st, ui.visuals().dark_mode)),
+            );
             ui.label(format!("模块：{}", rec.module.label()));
             ui.label(format!("指标键：{}", rec.metric_key));
             ui.label(format!("原始字段：{}", rec.raw_name));
@@ -1201,7 +1210,9 @@ impl DataExtractPanel {
 
             if !rec.warnings.is_empty() {
                 ui.add_space(6.0);
-                ui.label(RichText::new("记录警告").color(theme::warning_color(ui.visuals().dark_mode)));
+                ui.label(
+                    RichText::new("记录警告").color(theme::warning_color(ui.visuals().dark_mode)),
+                );
                 for w in &rec.warnings {
                     ui.label(format!("• {}", w.message));
                 }

@@ -9,12 +9,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+pub use adb::{list_devices, list_ready_devices, AdbDeviceInfo};
 pub use config::{
     parse_serial_list, resolve_device_staging_root, sanitize_serial, AdbBinaryMode, AdbDevicePull,
     MobilePullBackend, MobilePullConfig, ResolvedDeviceTarget, MOBILE_PULL_CONCURRENCY_DEFAULT,
     MOBILE_PULL_CONCURRENCY_MAX, MOBILE_PULL_CONCURRENCY_MIN,
 };
-pub use adb::{list_devices, list_ready_devices, AdbDeviceInfo};
 
 use crate::config::AppConfig;
 use crate::core::error::{AppError, AppResult};

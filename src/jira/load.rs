@@ -159,8 +159,8 @@ pub fn default_toml_candidates() -> Vec<PathBuf> {
 }
 
 fn merge_toml_jira(path: &Path) -> Option<JiraConfig> {
-    let figment = Figment::from(Serialized::defaults(JiraTomlFile::default()))
-        .merge(Toml::file(path));
+    let figment =
+        Figment::from(Serialized::defaults(JiraTomlFile::default())).merge(Toml::file(path));
     figment.extract::<JiraTomlFile>().ok().map(|f| f.jira)
 }
 
@@ -208,13 +208,19 @@ mod tests {
         };
         prefs.apply_to(&mut cfg);
         assert!(cfg.enabled);
-        assert_eq!(cfg.base_url.as_deref(), Some("https://example.atlassian.net"));
+        assert_eq!(
+            cfg.base_url.as_deref(),
+            Some("https://example.atlassian.net")
+        );
         assert_eq!(cfg.project_key.as_deref(), Some("CAM"));
         assert_eq!(cfg.api_version, JiraApiVersion::V2);
         assert!(!cfg.attach_screenshots);
         assert_eq!(cfg.max_concurrent, 3);
         assert_eq!(cfg.labels, vec!["imgforge", "review"]);
-        assert_eq!(cfg.priority_map.get("1").map(String::as_str), Some("Critical"));
+        assert_eq!(
+            cfg.priority_map.get("1").map(String::as_str),
+            Some("Critical")
+        );
     }
 
     #[test]

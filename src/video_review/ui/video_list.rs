@@ -54,10 +54,7 @@ pub fn video_list_toolbar_ui(
     widgets::mode_tab_bar(
         ui,
         &mut state.mode,
-        &[
-            (VideoListMode::List, "列表"),
-            (VideoListMode::Card, "卡片"),
-        ],
+        &[(VideoListMode::List, "列表"), (VideoListMode::Card, "卡片")],
     );
 
     ui.add_space(8.0);
@@ -67,7 +64,8 @@ pub fn video_list_toolbar_ui(
     let field_w = (ui.available_width() - reset_w - gap).max(80.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = gap;
-        if widgets::toolbar_search_edit(ui, &mut state.search_buf, "文件名…", field_w).changed() {
+        if widgets::toolbar_search_edit(ui, &mut state.search_buf, "文件名…", field_w).changed()
+        {
             state.filter.search = state.search_buf.clone();
             action.reload_videos = true;
         }

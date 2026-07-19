@@ -10,9 +10,8 @@ use eframe::egui;
 
 use crate::config::AppConfig;
 use crate::core::types::{
-    BrightnessMatchMetric, BrightnessMatchMode, BrightnessMatchOptions, ImageFormat, MetadataPolicy,
-    Quality,
-    ResizeOptions,
+    BrightnessMatchMetric, BrightnessMatchMode, BrightnessMatchOptions, ImageFormat,
+    MetadataPolicy, Quality, ResizeOptions,
 };
 use crate::gui::app_types::{AppMode, RunState, WorkerMessage};
 use crate::gui::prefs::{self, ConvertPresetSnapshot, TaskHistoryEntry};
@@ -579,10 +578,7 @@ impl ImgforgeApp {
                 self.input_dir = result.staging_dir.display().to_string();
                 let summary = format!(
                     "设备导入完成：共 {} 个文件（图片 {} · 视频 {}）→ {}",
-                    result.file_count,
-                    result.image_count,
-                    result.video_count,
-                    self.input_dir
+                    result.file_count, result.image_count, result.video_count, self.input_dir
                 );
                 self.status = summary.clone();
                 self.push_log(summary);
@@ -666,7 +662,9 @@ impl ImgforgeApp {
         widgets::settings_section_tabs(ui, &mut self.convert_advanced_tab, &labels);
         ui.add_space(8.0);
 
-        let tab = self.convert_advanced_tab.min(labels.len().saturating_sub(1));
+        let tab = self
+            .convert_advanced_tab
+            .min(labels.len().saturating_sub(1));
         let mut i = 0usize;
         #[cfg(feature = "bayer")]
         {
@@ -693,11 +691,9 @@ impl ImgforgeApp {
                     self.persist_brightness_match_prefs();
                 }
                 ui.label(
-                    egui::RichText::new(
-                        "相机匹配（矩阵+曲线+LUT）· Bayer 仅解除外 · 失败回退增益",
-                    )
-                    .size(11.0)
-                    .weak(),
+                    egui::RichText::new("相机匹配（矩阵+曲线+LUT）· Bayer 仅解除外 · 失败回退增益")
+                        .size(11.0)
+                        .weak(),
                 );
                 widgets::settings_row_gap(ui);
 
@@ -742,8 +738,7 @@ impl ImgforgeApp {
                         widgets::settings_labeled_row(ui, "参考图", |ui| {
                             if let Some((_, tex)) = &self.brightness_match_preview {
                                 ui.add(
-                                    egui::Image::new(tex)
-                                        .fit_to_exact_size(egui::vec2(48.0, 48.0)),
+                                    egui::Image::new(tex).fit_to_exact_size(egui::vec2(48.0, 48.0)),
                                 );
                             }
                             if widgets::compact_secondary_button(ui, "选择…", true).clicked() {
@@ -783,10 +778,8 @@ impl ImgforgeApp {
                                 (name, self.brightness_match_path.clone())
                             };
                             let resp = ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(display).size(12.0).weak(),
-                                )
-                                .truncate(),
+                                egui::Label::new(egui::RichText::new(display).size(12.0).weak())
+                                    .truncate(),
                             );
                             if !full.is_empty() {
                                 resp.on_hover_text(full);
@@ -808,10 +801,7 @@ impl ImgforgeApp {
                         let dropped = ui.ctx().input(|i| i.raw.dropped_files.clone());
                         for file in dropped {
                             if let Some(path) = file.path {
-                                let ext = path
-                                    .extension()
-                                    .and_then(|e| e.to_str())
-                                    .unwrap_or("");
+                                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
                                 if path.is_file()
                                     && crate::io::reference_pick::is_reference_image_ext(ext)
                                 {
@@ -1362,8 +1352,8 @@ impl ImgforgeApp {
     }
 
     fn convert_device_import_ui(&mut self, ui: &mut egui::Ui, dark: bool, enabled: bool) {
-        use eframe::egui::{Layout, RichText};
         use crate::mobile::MobilePullBackend;
+        use eframe::egui::{Layout, RichText};
 
         const ROW_GAP: f32 = 8.0;
         const FIELD_GAP: f32 = 6.0;
@@ -1396,31 +1386,17 @@ impl ImgforgeApp {
             };
 
             // 控件列吃满标签后的全部剩余宽度，与上方「文件夹」/下方右栏右缘对齐
-            let control_row = |ui: &mut egui::Ui, label: &str, add: &mut dyn FnMut(&mut egui::Ui)| {
-                if narrow || compact {
-                    if !label.is_empty() {
-                        ui.label(
-                            RichText::new(label)
-                                .font(theme::section_font())
-                                .color(theme::primary_label(dark)),
-                        );
-                        ui.add_space(4.0);
-                    }
-                    let w = ui.available_width().max(80.0);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(w, field_h),
-                        Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.set_width(w);
-                            add(ui);
-                        },
-                    );
-                } else {
-                    ui.horizontal(|ui| {
-                        ui.set_width(ui.available_width());
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        label_cell(ui, label);
-                        ui.add_space(FIELD_GAP);
+            let control_row =
+                |ui: &mut egui::Ui, label: &str, add: &mut dyn FnMut(&mut egui::Ui)| {
+                    if narrow || compact {
+                        if !label.is_empty() {
+                            ui.label(
+                                RichText::new(label)
+                                    .font(theme::section_font())
+                                    .color(theme::primary_label(dark)),
+                            );
+                            ui.add_space(4.0);
+                        }
                         let w = ui.available_width().max(80.0);
                         ui.allocate_ui_with_layout(
                             egui::vec2(w, field_h),
@@ -1430,9 +1406,24 @@ impl ImgforgeApp {
                                 add(ui);
                             },
                         );
-                    });
-                }
-            };
+                    } else {
+                        ui.horizontal(|ui| {
+                            ui.set_width(ui.available_width());
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            label_cell(ui, label);
+                            ui.add_space(FIELD_GAP);
+                            let w = ui.available_width().max(80.0);
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(w, field_h),
+                                Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.set_width(w);
+                                    add(ui);
+                                },
+                            );
+                        });
+                    }
+                };
 
             // 方式：与来源/暂存/设备/并发共用 settings_span_row，左缘对齐
             if compact || narrow {
@@ -1450,10 +1441,7 @@ impl ImgforgeApp {
                 };
                 widgets::toolbar_combo_box(ui, "mobile_backend", label, w, |ui| {
                     for (backend, text) in [
-                        (
-                            MobilePullBackend::Auto,
-                            "自动（挂载优先，否则 ADB）",
-                        ),
+                        (MobilePullBackend::Auto, "自动（挂载优先，否则 ADB）"),
                         (MobilePullBackend::Fs, "本地挂载（U 盘 / SD 卡）"),
                         (MobilePullBackend::Adb, "ADB（移动设备）"),
                     ] {
@@ -1479,10 +1467,7 @@ impl ImgforgeApp {
                     };
                     widgets::toolbar_combo_box(ui, "mobile_backend", label, span_w, |ui| {
                         for (backend, text) in [
-                            (
-                                MobilePullBackend::Auto,
-                                "自动（挂载优先，否则 ADB）",
-                            ),
+                            (MobilePullBackend::Auto, "自动（挂载优先，否则 ADB）"),
                             (MobilePullBackend::Fs, "本地挂载（U 盘 / SD 卡）"),
                             (MobilePullBackend::Adb, "ADB（移动设备）"),
                         ] {
@@ -1583,10 +1568,7 @@ impl ImgforgeApp {
                     );
                     if n > 0 {
                         ui.horizontal(|ui| {
-                            if ui
-                                .add_enabled(enabled, egui::Button::new("全选"))
-                                .clicked()
-                            {
+                            if ui.add_enabled(enabled, egui::Button::new("全选")).clicked() {
                                 for row in &mut self.mobile_adb_devices {
                                     row.selected = true;
                                 }
@@ -1687,8 +1669,8 @@ impl ImgforgeApp {
     }
 
     pub(super) fn refresh_adb_devices(&mut self) {
-        use crate::mobile::{list_ready_devices, MobilePullConfig};
         use super::MobileAdbDeviceRow;
+        use crate::mobile::{list_ready_devices, MobilePullConfig};
 
         let config = MobilePullConfig {
             enabled: true,
@@ -1756,9 +1738,10 @@ impl ImgforgeApp {
             return;
         }
         if self.mobile_staging.trim().is_empty() {
-            let any_without_staging = self.mobile_adb_devices.iter().any(|row| {
-                row.selected && row.staging_path.trim().is_empty()
-            });
+            let any_without_staging = self
+                .mobile_adb_devices
+                .iter()
+                .any(|row| row.selected && row.staging_path.trim().is_empty());
             let manual_serials = parse_serial_list(&self.mobile_adb_serial);
             if any_without_staging || !manual_serials.is_empty() {
                 // 手动 serial 依赖全局暂存；勾选但未填保存路径也依赖全局暂存
@@ -1798,7 +1781,8 @@ impl ImgforgeApp {
                 continue;
             }
             if default_source.is_empty() {
-                self.status = format!("设备 {s} 需要来源路径：请填写上方「来源」或在列表中勾选并填路径");
+                self.status =
+                    format!("设备 {s} 需要来源路径：请填写上方「来源」或在列表中勾选并填路径");
                 self.push_log(self.status.clone());
                 return;
             }
@@ -1814,10 +1798,7 @@ impl ImgforgeApp {
 
         for device in &adb_devices {
             if device.resolved_source(&default_source).is_empty() {
-                self.status = format!(
-                    "设备 {} 的来源路径为空，请填写路径",
-                    device.serial
-                );
+                self.status = format!("设备 {} 的来源路径为空，请填写路径", device.serial);
                 self.push_log(self.status.clone());
                 return;
             }
@@ -1883,13 +1864,7 @@ impl ImgforgeApp {
         let targets_summary: Vec<String> = config
             .adb_devices
             .iter()
-            .map(|d| {
-                format!(
-                    "{}:{}",
-                    d.serial,
-                    d.resolved_source(&config.source_path)
-                )
-            })
+            .map(|d| format!("{}:{}", d.serial, d.resolved_source(&config.source_path)))
             .collect();
         self.push_log(format!(
             "设备导入：{:?} [{}] → 共用暂存 {}",
@@ -1946,8 +1921,8 @@ impl ImgforgeApp {
     }
 
     fn convert_review_queue_ui(&mut self, ui: &mut egui::Ui, dark: bool, enabled: bool) {
-        use eframe::egui::RichText;
         use crate::gui::theme;
+        use eframe::egui::RichText;
 
         widgets::grouped_section(ui, "评审队列", |ui| {
             ui.label(format!(
@@ -1963,9 +1938,7 @@ impl ImgforgeApp {
                                 format!(
                                     "[{}] {}",
                                     s.label(),
-                                    path.file_name()
-                                        .and_then(|n| n.to_str())
-                                        .unwrap_or("")
+                                    path.file_name().and_then(|n| n.to_str()).unwrap_or("")
                                 )
                             })
                             .unwrap_or_else(|| {
@@ -2010,10 +1983,8 @@ impl ImgforgeApp {
                     if let Some(panel) = &mut self.review_panel {
                         panel.schedule_import_from_queue(self.review_queue.clone(), "转换队列");
                         self.mode = AppMode::Review;
-                        self.status = format!(
-                            "已将 {} 张图片发送到评审模块",
-                            self.review_queue.len()
-                        );
+                        self.status =
+                            format!("已将 {} 张图片发送到评审模块", self.review_queue.len());
                     }
                 }
             });
@@ -2021,14 +1992,12 @@ impl ImgforgeApp {
     }
 
     fn convert_settings_ui(&mut self, ui: &mut egui::Ui, dark: bool, enabled: bool) {
-        use eframe::egui::RichText;
         use crate::gui::theme;
+        use eframe::egui::RichText;
 
         widgets::grouped_section(ui, "转换设置", |ui| {
             widgets::settings_span_row(ui, "目标格式", |ui, span_w| {
-                let label = self.formats[self.format_index]
-                    .extension()
-                    .to_uppercase();
+                let label = self.formats[self.format_index].extension().to_uppercase();
                 widgets::toolbar_combo_box(ui, "format", &label, span_w, |ui| {
                     for (idx, format) in self.formats.iter().enumerate() {
                         if ui
@@ -2045,7 +2014,11 @@ impl ImgforgeApp {
             });
 
             widgets::settings_row_gap(ui);
-            widgets::quality_slider_row(ui, &mut self.quality, enabled && !self.use_target_max_bytes);
+            widgets::quality_slider_row(
+                ui,
+                &mut self.quality,
+                enabled && !self.use_target_max_bytes,
+            );
 
             widgets::settings_row_gap(ui);
             // 左：勾选文案；右：体积数值 —— 控件列左右外缘对齐
@@ -2064,12 +2037,9 @@ impl ImgforgeApp {
                 ui.allocate_ui_at_rect(check_rect, |ui| {
                     ui.set_min_size(check_rect.size());
                     ui.set_max_size(check_rect.size());
-                    ui.with_layout(
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            ui.checkbox(&mut self.use_target_max_bytes, "限制单文件 ≤");
-                        },
-                    );
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.checkbox(&mut self.use_target_max_bytes, "限制单文件 ≤");
+                    });
                 });
                 ui.allocate_ui_at_rect(drag_rect, |ui| {
                     ui.set_min_size(drag_rect.size());
@@ -2085,10 +2055,7 @@ impl ImgforgeApp {
                 });
             });
             if self.use_target_max_bytes {
-                widgets::settings_hint(
-                    ui,
-                    "启用后将对 JPEG/WebP 等自动二分搜索质量以控制体积",
-                );
+                widgets::settings_hint(ui, "启用后将对 JPEG/WebP 等自动二分搜索质量以控制体积");
             }
 
             widgets::settings_row_gap(ui);
@@ -2125,8 +2092,8 @@ impl ImgforgeApp {
     }
 
     fn convert_presets_ui(&mut self, ui: &mut egui::Ui, dark: bool, enabled: bool) {
-        use eframe::egui::RichText;
         use crate::gui::theme;
+        use eframe::egui::RichText;
 
         widgets::grouped_section(ui, "预设与历史", |ui| {
             let total_w = ui.available_width().max(120.0);
@@ -2247,10 +2214,7 @@ impl ImgforgeApp {
                         ui.label(
                             RichText::new(format!(
                                 "{} → {} · {}/{} 成功",
-                                entry.input_dir,
-                                entry.output_dir,
-                                entry.successes,
-                                entry.total
+                                entry.input_dir, entry.output_dir, entry.successes, entry.total
                             ))
                             .size(12.0)
                             .color(theme::secondary_label(dark)),
@@ -2274,8 +2238,8 @@ impl ImgforgeApp {
     }
 
     fn convert_preview_ui(&mut self, ui: &mut egui::Ui, dark: bool, enabled: bool) {
-        use eframe::egui::RichText;
         use crate::gui::theme;
+        use eframe::egui::RichText;
 
         widgets::grouped_section(ui, "转换前摘要", |ui| {
             widgets::equal_height_row(ui, 6.0, |ui| {
@@ -2301,14 +2265,8 @@ impl ImgforgeApp {
                         ui.label(
                             RichText::new(format!(
                                 "{} → {}",
-                                s.input
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or("?"),
-                                s.output
-                                    .file_name()
-                                    .and_then(|n| n.to_str())
-                                    .unwrap_or("?")
+                                s.input.file_name().and_then(|n| n.to_str()).unwrap_or("?"),
+                                s.output.file_name().and_then(|n| n.to_str()).unwrap_or("?")
                             ))
                             .size(11.0)
                             .family(egui::FontFamily::Monospace),
@@ -2352,8 +2310,8 @@ impl ImgforgeApp {
     }
 
     fn convert_run_status_ui(&mut self, ui: &mut egui::Ui, dark: bool, running: bool) {
-        use eframe::egui::RichText;
         use crate::gui::theme;
+        use eframe::egui::RichText;
 
         if running {
             let bar_h = ui.spacing().interact_size.y;

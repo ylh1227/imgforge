@@ -25,8 +25,8 @@ pub use export_service::{
     BatchJsonExportRequest, CsvExportRequest, CsvExportResult, ExportService, JsonSidecarRequest,
 };
 pub use image_loader::{
-    cache_key, is_non_filesystem_path, AsyncImageLoader, DecodedImage, DecodeFailure, ImageLoadTier,
-    LoadOutcome,
+    cache_key, is_non_filesystem_path, AsyncImageLoader, DecodeFailure, DecodedImage,
+    ImageLoadTier, LoadOutcome,
 };
 pub use review_service::ReviewService;
 pub use screenshot_service::{

@@ -25,11 +25,7 @@ pub enum JiraError {
     Parse(String),
 
     #[error("附件过大（{size} > {limit} bytes）：{path}")]
-    AttachmentTooLarge {
-        path: String,
-        size: u64,
-        limit: u64,
-    },
+    AttachmentTooLarge { path: String, size: u64, limit: u64 },
 
     #[error("IO 错误：{0}")]
     Io(#[from] std::io::Error),

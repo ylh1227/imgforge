@@ -408,16 +408,16 @@ impl eframe::App for ImgforgeApp {
                         };
                         // 评审页自行分配「顶栏 + 剩余正文」高度；避免外层 ScrollArea
                         // 与三栏定高嵌套导致左右栏底部裁切、内滚动失效。
-                                egui::Frame::new()
-                                    .inner_margin(egui::Margin {
-                                        right: 12,
-                                        bottom: 12,
-                                        left: 8,
-                                        ..egui::Margin::ZERO
-                                    })
-                                    .show(ui, |ui| {
-                                        panel.ui(ctx, ui, &host);
-                                    });
+                        egui::Frame::new()
+                            .inner_margin(egui::Margin {
+                                right: 12,
+                                bottom: 12,
+                                left: 8,
+                                ..egui::Margin::ZERO
+                            })
+                            .show(ui, |ui| {
+                                panel.ui(ctx, ui, &host);
+                            });
                         let output = panel.take_output();
                         if !output.enqueue_approved.is_empty() {
                             self.review_queue = output.enqueue_approved;
@@ -480,7 +480,7 @@ impl eframe::App for ImgforgeApp {
                             self.status = output.status_message;
                         }
                     } else {
-                            ui.vertical_centered(|ui| {
+                        ui.vertical_centered(|ui| {
                             ui.add_space(40.0);
                             widgets::navigation_header(ui, "视频评审");
                             ui.add_space(12.0);

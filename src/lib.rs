@@ -3,11 +3,11 @@
 pub mod config;
 pub mod core;
 pub mod io;
+pub mod jira;
 pub mod job;
 pub mod mobile;
 pub mod process_util;
 pub mod processing;
-pub mod jira;
 pub mod remote;
 pub mod scheduler;
 pub mod ui;

@@ -161,10 +161,7 @@ impl AppConfig {
                                 path.display()
                             )));
                         }
-                        let ext = path
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .unwrap_or("");
+                        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
                         if !crate::io::reference_pick::is_reference_image_ext(ext) {
                             return Err(crate::core::error::AppError::Config(format!(
                                 "亮度匹配参考图格式不支持（仅 jpg/jpeg/png/webp）：{}",

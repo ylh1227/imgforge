@@ -288,15 +288,8 @@ fn compute_grid_gains_rgba(
                 options.metric,
                 options.percentile,
             );
-            let src_stat = region_luma_stat(
-                source,
-                x0,
-                y0,
-                x1,
-                y1,
-                options.metric,
-                options.percentile,
-            );
+            let src_stat =
+                region_luma_stat(source, x0, y0, x1, y1, options.metric, options.percentile);
             gains.push(gain_from_stats(ref_stat, src_stat));
         }
     }
@@ -412,7 +405,12 @@ pub fn apply_brightness_match_gain_fallback(
         let ref_a = to_analysis_rgba(reference, aw, ah);
         let src_a = to_analysis_rgba(image, aw, ah);
         let gains = compute_grid_gains_rgba(&ref_a, &src_a, options);
-        apply_grid_gains(image, &gains, options.grid_cols.max(1), options.grid_rows.max(1));
+        apply_grid_gains(
+            image,
+            &gains,
+            options.grid_cols.max(1),
+            options.grid_rows.max(1),
+        );
         return;
     }
 
@@ -421,11 +419,7 @@ pub fn apply_brightness_match_gain_fallback(
     apply_global_gain(image, gain_from_stats(ref_stat, src_stat));
 }
 
-fn luma_stat_analysis(
-    image: &DynamicImage,
-    metric: BrightnessMatchMetric,
-    percentile: f32,
-) -> f32 {
+fn luma_stat_analysis(image: &DynamicImage, metric: BrightnessMatchMetric, percentile: f32) -> f32 {
     let small = downscale_max_edge(image, ANALYSIS_MAX_EDGE);
     let rgba = small.to_rgba8();
     region_luma_stat(&rgba, 0, 0, rgba.width(), rgba.height(), metric, percentile)
@@ -553,7 +547,9 @@ mod tests {
             reference_path: Some(global.clone()),
             ..Default::default()
         };
-        let cache = BrightnessMatchCache::try_from_options(&options).unwrap().unwrap();
+        let cache = BrightnessMatchCache::try_from_options(&options)
+            .unwrap()
+            .unwrap();
         let resolved = cache.resolve_reference(&raw, &options).unwrap().unwrap();
         // 应使用同名 JPG（亮），而非全局参考（暗）
         let p = resolved.to_rgba8().get_pixel(0, 0).0;

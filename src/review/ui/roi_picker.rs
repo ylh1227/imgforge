@@ -30,7 +30,9 @@ pub enum FolderRoiDialogAction {
     None,
     Cancel,
     /// 用户确认；`None` = 整图。
-    Confirm { crop: Option<NormRect> },
+    Confirm {
+        crop: Option<NormRect>,
+    },
 }
 
 impl FolderRoiDialogState {
@@ -165,7 +167,8 @@ impl FolderRoiDialogState {
                         action = FolderRoiDialogAction::Cancel;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::primary_button(ui, "开始导出…", !self.paths.is_empty()).clicked()
+                        if widgets::primary_button(ui, "开始导出…", !self.paths.is_empty())
+                            .clicked()
                         {
                             action = FolderRoiDialogAction::Confirm {
                                 crop: self.crop.filter(is_meaningful_roi),

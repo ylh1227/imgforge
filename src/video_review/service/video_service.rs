@@ -145,12 +145,7 @@ impl VideoReviewService {
         folder: &Path,
         batch_name: Option<&str>,
     ) -> VideoReviewResult<ImportFolderResult> {
-        self.import_folder_with_options(
-            folder,
-            batch_name,
-            ImportFolderOptions::fast(),
-            None,
-        )
+        self.import_folder_with_options(folder, batch_name, ImportFolderOptions::fast(), None)
     }
 
     pub fn import_folder_with_options(
@@ -444,7 +439,10 @@ impl VideoReviewService {
         )
     }
 
-    pub fn list_defects(&self, batch_id: i64) -> VideoReviewResult<Vec<crate::video_review::domain::VideoDefect>> {
+    pub fn list_defects(
+        &self,
+        batch_id: i64,
+    ) -> VideoReviewResult<Vec<crate::video_review::domain::VideoDefect>> {
         self.repo.list_defects(batch_id)
     }
 
