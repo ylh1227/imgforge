@@ -8,7 +8,7 @@ use crate::review::domain::image_item::ReviewStatus;
 use crate::review::error::ReviewResult;
 
 /// 当前评审 schema 版本。
-pub const REVIEW_SCHEMA_VERSION: i32 = 3;
+pub const REVIEW_SCHEMA_VERSION: i32 = 4;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS review_batch (
@@ -115,8 +115,19 @@ pub fn ensure_schema(conn: &Connection) -> ReviewResult<()> {
         version = 3;
     }
 
+    if version < 4 {
+        migrate_v3_to_v4(conn)?;
+        version = 4;
+    }
+
     let _ = version;
     conn.pragma_update(None, "user_version", REVIEW_SCHEMA_VERSION)?;
+    Ok(())
+}
+
+fn migrate_v3_to_v4(conn: &Connection) -> ReviewResult<()> {
+    add_column_if_missing(conn, "review_image_item", "jira_issue_key", "TEXT")?;
+    add_column_if_missing(conn, "review_image_item", "jira_url", "TEXT")?;
     Ok(())
 }
 
@@ -386,6 +397,7 @@ mod tests {
             .unwrap();
         assert_eq!(version, REVIEW_SCHEMA_VERSION);
         assert!(column_exists(&conn, "review_image_item", "annotation_count").unwrap());
+        assert!(column_exists(&conn, "review_image_item", "jira_issue_key").unwrap());
         assert!(table_exists(&conn, "review_tag").unwrap());
         assert!(table_exists(&conn, "review_image_tag").unwrap());
     }

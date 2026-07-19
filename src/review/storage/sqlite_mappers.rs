@@ -88,6 +88,8 @@ pub(crate) fn map_image_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewI
         height: row.get::<_, Option<i32>>(11)?.map(|v| v.max(0) as u32),
         convert_params,
         annotation_count: row.get::<_, Option<i32>>(15)?.unwrap_or(0),
+        jira_issue_key: row.get::<_, Option<String>>(16)?,
+        jira_url: row.get::<_, Option<String>>(17)?,
     })
 }
 

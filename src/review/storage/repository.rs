@@ -53,6 +53,12 @@ pub trait ReviewRepository {
     ) -> Result<Vec<ReviewImageItem>, ReviewError>;
     fn update_image_status(&self, item_id: i64, status: ReviewStatus) -> Result<(), ReviewError>;
     fn update_image_remark(&self, item_id: i64, remark: &str) -> Result<(), ReviewError>;
+    fn update_image_jira(
+        &self,
+        item_id: i64,
+        issue_key: &str,
+        browse_url: Option<&str>,
+    ) -> Result<(), ReviewError>;
 
     // ── 标注 ──────────────────────────────────────────────
 

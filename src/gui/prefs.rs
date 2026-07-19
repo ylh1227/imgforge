@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::types::{ImageFormat, Quality, ResizeOptions};
+use crate::core::types::{BrightnessMatchMode, ImageFormat, Quality, ResizeOptions};
 
 const MAX_HISTORY: usize = 12;
 const MAX_ACTION_HISTORY: usize = 20;
@@ -44,6 +44,26 @@ pub struct ConvertPresetSnapshot {
     pub rename_template: String,
     pub target_max_bytes: Option<u64>,
     pub use_target_max_bytes: bool,
+    #[serde(default)]
+    pub brightness_match_enabled: bool,
+    #[serde(default)]
+    pub brightness_match_mode: BrightnessMatchMode,
+    #[serde(default)]
+    pub brightness_match_path: String,
+    #[serde(default = "default_bm_metric_percentile")]
+    pub brightness_match_metric_percentile: bool,
+    #[serde(default = "default_bm_percentile")]
+    pub brightness_match_percentile: f32,
+    #[serde(default)]
+    pub brightness_match_regional: bool,
+}
+
+fn default_bm_metric_percentile() -> bool {
+    true
+}
+
+fn default_bm_percentile() -> f32 {
+    98.0
 }
 
 impl Default for ConvertPresetSnapshot {
@@ -64,7 +84,54 @@ impl Default for ConvertPresetSnapshot {
             rename_template: String::new(),
             target_max_bytes: None,
             use_target_max_bytes: false,
+            brightness_match_enabled: false,
+            brightness_match_mode: BrightnessMatchMode::Paired,
+            brightness_match_path: String::new(),
+            brightness_match_metric_percentile: default_bm_metric_percentile(),
+            brightness_match_percentile: default_bm_percentile(),
+            brightness_match_regional: false,
         }
+    }
+}
+
+/// 最近一次亮度匹配偏好（应用启动恢复）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrightnessMatchPrefs {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub mode: BrightnessMatchMode,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default = "default_bm_metric_percentile")]
+    pub metric_percentile: bool,
+    #[serde(default = "default_bm_percentile")]
+    pub percentile: f32,
+    #[serde(default)]
+    pub regional: bool,
+}
+
+impl Default for BrightnessMatchPrefs {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: BrightnessMatchMode::Paired,
+            path: String::new(),
+            metric_percentile: default_bm_metric_percentile(),
+            percentile: default_bm_percentile(),
+            regional: false,
+        }
+    }
+}
+
+impl BrightnessMatchPrefs {
+    pub fn is_empty(&self) -> bool {
+        !self.enabled
+            && self.mode == BrightnessMatchMode::Paired
+            && self.path.is_empty()
+            && self.metric_percentile
+            && (self.percentile - 98.0).abs() < f32::EPSILON
+            && !self.regional
     }
 }
 
@@ -153,6 +220,12 @@ pub struct GuiPrefs {
     pub review_comments: Vec<ReviewComment>,
     #[serde(default)]
     pub custom_statuses: Vec<CustomReviewStatus>,
+    /// JIRA 非 secret 偏好（token 永不写入）。
+    #[serde(default, skip_serializing_if = "crate::jira::JiraPrefsSnapshot::is_empty")]
+    pub jira: crate::jira::JiraPrefsSnapshot,
+    /// 最近亮度匹配偏好。
+    #[serde(default, skip_serializing_if = "BrightnessMatchPrefs::is_empty")]
+    pub brightness_match: BrightnessMatchPrefs,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -305,5 +378,29 @@ mod tests {
         }
         assert_eq!(prefs.review_comments.len(), MAX_REVIEW_COMMENTS);
         assert_eq!(prefs.review_comments[0].body, "c204");
+    }
+
+    #[test]
+    fn convert_preset_snapshot_missing_brightness_defaults() {
+        let json = r#"{
+            "format": "webp",
+            "quality": 85,
+            "resize": {"width": null, "height": null, "mode": "fit"},
+            "recursive": true,
+            "preserve_structure": true,
+            "overwrite": false,
+            "strip_metadata": false,
+            "bayer_only": false,
+            "rename_template": "",
+            "target_max_bytes": null,
+            "use_target_max_bytes": false
+        }"#;
+        let snap: ConvertPresetSnapshot = serde_json::from_str(json).unwrap();
+        assert!(!snap.brightness_match_enabled);
+        assert_eq!(snap.brightness_match_mode, BrightnessMatchMode::Paired);
+        assert!(snap.brightness_match_path.is_empty());
+        assert!(snap.brightness_match_metric_percentile);
+        assert!((snap.brightness_match_percentile - 98.0).abs() < f32::EPSILON);
+        assert!(!snap.brightness_match_regional);
     }
 }

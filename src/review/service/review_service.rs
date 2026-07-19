@@ -76,6 +76,15 @@ impl ReviewService {
         self.repo.list_images(batch_id, filter)
     }
 
+    pub fn update_image_jira(
+        &self,
+        item_id: i64,
+        issue_key: &str,
+        browse_url: Option<&str>,
+    ) -> ReviewResult<()> {
+        self.repo.update_image_jira(item_id, issue_key, browse_url)
+    }
+
     pub fn load_annotations(&self, image_id: i64) -> ReviewResult<Vec<Annotation>> {
         self.repo.list_annotations(image_id)
     }

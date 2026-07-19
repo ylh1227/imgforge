@@ -37,6 +37,11 @@ impl<'a> BatchService<'a> {
         self.repo.create_batch(name, &paths)
     }
 
+    /// 扫描文件夹中的图片路径（不创建批次）。
+    pub fn scan_folder(folder: &Path, recursive: bool) -> ReviewResult<Vec<PathBuf>> {
+        scan_images(folder, recursive)
+    }
+
     /// 从已有路径列表创建批次（转换队列选中文件）。
     pub fn create_from_paths(&self, name: &str, paths: &[PathBuf]) -> ReviewResult<i64> {
         ensure_cache_dirs()?;
@@ -55,7 +60,8 @@ impl<'a> BatchService<'a> {
     }
 }
 
-fn scan_images(folder: &Path, recursive: bool) -> ReviewResult<Vec<PathBuf>> {
+/// 扫描文件夹中的图片文件（扩展名与导入批次一致）。
+pub fn scan_images(folder: &Path, recursive: bool) -> ReviewResult<Vec<PathBuf>> {
     let mut out = Vec::new();
     if !folder.is_dir() {
         return Err(ReviewError::InvalidPath(folder.to_path_buf()));
@@ -85,5 +91,28 @@ fn push_if_image(path: &Path, extensions: &[&str], out: &mut Vec<PathBuf>) {
         if extensions.contains(&ext.to_ascii_lowercase().as_str()) {
             out.push(path.to_path_buf());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn scan_images_respects_recursive_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("sub");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(dir.path().join("a.png"), b"x").unwrap();
+        fs::write(nested.join("b.jpg"), b"y").unwrap();
+        fs::write(dir.path().join("skip.txt"), b"z").unwrap();
+
+        let flat = scan_images(dir.path(), false).unwrap();
+        assert_eq!(flat.len(), 1);
+        assert!(flat[0].ends_with("a.png"));
+
+        let deep = scan_images(dir.path(), true).unwrap();
+        assert_eq!(deep.len(), 2);
     }
 }

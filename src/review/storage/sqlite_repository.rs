@@ -92,7 +92,7 @@ impl SqliteReviewRepository {
       .query_row(
         "SELECT id, batch_id, file_path, status, remark, thumbnail_path, created_at, updated_at,
                 deleted_at, file_size, width, height, convert_format, convert_quality, convert_width,
-                annotation_count
+                annotation_count, jira_issue_key, jira_url
          FROM review_image_item WHERE id = ?1",
         [id],
         map_image_row,
@@ -151,6 +151,15 @@ impl SqliteReviewRepository {
 
     pub fn update_image_remark(&self, item_id: i64, remark: &str) -> ReviewResult<()> {
         ReviewRepository::update_image_remark(self, item_id, remark)
+    }
+
+    pub fn update_image_jira(
+        &self,
+        item_id: i64,
+        issue_key: &str,
+        browse_url: Option<&str>,
+    ) -> ReviewResult<()> {
+        ReviewRepository::update_image_jira(self, item_id, issue_key, browse_url)
     }
 
     pub fn delete_annotation(&self, annotation_id: i64) -> ReviewResult<()> {
@@ -506,7 +515,7 @@ impl SqliteReviewRepository {
         let mut stmt = self.conn.prepare(
       "SELECT id, batch_id, file_path, status, remark, thumbnail_path, created_at, updated_at,
               deleted_at, file_size, width, height, convert_format, convert_quality, convert_width,
-              annotation_count
+              annotation_count, jira_issue_key, jira_url
        FROM review_image_item WHERE batch_id = ?1 AND deleted_at IS NOT NULL
        ORDER BY deleted_at DESC",
     )?;
@@ -752,7 +761,7 @@ impl ReviewRepository for SqliteReviewRepository {
         let mut sql = String::from(
       "SELECT id, batch_id, file_path, status, remark, thumbnail_path, created_at, updated_at,
               deleted_at, file_size, width, height, convert_format, convert_quality, convert_width,
-              annotation_count
+              annotation_count, jira_issue_key, jira_url
        FROM review_image_item WHERE batch_id = ?1 AND deleted_at IS NULL",
     );
         let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(batch_id)];
@@ -801,6 +810,28 @@ impl ReviewRepository for SqliteReviewRepository {
             "UPDATE review_image_item SET remark = ?1, updated_at = ?2 WHERE id = ?3",
             params![remark, now, item_id],
         )?;
+        Ok(())
+    }
+
+    fn update_image_jira(
+        &self,
+        item_id: i64,
+        issue_key: &str,
+        browse_url: Option<&str>,
+    ) -> Result<(), ReviewError> {
+        let now = now_ts();
+        let n = self.conn.execute(
+            "UPDATE review_image_item
+             SET jira_issue_key = ?1, jira_url = ?2, updated_at = ?3
+             WHERE id = ?4",
+            params![issue_key, browse_url, now, item_id],
+        )?;
+        if n == 0 {
+            return Err(ReviewError::NotFound {
+                entity: "review_image_item",
+                id: item_id,
+            });
+        }
         Ok(())
     }
 

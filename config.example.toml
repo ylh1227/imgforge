@@ -24,6 +24,19 @@ brightness = 0.0
 contrast = 0.0
 sharpen = 0.0
 
+# 亮度匹配：RAW 贴近同名 JPG（Bayer 仅解除外）
+# 主路径：Vitrine 风格相机匹配（ridge 3×3 + PAVA 曲线 + 13³ 残差 LUT）
+# 失败时回退到 luma 增益 / 分区增益
+# [brightness_match]
+# enabled = true
+# mode = "paired"         # paired = 非 RAW 也按同名配对 | global = 非 RAW 用全局参考（RAW 仍对同名 JPG）
+# reference_path = "./reference.jpg"  # 仅 global 需要
+# metric = "percentile"   # mean | percentile（仅增益回退路径）
+# percentile = 98.0
+# regional = false        # true = 3×3 分区（仅增益回退路径）
+# grid_cols = 3
+# grid_rows = 3
+
 # 增量处理（需 --features incremental）
 incremental = false
 
@@ -57,8 +70,22 @@ backend = "adb"                 # auto | fs | adb
 source_path = "/sdcard/DCIM"    # adb: Android 路径；fs: 本地挂载目录
 staging_dir = ".imgforge/mobile-import"
 preserve_structure = true
+concurrency = 4                 # 每台设备内按文件并发拉取（1–8）；多机时设备之间全开并行
 adb_mode = "auto"               # auto | bundled | custom | path
+# 指定设备：单个 serial 仍可用 adb_serial；多台用 adb_serials。
+# 每台可单独指定来源路径与本地保存目录（覆盖上方 source_path / staging_dir）：
+# [[mobile_pull.adb_devices]]
+# serial = "SERIAL_A"
+# source_path = "/sdcard/DCIM"
+# staging_dir = "/path/to/save/phone-a"   # 可选；省略则落到 staging_dir/<serial>/
+# [[mobile_pull.adb_devices]]
+# serial = "SERIAL_B"
+# source_path = "/sdcard/Pictures"
+# # 未写 staging_dir → 保存到共用 staging_dir/SERIAL_B/
+# 只指定一个共用 staging_dir 时，会按每台设备自动创建子文件夹。
+# 留空 serial 列表 = 并行拉取全部已授权设备（均用全局路径）；
 # adb_serial = "DEVICE_SERIAL"
+# adb_serials = ["SERIAL_A", "SERIAL_B"]
 # adb_path = "/path/to/adb"
 allow_path_fallback = true
 delete_after_pull = false       # 第一版不支持删除设备端文件
@@ -77,3 +104,27 @@ offline_cache = true
 # 服务端环境：IMGFORGE_DATABASE_URL、IMGFORGE_REDIS_URL、IMGFORGE_S3_*、IMGFORGE_SERVER_TOKEN
 # 可选：IMGFORGE_DEFAULT_WORKSPACE、IMGFORGE_RATE_LIMIT_PER_MINUTE（默认 120）
 # 客户端：enabled=true 且 base_url 指向服务器；CLI 用 --remote 或 remote submit
+
+# JIRA 批量提 Bug（直连 REST；凭证不写入 TOML）
+# Cloud：IMGFORGE_JIRA_EMAIL + IMGFORGE_JIRA_API_TOKEN（auth_mode = env_basic）
+# Server/DC：IMGFORGE_JIRA_PAT（auth_mode = env_bearer）
+[jira]
+enabled = false
+# base_url = "https://your-domain.atlassian.net"
+# project_key = "CAM"
+issue_type = "Bug"
+api_version = "3"              # 3 = Cloud；2 = Server/DC
+auth_mode = "env_basic"        # env_basic | env_bearer
+timeout_secs = 60
+max_concurrent = 1             # 同时建单数（1–4；1=串行）
+attach_screenshots = true
+attach_defect_zip = true
+# max_attach_bytes = 52428800
+default_priority = "Medium"
+labels = ["imgforge"]
+# [jira.priority_map]
+# "1" = "Highest"
+# "2" = "High"
+# "3" = "Medium"
+# "4" = "Low"
+# "5" = "Lowest"

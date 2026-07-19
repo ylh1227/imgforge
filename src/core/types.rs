@@ -1,6 +1,7 @@
 //! 类型安全 newtype 定义，将参数合法性前置到编译期或构造期。
 
 use std::fmt;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
@@ -269,6 +270,98 @@ pub struct AdjustOptions {
 impl AdjustOptions {
     pub fn is_active(self) -> bool {
         self.brightness != 0.0 || self.contrast != 0.0 || self.sharpen > 0.0
+    }
+}
+
+/// 参考图亮度匹配的统计方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum BrightnessMatchMetric {
+    /// 平均亮度。
+    Mean,
+    /// 亮度百分位（默认，更贴近高光观感）。
+    #[default]
+    Percentile,
+}
+
+/// 亮度匹配参考来源（作用于非 RAW；RAW 始终对同名 JPG）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum BrightnessMatchMode {
+    /// 非 RAW：整批共用一张全局参考图。RAW 仍对同名 JPG。
+    Global,
+    /// 非 RAW：每张配对同目录同名 jpg/jpeg/png/webp。RAW 同样对同名 JPG。
+    #[default]
+    Paired,
+}
+
+/// 按参考 JPG 等比例亮度匹配。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrightnessMatchOptions {
+    #[serde(default)]
+    pub enabled: bool,
+    /// 参考来源：全局一张或按文件配对。
+    #[serde(default)]
+    pub mode: BrightnessMatchMode,
+    #[serde(default)]
+    pub reference_path: Option<PathBuf>,
+    #[serde(default)]
+    pub metric: BrightnessMatchMetric,
+    /// 百分位 0–100；仅 `Percentile` 时生效。
+    #[serde(default = "default_brightness_percentile")]
+    pub percentile: f32,
+    /// 空间分区匹配（默认 3×3）。
+    #[serde(default)]
+    pub regional: bool,
+    #[serde(default = "default_grid_cols")]
+    pub grid_cols: u32,
+    #[serde(default = "default_grid_rows")]
+    pub grid_rows: u32,
+}
+
+fn default_brightness_percentile() -> f32 {
+    98.0
+}
+
+fn default_grid_cols() -> u32 {
+    3
+}
+
+fn default_grid_rows() -> u32 {
+    3
+}
+
+impl Default for BrightnessMatchOptions {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: BrightnessMatchMode::Paired,
+            reference_path: None,
+            metric: BrightnessMatchMetric::Percentile,
+            percentile: default_brightness_percentile(),
+            regional: false,
+            grid_cols: default_grid_cols(),
+            grid_rows: default_grid_rows(),
+        }
+    }
+}
+
+impl BrightnessMatchOptions {
+    pub fn is_active(&self) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        match self.mode {
+            BrightnessMatchMode::Paired => true,
+            BrightnessMatchMode::Global => self
+                .reference_path
+                .as_ref()
+                .is_some_and(|p| !p.as_os_str().is_empty()),
+        }
+    }
+
+    pub fn requires_global_reference(&self) -> bool {
+        self.enabled && self.mode == BrightnessMatchMode::Global
     }
 }
 

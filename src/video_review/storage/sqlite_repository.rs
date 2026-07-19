@@ -581,13 +581,15 @@ impl VideoRepository for SqliteVideoRepository {
             video_ids: video_ids.to_vec(),
             package_path: package_path.map(Path::to_path_buf),
             created_at: DateTime::from_timestamp(created, 0).unwrap_or_else(Utc::now),
+            jira_issue_key: None,
+            jira_url: None,
         })
     }
 
     fn list_defects(&self, batch_id: i64) -> VideoReviewResult<Vec<VideoDefect>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, batch_id, title, description, severity, time_ms, half_window_ms,
-                    video_ids, package_path, created_at
+                    video_ids, package_path, created_at, jira_issue_key, jira_url
              FROM video_review_defect WHERE batch_id = ?1 ORDER BY created_at DESC",
         )?;
         let rows = stmt.query_map([batch_id], |row| {
@@ -606,9 +608,26 @@ impl VideoRepository for SqliteVideoRepository {
                 video_ids,
                 package_path: package_path.map(PathBuf::from),
                 created_at: DateTime::from_timestamp(created, 0).unwrap_or_else(Utc::now),
+                jira_issue_key: row.get(10)?,
+                jira_url: row.get(11)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    fn update_defect_jira(
+        &self,
+        defect_id: i64,
+        issue_key: &str,
+        browse_url: Option<&str>,
+    ) -> VideoReviewResult<()> {
+        self.conn.execute(
+            "UPDATE video_review_defect
+             SET jira_issue_key = ?1, jira_url = ?2
+             WHERE id = ?3",
+            params![issue_key, browse_url, defect_id],
+        )?;
+        Ok(())
     }
 }
 

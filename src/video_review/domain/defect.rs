@@ -17,6 +17,12 @@ pub struct VideoDefect {
     pub video_ids: Vec<i64>,
     pub package_path: Option<PathBuf>,
     pub created_at: DateTime<Utc>,
+    /// 已关联的 JIRA Issue Key。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jira_issue_key: Option<String>,
+    /// JIRA 浏览 URL。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jira_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -8,7 +8,8 @@ use jwalk::WalkDir;
 
 use crate::core::error::{AppError, AppResult};
 use crate::mobile::{
-    ensure_cancelled_not_set, is_supported_media_path, MobilePullConfig, MobilePullOutcome,
+    ensure_cancelled_not_set, is_supported_media_path, run_parallel_jobs, MobilePullConfig,
+    MobilePullOutcome,
 };
 use crate::ui::progress::ProgressReporter;
 
@@ -42,7 +43,14 @@ pub fn pull(
         progress.set_current_label("正在从移动设备复制文件");
     }
 
-    let mut files = Vec::with_capacity(sources.len());
+    struct Job {
+        source: PathBuf,
+        target: PathBuf,
+        need_copy: bool,
+        label: String,
+    }
+
+    let mut jobs = Vec::with_capacity(sources.len());
     for source in sources {
         ensure_cancelled_not_set(&cancelled)?;
         let relative = if config.preserve_structure {
@@ -69,24 +77,36 @@ pub fn pull(
         }) {
             return Err(AppError::PathTraversal(relative));
         }
-        let target = config.staging_dir.join(relative);
+        let target = config.staging_dir.join(&relative);
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
         }
-        if !target.exists() {
-            std::fs::copy(&source, &target).map_err(|e| AppError::io(&target, e))?;
+        let label = source
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("media")
+            .to_string();
+        let need_copy = !target.exists();
+        jobs.push(Job {
+            source,
+            target,
+            need_copy,
+            label,
+        });
+    }
+
+    let concurrency = config.effective_concurrency();
+    let progress = progress.clone();
+    let files = run_parallel_jobs(jobs, concurrency, &cancelled, |job| {
+        if job.need_copy {
+            std::fs::copy(&job.source, &job.target).map_err(|e| AppError::io(&job.target, e))?;
         }
-        files.push(target);
         if let Some(progress) = &progress {
-            progress.set_current_label(
-                source
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("media"),
-            );
+            progress.set_current_label(&job.label);
             progress.inc(None);
         }
-    }
+        Ok(job.target.clone())
+    })?;
 
     Ok(MobilePullOutcome {
         staging_dir: config.staging_dir.clone(),

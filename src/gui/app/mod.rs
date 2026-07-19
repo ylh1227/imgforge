@@ -37,6 +37,17 @@ pub struct ImgforgeApp {
     overwrite: bool,
     strip_metadata: bool,
     bayer_only: bool,
+    brightness_match_enabled: bool,
+    brightness_match_mode: crate::core::types::BrightnessMatchMode,
+    brightness_match_path: String,
+    /// true = percentile, false = mean
+    brightness_match_metric_percentile: bool,
+    brightness_match_percentile: f32,
+    brightness_match_regional: bool,
+    /// 参考图预览纹理（path, texture）。
+    brightness_match_preview: Option<(String, egui::TextureHandle)>,
+    /// 转换设置高级分段 Tab（RAW / 亮度 / 远端 / JIRA）。
+    convert_advanced_tab: usize,
     rename_template: String,
     use_target_max_bytes: bool,
     target_max_kb: u32,
@@ -57,6 +68,9 @@ pub struct ImgforgeApp {
     native_toolbar: Option<native::NativeGlassToolbar>,
     /// 远端配置（默认关闭；可从环境变量叠加）。
     remote_config: crate::remote::RemoteConfig,
+    /// JIRA 批量提 Bug 配置。
+    jira_config: crate::jira::JiraConfig,
+    jira_probe_status: Option<String>,
     /// 是否优先远端执行（默认 false，仍走本地流水线）。
     prefer_remote_execution: bool,
     /// 最近一次远端同步快照。
@@ -67,8 +81,25 @@ pub struct ImgforgeApp {
     mobile_source: String,
     /// 本地暂存目录。
     mobile_staging: String,
-    /// 多设备时的 ADB serial（可空）。
+    /// 多设备时的 ADB serial 手动补充（可空；可逗号分隔）。
     mobile_adb_serial: String,
+    /// 刷新得到的 ADB 设备：信息、勾选、每台独立来源路径。
+    mobile_adb_devices: Vec<MobileAdbDeviceRow>,
+    /// 是否已成功刷新过设备列表（用于区分「未指定」与「全不勾选」）。
+    mobile_adb_devices_loaded: bool,
+    /// 设备拉取并发（1–8）。
+    mobile_pull_concurrency: usize,
+}
+
+/// GUI 中单台 ADB 设备行。
+#[derive(Debug, Clone)]
+struct MobileAdbDeviceRow {
+    info: crate::mobile::AdbDeviceInfo,
+    selected: bool,
+    /// 该设备上的来源路径（可覆盖全局 mobile_source）。
+    source_path: String,
+    /// 该设备本地保存路径；空 = 使用全局暂存/<serial>。
+    staging_path: String,
 }
 
 mod convert;
@@ -89,6 +120,8 @@ impl ImgforgeApp {
         #[cfg(feature = "data-extract")]
         let data_extract_panel = Some(crate::data_extract::ui::DataExtractPanel::new());
         let gui_prefs = GuiPrefs::load();
+        let jira_config = crate::jira::load_jira_config_with_prefs(Some(&gui_prefs.jira));
+        let bm = gui_prefs.brightness_match.clone();
         Self {
             mode: AppMode::Convert,
             review_panel,
@@ -114,6 +147,14 @@ impl ImgforgeApp {
             overwrite: false,
             strip_metadata: false,
             bayer_only: false,
+            brightness_match_enabled: bm.enabled,
+            brightness_match_mode: bm.mode,
+            brightness_match_path: bm.path,
+            brightness_match_metric_percentile: bm.metric_percentile,
+            brightness_match_percentile: bm.percentile.clamp(90.0, 99.0),
+            brightness_match_regional: bm.regional,
+            brightness_match_preview: None,
+            convert_advanced_tab: 0,
             rename_template: String::new(),
             use_target_max_bytes: false,
             target_max_kb: 500,
@@ -137,12 +178,17 @@ impl ImgforgeApp {
                 remote.apply_env_overrides();
                 remote
             },
+            jira_config,
+            jira_probe_status: None,
             prefer_remote_execution: false,
             remote_snapshot: None,
             mobile_backend: crate::mobile::MobilePullBackend::Auto,
             mobile_source: String::from("/sdcard/DCIM"),
             mobile_staging: String::from(".imgforge/mobile-import"),
             mobile_adb_serial: String::new(),
+            mobile_adb_devices: Vec::new(),
+            mobile_adb_devices_loaded: false,
+            mobile_pull_concurrency: crate::mobile::MOBILE_PULL_CONCURRENCY_DEFAULT,
         }
     }
 
@@ -241,8 +287,12 @@ impl eframe::App for ImgforgeApp {
             .show(ctx, |ui| {
                 ui.add_space(theme::macos_titlebar_inset(ctx));
 
-                // 顶栏：与内容列同宽对齐，避免 Tab 贴左飘着
+                // 顶栏左上：品牌；其下 Tab 与内容列同宽左对齐
                 widgets::content_column(ui, content_w, |ui| {
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                        widgets::brand_mark(ui);
+                    });
+                    ui.add_space(6.0);
                     let show_tabs = self.review_panel.is_some()
                         || cfg!(feature = "video-review")
                         || cfg!(feature = "data-extract");
@@ -351,6 +401,7 @@ impl eframe::App for ImgforgeApp {
                 if self.mode == AppMode::Review {
                     if let Some(panel) = &mut self.review_panel {
                         panel.set_remote_config(self.remote_config.clone());
+                        panel.set_jira_config(self.jira_config.clone());
                         let host = AppReviewHost {
                             queue: &self.review_queue,
                             output_dir: &self.output_dir,
@@ -409,6 +460,7 @@ impl eframe::App for ImgforgeApp {
                     #[cfg(feature = "video-review")]
                     if let Some(panel) = &mut self.video_review_panel {
                         panel.set_remote_config(self.remote_config.clone());
+                        panel.set_jira_config(self.jira_config.clone());
                         let min_h = ui.available_height();
                         ScrollArea::vertical()
                             .auto_shrink([false, false])
@@ -492,6 +544,7 @@ impl eframe::App for ImgforgeApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.gui_prefs.jira = crate::jira::JiraPrefsSnapshot::from_config(&self.jira_config);
         let _ = self.gui_prefs.save();
         if let Some(toolbar) = &mut self.native_toolbar {
             toolbar.teardown();

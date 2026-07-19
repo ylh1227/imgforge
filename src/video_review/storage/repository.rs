@@ -92,4 +92,11 @@ pub trait VideoRepository {
         &self,
         batch_id: i64,
     ) -> VideoReviewResult<Vec<crate::video_review::domain::VideoDefect>>;
+
+    fn update_defect_jira(
+        &self,
+        defect_id: i64,
+        issue_key: &str,
+        browse_url: Option<&str>,
+    ) -> VideoReviewResult<()>;
 }

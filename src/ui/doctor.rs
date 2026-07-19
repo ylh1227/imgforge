@@ -13,6 +13,7 @@ pub fn run_doctor() {
     print_backend_status();
     print_runtime_dependencies();
     print_remote_status();
+    print_jira_status();
     println!("───────────────────────────────────────");
 }
 
@@ -156,6 +157,31 @@ fn print_remote_status() {
             "reqwest (blocking JSON)"
         } else {
             "idle (configure base_url to enable)"
+        }
+    );
+}
+
+fn print_jira_status() {
+    let jira = crate::jira::load_jira_config();
+    println!("JIRA:");
+    println!("  status           {}", jira.status_label());
+    println!("  enabled          {}", jira.enabled);
+    println!(
+        "  base_url         {}",
+        jira.base_url.as_deref().unwrap_or("(none)")
+    );
+    println!(
+        "  project_key      {}",
+        jira.project_key.as_deref().unwrap_or("(none)")
+    );
+    println!("  auth_mode        {}", jira.auth_mode.label());
+    println!("  api_version      {}", jira.api_version.label());
+    println!(
+        "  credentials      {}",
+        if jira.has_credentials() {
+            "present"
+        } else {
+            "absent"
         }
     );
 }

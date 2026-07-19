@@ -46,6 +46,24 @@ pub struct VideoReviewPanelOutput {
     pub status_message: String,
 }
 
+#[derive(Debug, Clone)]
+struct VideoJiraResultLine {
+    text: String,
+    browse_url: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+enum VideoJiraDialog {
+    Confirm {
+        force_recreate: bool,
+        attach: bool,
+    },
+    Result {
+        summary: String,
+        lines: Vec<VideoJiraResultLine>,
+    },
+}
+
 pub struct VideoReviewPanel {
     service: VideoReviewService,
     batches: Vec<VideoBatch>,
@@ -115,6 +133,10 @@ pub struct VideoReviewPanel {
     defect_align_method: String,
     defect_require_align: bool,
     defects: Vec<VideoDefect>,
+    selected_defect_ids: Vec<i64>,
+    jira_config: crate::jira::JiraConfig,
+    jira_job: BackgroundJob<crate::jira::JiraBatchSubmitResult>,
+    jira_dialog: Option<VideoJiraDialog>,
     action_history: Vec<ActionHistoryEntry>,
     video_export_column_keys: Vec<String>,
     video_export_columns_initialized: bool,
@@ -163,6 +185,8 @@ impl VideoReviewPanel {
         let service = VideoReviewService::open().map_err(|e| e.to_string())?;
         let mut remote_config = crate::remote::RemoteConfig::default();
         remote_config.apply_env_overrides();
+        let mut jira_config = crate::jira::JiraConfig::default();
+        jira_config.apply_env_overrides();
         let data_source =
             DataSource::from_remote_enabled(crate::remote::remote_enabled(&remote_config));
         let mut panel = Self {
@@ -234,6 +258,10 @@ impl VideoReviewPanel {
             defect_align_method: "manual".into(),
             defect_require_align: false,
             defects: Vec::new(),
+            selected_defect_ids: Vec::new(),
+            jira_config,
+            jira_job: BackgroundJob::default(),
+            jira_dialog: None,
             action_history: GuiPrefs::load().action_history,
             video_export_column_keys: Vec::new(),
             video_export_columns_initialized: false,
@@ -273,6 +301,11 @@ impl VideoReviewPanel {
         }
     }
 
+    pub fn set_jira_config(&mut self, mut jira_config: crate::jira::JiraConfig) {
+        jira_config.apply_env_overrides();
+        self.jira_config = jira_config;
+    }
+
     pub fn take_output(&mut self) -> VideoReviewPanelOutput {
         std::mem::take(&mut self.output)
     }
@@ -297,6 +330,8 @@ impl VideoReviewPanel {
         self.poll_import_job(ctx);
         self.poll_align_job(ctx);
         self.poll_defect_job(ctx);
+        self.poll_jira_job(ctx);
+        self.show_jira_dialogs(ctx);
         self.draw_align_review(ctx);
         self.draw_defect_dialog(ctx);
 
@@ -2382,6 +2417,40 @@ impl VideoReviewPanel {
             );
             return;
         }
+
+        let jira_ready = self.jira_config.is_configured() && self.jira_config.has_credentials();
+        ui.horizontal(|ui| {
+            let selected_n = self.selected_defect_ids.len();
+            ui.label(
+                RichText::new(format!("已选 {selected_n}"))
+                    .size(11.0)
+                    .weak(),
+            );
+            let submit_ok =
+                selected_n > 0 && jira_ready && !self.jira_job.is_running();
+            if widgets::compact_secondary_button(ui, "批量提交 JIRA", submit_ok).clicked() {
+                self.jira_dialog = Some(VideoJiraDialog::Confirm {
+                    force_recreate: false,
+                    attach: self.jira_config.attach_defect_zip,
+                });
+            }
+            if self.jira_job.is_running() {
+                if let Some(progress) = self.jira_job.progress() {
+                    ui.add(
+                        egui::ProgressBar::new(progress.fraction())
+                            .desired_width(80.0)
+                            .show_percentage(),
+                    );
+                }
+                if widgets::compact_secondary_button(ui, "取消", true).clicked() {
+                    self.jira_job.request_cancel();
+                    self.status_hint = "正在取消 JIRA 提交…".into();
+                }
+            } else if !jira_ready {
+                ui.label(RichText::new("JIRA 未配置").size(10.0).weak());
+            }
+        });
+
         egui::ScrollArea::vertical()
             .max_height(160.0)
             .id_salt("video_defect_history")
@@ -2389,6 +2458,16 @@ impl VideoReviewPanel {
                 for d in self.defects.clone() {
                     ui.group(|ui| {
                         ui.horizontal(|ui| {
+                            let mut checked = self.selected_defect_ids.contains(&d.id);
+                            if ui.checkbox(&mut checked, "").changed() {
+                                if checked {
+                                    if !self.selected_defect_ids.contains(&d.id) {
+                                        self.selected_defect_ids.push(d.id);
+                                    }
+                                } else {
+                                    self.selected_defect_ids.retain(|id| *id != d.id);
+                                }
+                            }
                             ui.label(RichText::new(&d.title).strong().size(12.0));
                             ui.label(
                                 RichText::new(format!("S{}", d.severity))
@@ -2396,6 +2475,21 @@ impl VideoReviewPanel {
                                     .size(11.0),
                             );
                             ui.label(RichText::new(format_ms(d.time_ms)).weak().size(11.0));
+                            if let Some(key) = &d.jira_issue_key {
+                                if ui
+                                    .link(RichText::new(key).size(11.0))
+                                    .on_hover_text("打开 JIRA")
+                                    .clicked()
+                                {
+                                    if let Some(url) = d
+                                        .jira_url
+                                        .clone()
+                                        .or_else(|| self.jira_config.issue_browse_url(key))
+                                    {
+                                        let _ = open::that(url);
+                                    }
+                                }
+                            }
                         });
                         ui.label(
                             RichText::new(format!(
@@ -2441,11 +2535,198 @@ impl VideoReviewPanel {
             });
     }
 
+    fn show_jira_dialogs(&mut self, ctx: &Context) {
+        let Some(dialog) = self.jira_dialog.clone() else {
+            return;
+        };
+        match dialog {
+            VideoJiraDialog::Confirm {
+                mut force_recreate,
+                mut attach,
+            } => {
+                let count = self.selected_defect_ids.len();
+                let project = self
+                    .jira_config
+                    .project_key
+                    .clone()
+                    .unwrap_or_else(|| "？".into());
+                egui::Window::new("批量提交 JIRA")
+                    .collapsible(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.label(format!(
+                            "将为已选 {count} 个缺陷包在项目 {project} 各创建 1 个 Bug。"
+                        ));
+                        ui.checkbox(&mut attach, "上传缺陷 zip 附件");
+                        ui.checkbox(&mut force_recreate, "已有关联 Issue 时仍强制新建");
+                        ui.horizontal(|ui| {
+                            if widgets::primary_button(ui, "开始提交", true).clicked() {
+                                self.start_jira_submit(ctx, force_recreate, attach);
+                                self.jira_dialog = None;
+                            }
+                            if widgets::secondary_button(ui, "取消", true).clicked() {
+                                self.jira_dialog = None;
+                            }
+                        });
+                    });
+                if self.jira_dialog.is_some() {
+                    self.jira_dialog = Some(VideoJiraDialog::Confirm {
+                        force_recreate,
+                        attach,
+                    });
+                }
+            }
+            VideoJiraDialog::Result { summary, lines } => {
+                egui::Window::new("JIRA 提交结果")
+                    .collapsible(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .default_width(420.0)
+                    .show(ctx, |ui| {
+                        ui.label(RichText::new(&summary).strong());
+                        ui.add_space(6.0);
+                        ScrollArea::vertical()
+                            .id_salt("video_jira_result")
+                            .max_height(220.0)
+                            .show(ui, |ui| {
+                                for line in &lines {
+                                    if let Some(url) = &line.browse_url {
+                                        if ui
+                                            .link(RichText::new(&line.text).size(12.0))
+                                            .on_hover_text(url)
+                                            .clicked()
+                                        {
+                                            let _ = open::that(url);
+                                        }
+                                    } else {
+                                        ui.label(RichText::new(&line.text).size(12.0));
+                                    }
+                                }
+                            });
+                        if widgets::primary_button(ui, "关闭", true).clicked() {
+                            self.jira_dialog = None;
+                        }
+                    });
+            }
+        }
+    }
+
+    fn start_jira_submit(&mut self, ctx: &Context, force_recreate: bool, attach: bool) {
+        if self.jira_job.is_running() {
+            return;
+        }
+        let selected: Vec<VideoDefect> = self
+            .defects
+            .iter()
+            .filter(|d| self.selected_defect_ids.contains(&d.id))
+            .cloned()
+            .collect();
+        if selected.is_empty() {
+            self.error = Some("请先勾选缺陷包".into());
+            return;
+        }
+        let mut jira_cfg = self.jira_config.clone();
+        jira_cfg.apply_env_overrides();
+        let total = selected.len();
+        self.status_hint = "正在提交 JIRA…".into();
+        self.jira_job
+            .spawn_with_context(ctx, total, move |job| {
+                let progress = job.progress;
+                let options = crate::jira::JiraBatchOptions {
+                    force_recreate,
+                    attach,
+                };
+                let service = crate::jira::JiraIssueService::try_new(&jira_cfg)
+                    .map_err(|e| e.to_string())?;
+                let mut result = service
+                    .batch_create_from_defects(
+                        &selected,
+                        &options,
+                        Some(&|done, tot, label| {
+                            progress
+                                .completed
+                                .store(done, std::sync::atomic::Ordering::Relaxed);
+                            progress
+                                .total
+                                .store(tot, std::sync::atomic::Ordering::Relaxed);
+                            progress.set_current_label(label);
+                        }),
+                        Some(job.cancel.as_ref()),
+                    )
+                    .map_err(|e| e.to_string())?;
+
+                let svc = VideoReviewService::open().map_err(|e| e.to_string())?;
+                for item in &mut result.items {
+                    if let Some(key) = &item.issue_key {
+                        if !item.skipped && item.error.is_none() {
+                            if let Err(e) = svc.update_defect_jira(
+                                item.local_id,
+                                key,
+                                item.browse_url.as_deref(),
+                            ) {
+                                item.persist_warning =
+                                    Some(format!("已建单但本地未关联：{e}"));
+                            }
+                        }
+                    }
+                }
+                Ok(result)
+            });
+    }
+
+    fn poll_jira_job(&mut self, ctx: &Context) {
+        let Some(result) = self.jira_job.poll(ctx) else {
+            return;
+        };
+        match result {
+            Ok(result) => {
+                let summary = result.summary_line();
+                let lines: Vec<VideoJiraResultLine> = result
+                    .items
+                    .iter()
+                    .map(|i| {
+                        let (text, browse_url) = if i.skipped {
+                            (
+                                format!(
+                                    "#{} 跳过：{}",
+                                    i.local_id,
+                                    i.skip_reason.as_deref().unwrap_or("已关联")
+                                ),
+                                i.browse_url.clone(),
+                            )
+                        } else if let Some(err) = &i.error {
+                            (format!("#{} 失败：{err}", i.local_id), None)
+                        } else if let Some(key) = &i.issue_key {
+                            let mut warn = String::new();
+                            if let Some(w) = &i.attachment_warning {
+                                warn.push_str(&format!("（{w}）"));
+                            }
+                            if let Some(w) = &i.persist_warning {
+                                warn.push_str(&format!("（{w}）"));
+                            }
+                            (format!("#{} → {key}{warn}", i.local_id), i.browse_url.clone())
+                        } else {
+                            (format!("#{} 未知结果", i.local_id), None)
+                        };
+                        VideoJiraResultLine { text, browse_url }
+                    })
+                    .collect();
+                self.status_hint = summary.clone();
+                self.reload_defects();
+                self.jira_dialog = Some(VideoJiraDialog::Result { summary, lines });
+            }
+            Err(e) => {
+                self.error = Some(e);
+            }
+        }
+    }
+
     fn reload_defects(&mut self) {
         self.defects = self
             .current_batch
             .and_then(|id| self.service.list_defects(id).ok())
             .unwrap_or_default();
+        self.selected_defect_ids
+            .retain(|id| self.defects.iter().any(|d| d.id == *id));
     }
 
     fn selected_compare_videos(&mut self) -> Option<Vec<VideoItem>> {

@@ -60,12 +60,26 @@ impl RightTab {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct JiraResultLine {
+    pub text: String,
+    pub browse_url: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) enum DialogState {
     ConfirmBatchOp(BatchOpKind),
     IrreversibleStatus {
         target: ReviewStatus,
         warnings: Vec<StatusTransitionWarning>,
         confirm: bool,
+    },
+    ConfirmJiraSubmit {
+        force_recreate: bool,
+        attach: bool,
+    },
+    JiraSubmitResult {
+        summary: String,
+        lines: Vec<JiraResultLine>,
     },
 }
 

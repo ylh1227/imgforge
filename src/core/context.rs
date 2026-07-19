@@ -5,8 +5,10 @@ use std::path::PathBuf;
 use image::DynamicImage;
 
 use crate::core::types::{
-    AdjustOptions, ImageFormat, MetadataPolicy, Quality, ResizeOptions, Transform, WatermarkOptions,
+    AdjustOptions, BrightnessMatchOptions, ImageFormat, MetadataPolicy, Quality, ResizeOptions,
+    Transform, WatermarkOptions,
 };
+use crate::processing::brightness_match::BrightnessMatchCache;
 
 /// 流水线各步骤共享的图像处理上下文。
 #[derive(Debug)]
@@ -22,6 +24,8 @@ pub struct ImageContext {
     pub exif_bytes: Option<Vec<u8>>,
     pub resize: ResizeOptions,
     pub adjust: AdjustOptions,
+    pub brightness_match: BrightnessMatchOptions,
+    pub brightness_match_cache: Option<BrightnessMatchCache>,
     pub metadata_policy: MetadataPolicy,
     pub transform: Transform,
     pub watermark: WatermarkOptions,
@@ -55,6 +59,8 @@ impl ImageContext {
                 mode: crate::core::types::ResizeMode::Fit,
             },
             adjust: AdjustOptions::default(),
+            brightness_match: BrightnessMatchOptions::default(),
+            brightness_match_cache: None,
             metadata_policy: MetadataPolicy::Preserve,
             transform: Transform::None,
             watermark: WatermarkOptions::default(),

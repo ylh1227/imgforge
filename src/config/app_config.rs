@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::core::types::{
-    AdjustOptions, Concurrency, ImageFormat, MetadataPolicy, Quality, ResizeOptions, ThumbnailSpec,
-    Transform, WatermarkOptions,
+    AdjustOptions, BrightnessMatchOptions, Concurrency, ImageFormat, MetadataPolicy, Quality,
+    ResizeOptions, ThumbnailSpec, Transform, WatermarkOptions,
 };
 
 /// 单文件转换参数覆盖（评审标记联动带入队列）。
@@ -38,6 +38,8 @@ pub struct AppConfig {
     pub dry_run: bool,
     pub resize: ResizeOptions,
     pub adjust: AdjustOptions,
+    #[serde(default)]
+    pub brightness_match: BrightnessMatchOptions,
     pub metadata_policy: MetadataPolicy,
     pub transform: Transform,
     pub extensions: Vec<String>,
@@ -70,6 +72,9 @@ pub struct AppConfig {
     /// 远端服务器接入配置（可选；默认关闭）。
     #[serde(default)]
     pub remote: crate::remote::config::RemoteConfig,
+    /// JIRA 批量提 Bug 配置（可选；默认关闭）。
+    #[serde(default)]
+    pub jira: crate::jira::JiraConfig,
     /// 移动设备拉取配置（可选；默认关闭）。
     #[serde(default)]
     pub mobile_pull: crate::mobile::MobilePullConfig,
@@ -93,6 +98,7 @@ impl Default for AppConfig {
                 mode: crate::core::types::ResizeMode::Fit,
             },
             adjust: AdjustOptions::default(),
+            brightness_match: BrightnessMatchOptions::default(),
             metadata_policy: MetadataPolicy::Preserve,
             transform: Transform::None,
             extensions: Vec::new(),
@@ -109,6 +115,7 @@ impl Default for AppConfig {
             bayer_only: false,
             target_max_bytes: None,
             remote: crate::remote::config::RemoteConfig::default(),
+            jira: crate::jira::JiraConfig::default(),
             mobile_pull: crate::mobile::MobilePullConfig::default(),
         }
     }
@@ -128,8 +135,49 @@ impl AppConfig {
                 self.concurrency.value(),
             ));
         }
+        if self.brightness_match.is_active() {
+            if self.brightness_match.requires_global_reference() {
+                match &self.brightness_match.reference_path {
+                    None => {
+                        return Err(crate::core::error::AppError::Config(
+                            "已启用亮度匹配，但未选择参考图".into(),
+                        ));
+                    }
+                    Some(path) => {
+                        if path.as_os_str().is_empty() {
+                            return Err(crate::core::error::AppError::Config(
+                                "已启用亮度匹配，但参考图路径为空".into(),
+                            ));
+                        }
+                        if !path.exists() {
+                            return Err(crate::core::error::AppError::Config(format!(
+                                "亮度匹配参考图不存在：{}",
+                                path.display()
+                            )));
+                        }
+                        if !path.is_file() {
+                            return Err(crate::core::error::AppError::Config(format!(
+                                "亮度匹配参考图不是文件：{}",
+                                path.display()
+                            )));
+                        }
+                        let ext = path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("");
+                        if !crate::io::reference_pick::is_reference_image_ext(ext) {
+                            return Err(crate::core::error::AppError::Config(format!(
+                                "亮度匹配参考图格式不支持（仅 jpg/jpeg/png/webp）：{}",
+                                path.display()
+                            )));
+                        }
+                    }
+                }
+            }
+        }
         self.mobile_pull.validate()?;
         self.remote.validate()?;
+        self.jira.validate()?;
         Ok(())
     }
 }

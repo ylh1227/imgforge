@@ -43,6 +43,11 @@ impl Executor {
     ) -> AppResult<ExecutionResult> {
         let start = Instant::now();
         let pipeline = Arc::new(crate::processing::pipeline::build_pipeline(&self.config));
+        let brightness_match_cache = Arc::new(
+            crate::processing::brightness_match::BrightnessMatchCache::try_from_options(
+                &self.config.brightness_match,
+            )?,
+        );
         let mut incremental = IncrementalProcessor::load(
             self.config.output_dir.join(".imgforge-state.toml"),
             self.config.incremental,
@@ -100,9 +105,17 @@ impl Executor {
             let config = self.config.clone();
             let cancelled = Arc::clone(&self.cancelled);
             let progress = Arc::clone(&progress_reporter);
+            let brightness_match_cache = Arc::clone(&brightness_match_cache);
 
             join_set.spawn(async move {
-                let result = process_single_task(task.clone(), &config, pipeline, &cancelled).await;
+                let result = process_single_task(
+                    task.clone(),
+                    &config,
+                    pipeline,
+                    brightness_match_cache.as_ref().clone(),
+                    &cancelled,
+                )
+                .await;
                 progress.inc(
                     result
                         .as_ref()
@@ -164,6 +177,7 @@ async fn process_single_task(
     task: ConversionTask,
     config: &AppConfig,
     pipeline: Arc<ProcessingPipeline>,
+    brightness_match_cache: Option<crate::processing::BrightnessMatchCache>,
     cancelled: &AtomicBool,
 ) -> AppResult<TaskOutcome> {
     if cancelled.load(Ordering::Relaxed) {
@@ -186,6 +200,8 @@ async fn process_single_task(
     ctx.raw_bytes = Some(raw_bytes);
     ctx.resize = task.resize_override.unwrap_or(config.resize);
     ctx.adjust = config.adjust;
+    ctx.brightness_match = config.brightness_match.clone();
+    ctx.brightness_match_cache = brightness_match_cache;
     ctx.metadata_policy = config.metadata_policy;
     ctx.transform = config.transform;
     ctx.watermark = config.watermark.clone();

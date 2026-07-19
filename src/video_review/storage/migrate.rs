@@ -1,11 +1,11 @@
-//! 视频评审 SQLite 表结构（`user_version` 6）。
+//! 视频评审 SQLite 表结构（`user_version` 7）。
 
 use rusqlite::Connection;
 
 use crate::review::storage::migrate as review_migrate;
 use crate::video_review::error::VideoReviewResult;
 
-pub const VIDEO_REVIEW_SCHEMA_VERSION: i32 = 6;
+pub const VIDEO_REVIEW_SCHEMA_VERSION: i32 = 7;
 
 const SCHEMA_V4: &str = r#"
 CREATE TABLE IF NOT EXISTS video_review_batch (
@@ -106,7 +106,7 @@ pub fn ensure_schema(conn: &Connection) -> VideoReviewResult<()> {
     let version: i32 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .unwrap_or(0);
-    if version < VIDEO_REVIEW_SCHEMA_VERSION {
+    if version < 6 {
         conn.execute_batch(
             r#"
 CREATE TABLE IF NOT EXISTS video_review_defect (
@@ -124,6 +124,24 @@ CREATE TABLE IF NOT EXISTS video_review_defect (
 CREATE INDEX IF NOT EXISTS idx_video_review_defect_batch ON video_review_defect(batch_id);
 "#,
         )?;
+        conn.pragma_update(None, "user_version", 6)?;
+    }
+    let version: i32 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap_or(0);
+    if version < 7 {
+        if !column_exists(conn, "video_review_defect", "jira_issue_key")? {
+            conn.execute(
+                "ALTER TABLE video_review_defect ADD COLUMN jira_issue_key TEXT",
+                [],
+            )?;
+        }
+        if !column_exists(conn, "video_review_defect", "jira_url")? {
+            conn.execute(
+                "ALTER TABLE video_review_defect ADD COLUMN jira_url TEXT",
+                [],
+            )?;
+        }
         conn.pragma_update(None, "user_version", VIDEO_REVIEW_SCHEMA_VERSION)?;
     }
     Ok(())

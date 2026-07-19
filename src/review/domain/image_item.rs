@@ -332,6 +332,10 @@ pub struct ReviewImageItem {
     pub height: Option<u32>,
     pub convert_params: ConvertParams,
     pub annotation_count: i32,
+    /// 已关联的 JIRA Issue Key（如 CAM-123）。
+    pub jira_issue_key: Option<String>,
+    /// JIRA 浏览 URL。
+    pub jira_url: Option<String>,
 }
 
 impl ReviewImageItem {
@@ -385,6 +389,8 @@ mod tests {
             height: None,
             convert_params: ConvertParams::default(),
             annotation_count: 0,
+            jira_issue_key: None,
+            jira_url: None,
         }
     }
 }

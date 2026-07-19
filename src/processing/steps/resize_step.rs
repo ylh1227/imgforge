@@ -1,12 +1,11 @@
-//! 缩放与旋转变换步骤。
+//! 旋转变换步骤（不做缩放：缩放会损失清晰度）。
 
 use crate::core::context::ImageContext;
 use crate::core::error::AppResult;
 use crate::core::types::Transform;
-use crate::processing::backends::native_backend::resize_image;
 use crate::processing::pipeline::ProcessStep;
 
-/// 等比缩放、裁剪与旋转变换。
+/// 仅旋转/翻转；忽略宽高缩放配置。
 pub struct ResizeStep;
 
 impl ProcessStep for ResizeStep {
@@ -20,13 +19,15 @@ impl ProcessStep for ResizeStep {
             None => return Ok(()),
         };
 
-        let mut result = if ctx.resize.is_active() {
-            resize_image(&image, ctx.resize.width, ctx.resize.height, ctx.resize.mode)?
-        } else {
-            image
-        };
+        if ctx.resize.is_active() {
+            tracing::warn!(
+                path = %ctx.source_path.display(),
+                "跳过缩放（保留清晰度）；如需改尺寸请在外部处理"
+            );
+        }
 
-        result = apply_transform(result, ctx.transform);
+        // 90° 旋转/翻转不改变像素信息量，允许保留。
+        let result = apply_transform(image, ctx.transform);
         ctx.image = Some(result);
         Ok(())
     }

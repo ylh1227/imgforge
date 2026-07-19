@@ -8,6 +8,7 @@ mod properties_panel;
 mod review_panel;
 mod review_panel_helpers;
 mod review_panel_types;
+mod roi_picker;
 mod shortcut_panel;
 mod shortcuts;
 mod sidebar;

@@ -315,10 +315,7 @@ impl DataExtractPanel {
             ui.add_space(8.0);
         }
 
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            ui.spacing_mut().item_spacing.y = 6.0;
-
+        widgets::toolbar_row(ui, |ui| {
             if !narrow {
                 for view in [
                     DataTableView::Summary,
@@ -378,15 +375,18 @@ impl DataExtractPanel {
 
         ui.add_space(6.0);
 
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            ui.spacing_mut().item_spacing.y = 6.0;
+        widgets::toolbar_row(ui, |ui| {
             let search_w = if narrow {
                 (ui.available_width() - 8.0).max(120.0)
             } else {
                 (ui.available_width() - 360.0).max(120.0)
             };
-            widgets::toolbar_search_edit(ui, &mut self.search_buf, "搜索指标…", search_w.min(ui.available_width()));
+            widgets::toolbar_search_edit(
+                ui,
+                &mut self.search_buf,
+                "搜索指标…",
+                search_w.min(ui.available_width()),
+            );
 
             if widgets::compact_secondary_button(ui, "重新解析", has_batch).clicked() {
                 self.reparse_current();
@@ -601,14 +601,10 @@ impl DataExtractPanel {
         self.recent_tasks_ui(ui);
 
         ui.add_space(8.0);
-        let detail_h = ui.available_height().max(120.0);
-        ScrollArea::vertical()
-            .id_salt("data_extract_detail_scroll")
-            .max_height(detail_h)
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                self.detail_ui(ui);
-            });
+        // 详情跟侧栏一起滚：勿再套固定 max_height ScrollArea，否则底边常被视口裁切
+        self.detail_ui(ui);
+        // 底部安全区：滚到底时整块「详情」仍完整可见
+        ui.add_space(28.0);
     }
 
     fn summary_table_ui(&mut self, ui: &mut egui::Ui, width: f32) {
@@ -1103,7 +1099,12 @@ impl DataExtractPanel {
     fn detail_ui(&mut self, ui: &mut egui::Ui) {
         widgets::grouped_section(ui, "详情", |ui| {
             let Some(rec) = self.selected_record().cloned() else {
-                ui.label("选择一条记录查看详情");
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("选择一条记录查看详情")
+                        .color(theme::secondary_label(ui.visuals().dark_mode)),
+                );
+                ui.add_space(4.0);
                 if let Some(batch) = self.current_batch() {
                     ui.add_space(8.0);
                     ui.separator();

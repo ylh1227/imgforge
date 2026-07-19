@@ -448,6 +448,16 @@ impl VideoReviewService {
         self.repo.list_defects(batch_id)
     }
 
+    pub fn update_defect_jira(
+        &self,
+        defect_id: i64,
+        issue_key: &str,
+        browse_url: Option<&str>,
+    ) -> VideoReviewResult<()> {
+        self.repo
+            .update_defect_jira(defect_id, issue_key, browse_url)
+    }
+
     pub fn batch_update_status(&self, ids: &[i64], status: ReviewStatus) -> VideoReviewResult<()> {
         self.repo.batch_update_status(ids, status)
     }

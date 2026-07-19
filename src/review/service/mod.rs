@@ -18,7 +18,7 @@ pub use batch_operations::{
     BatchOperations, BatchRemarkRequest, BatchRemarkResult, BatchStatusRequest, BatchStatusResult,
     StatusTransitionWarning,
 };
-pub use batch_service::BatchService;
+pub use batch_service::{scan_images, BatchService};
 pub use config::ReviewModuleConfig;
 pub use conversion_bridge::{ConversionTaskParams, ReviewConversionBridge, ReviewQueueItem};
 pub use export_service::{
@@ -30,8 +30,8 @@ pub use image_loader::{
 };
 pub use review_service::ReviewService;
 pub use screenshot_service::{
-    BatchImageScreenshotRequest, BatchImageScreenshotResult, BatchImageScreenshotService,
-    ImageScreenshotManifestEntry,
+    apply_norm_crop, format_roi_label, is_meaningful_roi, BatchImageScreenshotRequest,
+    BatchImageScreenshotResult, BatchImageScreenshotService, ImageScreenshotManifestEntry,
 };
 pub use shortcuts::{save_custom_binding, ShortcutAction, ShortcutConfig};
 pub use thumbnail_service::{AsyncThumbnailGenerator, ThumbnailService};

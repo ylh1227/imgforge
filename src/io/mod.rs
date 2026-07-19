@@ -4,6 +4,7 @@ pub mod atomic_write;
 pub mod batch_preview;
 pub mod incremental;
 pub mod paths;
+pub mod reference_pick;
 pub mod scanner;
 
 #[cfg(feature = "rename")]

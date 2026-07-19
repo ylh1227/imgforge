@@ -81,6 +81,26 @@ pub struct Cli {
     #[arg(long)]
     pub sharpen: Option<f32>,
 
+    /// 参考图亮度匹配：参考 JPG/PNG 路径（全局模式）
+    #[arg(long, value_name = "PATH")]
+    pub brightness_ref: Option<PathBuf>,
+
+    /// 按文件配对亮度匹配（同目录同名 jpg/jpeg/png/webp）
+    #[arg(long)]
+    pub brightness_pair: bool,
+
+    /// 参考亮度统计：mean 或 percentile
+    #[arg(long, value_enum)]
+    pub brightness_metric: Option<imgforge::core::types::BrightnessMatchMetric>,
+
+    /// 百分位 (0-100)，仅 percentile 模式
+    #[arg(long, default_value_t = 98.0)]
+    pub brightness_percentile: f32,
+
+    /// 启用分区亮度匹配（默认 3×3）
+    #[arg(long)]
+    pub brightness_regional: bool,
+
     /// 剥离 EXIF 元数据
     #[arg(long)]
     pub strip_metadata: bool,
@@ -181,9 +201,19 @@ pub struct Cli {
     #[arg(long, value_name = "DIR", env = "IMGFORGE_MOBILE_STAGING")]
     pub mobile_staging: Option<PathBuf>,
 
-    /// ADB 多设备连接时指定 serial
-    #[arg(long, value_name = "SERIAL", env = "IMGFORGE_ADB_SERIAL")]
-    pub adb_serial: Option<String>,
+    /// ADB 设备 serial；可重复或逗号分隔指定多台（留空则拉全部已授权设备）
+    #[arg(
+        long,
+        value_name = "SERIAL",
+        env = "IMGFORGE_ADB_SERIAL",
+        num_args = 0..,
+        value_delimiter = ','
+    )]
+    pub adb_serial: Vec<String>,
+
+    /// 移动设备拉取并发数（1–8，默认 4）
+    #[arg(long, value_name = "N", env = "IMGFORGE_MOBILE_CONCURRENCY")]
+    pub mobile_concurrency: Option<usize>,
 
     /// ADB 二进制选择策略
     #[arg(long, value_enum, env = "IMGFORGE_ADB_MODE")]

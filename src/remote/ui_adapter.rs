@@ -125,6 +125,8 @@ pub fn image_from_remote_item(
         height: item.height,
         convert_params: ConvertParams::default(),
         annotation_count: 0,
+        jira_issue_key: None,
+        jira_url: None,
     }
 }
 

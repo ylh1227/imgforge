@@ -63,7 +63,10 @@ pub fn build_pipeline(config: &AppConfig) -> ProcessingPipeline {
         .add_step(MetadataStep::read());
 
     if !config.bayer_only {
-        pipeline = pipeline.add_step(ResizeStep).add_step(AdjustStep);
+        pipeline = pipeline
+            .add_step(ResizeStep)
+            .add_step(crate::processing::steps::reference_brightness_step::ReferenceBrightnessStep)
+            .add_step(AdjustStep);
 
         #[cfg(feature = "watermark")]
         if config.watermark.is_active() {

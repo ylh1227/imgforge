@@ -95,6 +95,29 @@ fn apply_cli_overrides(config: &mut AppConfig, cli: &Cli) {
     if let Some(s) = cli.sharpen {
         config.adjust.sharpen = s;
     }
+    if let Some(ref path) = cli.brightness_ref {
+        config.brightness_match.enabled = true;
+        config.brightness_match.mode = imgforge::core::types::BrightnessMatchMode::Global;
+        config.brightness_match.reference_path = Some(path.clone());
+    }
+    if cli.brightness_pair {
+        config.brightness_match.enabled = true;
+        config.brightness_match.mode = imgforge::core::types::BrightnessMatchMode::Paired;
+    }
+    if let Some(metric) = cli.brightness_metric {
+        config.brightness_match.metric = metric;
+    }
+    if cli.brightness_ref.is_some()
+        || cli.brightness_pair
+        || cli.brightness_metric.is_some()
+        || cli.brightness_regional
+    {
+        config.brightness_match.percentile = cli.brightness_percentile.clamp(0.0, 100.0);
+    }
+    if cli.brightness_regional {
+        config.brightness_match.regional = true;
+        config.brightness_match.enabled = true;
+    }
     if cli.strip_metadata {
         config.metadata_policy = imgforge::core::types::MetadataPolicy::Strip;
     }
@@ -153,6 +176,7 @@ fn apply_cli_overrides(config: &mut AppConfig, cli: &Cli) {
         config.remote.enabled = true;
     }
     config.remote.apply_env_overrides();
+    config.jira.apply_env_overrides();
 
     if cli.mobile_pull {
         config.mobile_pull.enabled = true;
@@ -169,8 +193,23 @@ fn apply_cli_overrides(config: &mut AppConfig, cli: &Cli) {
         config.mobile_pull.staging_dir = staging.clone();
         config.mobile_pull.enabled = true;
     }
-    if let Some(serial) = &cli.adb_serial {
-        config.mobile_pull.adb_serial = Some(serial.clone());
+    if !cli.adb_serial.is_empty() {
+        let mut serials = Vec::new();
+        for s in &cli.adb_serial {
+            for part in imgforge::mobile::parse_serial_list(s) {
+                if !serials.iter().any(|x| x == &part) {
+                    serials.push(part);
+                }
+            }
+        }
+        if serials.len() == 1 {
+            config.mobile_pull.adb_serial = Some(serials[0].clone());
+        }
+        config.mobile_pull.adb_serials = serials;
+        config.mobile_pull.enabled = true;
+    }
+    if let Some(n) = cli.mobile_concurrency {
+        config.mobile_pull.concurrency = n;
         config.mobile_pull.enabled = true;
     }
     if let Some(mode) = cli.adb_mode {

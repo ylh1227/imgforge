@@ -98,8 +98,7 @@ pub fn filter_sort_ui(ui: &mut Ui, sidebar: &mut SidebarState) -> bool {
     let row_h = widgets::TOOLBAR_ROW_HEIGHT;
 
     // 筛选：固定标签列 + 拉满剩余宽度的下拉
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = gap;
+    widgets::equal_height_row(ui, gap, |ui| {
         ui.add_sized(
             egui::vec2(LABEL_W, row_h),
             egui::Label::new(
@@ -133,8 +132,7 @@ pub fn filter_sort_ui(ui: &mut Ui, sidebar: &mut SidebarState) -> bool {
     ui.add_space(gap);
 
     // 排序：下拉 + 升序芯片对齐同一行高
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = gap;
+    widgets::equal_height_row(ui, gap, |ui| {
         ui.add_sized(
             egui::vec2(LABEL_W, row_h),
             egui::Label::new(
@@ -204,8 +202,7 @@ pub fn filter_sort_ui(ui: &mut Ui, sidebar: &mut SidebarState) -> bool {
 
     // 操作区：2×2 等分网格（回收站并入按钮区）
     let cell = ((ui.available_width() - gap) * 0.5).max(64.0);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = gap;
+    widgets::equal_height_row(ui, gap, |ui| {
         if widgets::full_width_secondary_button_in(ui, "未评审", true, cell).clicked() {
             sidebar.filter.status = Some(ReviewStatus::Pending);
             changed = true;
@@ -217,8 +214,7 @@ pub fn filter_sort_ui(ui: &mut Ui, sidebar: &mut SidebarState) -> bool {
         }
     });
     ui.add_space(gap);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = gap;
+    widgets::equal_height_row(ui, gap, |ui| {
         let more = if sidebar.filter_expanded {
             "收起"
         } else {
@@ -607,14 +603,36 @@ fn render_image_list_row(
 
         ui.vertical(|ui| {
             let name_resp = ui.selectable_label(selected, &name);
-            if img.annotation_count > 0 {
-                ui.label(
-                    RichText::new(format!("{} 条标注", img.annotation_count))
-                        .size(11.0)
-                        .color(theme::secondary_label(dark)),
-                );
-            }
+            ui.horizontal(|ui| {
+                if img.annotation_count > 0 {
+                    ui.label(
+                        RichText::new(format!("{} 条标注", img.annotation_count))
+                            .size(11.0)
+                            .color(theme::secondary_label(dark)),
+                    );
+                }
+                if let Some(key) = img.jira_issue_key.as_ref().filter(|k| !k.is_empty()) {
+                    let url = img
+                        .jira_url
+                        .clone()
+                        .unwrap_or_else(|| format!("jira://{key}"));
+                    if ui
+                        .link(RichText::new(key).size(11.0))
+                        .on_hover_text("打开 JIRA")
+                        .clicked()
+                    {
+                        if let Some(browse) = &img.jira_url {
+                            let _ = open::that(browse);
+                        } else {
+                            let _ = open::that(&url);
+                        }
+                    }
+                }
+            });
             let mut hover = img.status.label().to_string();
+            if let Some(key) = &img.jira_issue_key {
+                hover = format!("{hover} · JIRA {key}");
+            }
             if let Some(tag_ids) = sidebar.image_tags.get(&img.id) {
                 let names: Vec<String> = tag_ids
                     .iter()

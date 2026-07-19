@@ -9,7 +9,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-pub use config::{AdbBinaryMode, MobilePullBackend, MobilePullConfig};
+pub use config::{
+    parse_serial_list, resolve_device_staging_root, sanitize_serial, AdbBinaryMode, AdbDevicePull,
+    MobilePullBackend, MobilePullConfig, ResolvedDeviceTarget, MOBILE_PULL_CONCURRENCY_DEFAULT,
+    MOBILE_PULL_CONCURRENCY_MAX, MOBILE_PULL_CONCURRENCY_MIN,
+};
+pub use adb::{list_devices, list_ready_devices, AdbDeviceInfo};
 
 use crate::config::AppConfig;
 use crate::core::error::{AppError, AppResult};
@@ -146,6 +151,47 @@ fn ensure_cancelled_not_set(cancelled: &AtomicBool) -> AppResult<()> {
     } else {
         Ok(())
     }
+}
+
+/// 有限并发执行任务；任一失败则整批失败。保持输入顺序收集成功结果。
+pub(crate) fn run_parallel_jobs<T, R, F>(
+    jobs: Vec<T>,
+    concurrency: usize,
+    cancelled: &AtomicBool,
+    work: F,
+) -> AppResult<Vec<R>>
+where
+    T: Send + Sync,
+    R: Send,
+    F: Fn(&T) -> AppResult<R> + Sync,
+{
+    use rayon::prelude::*;
+
+    ensure_cancelled_not_set(cancelled)?;
+    if jobs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let workers = concurrency.max(1);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .map_err(|e| AppError::Other(format!("mobile pull thread pool: {e}")))?;
+
+    let results: Vec<AppResult<R>> = pool.install(|| {
+        jobs.par_iter()
+            .map(|job| {
+                ensure_cancelled_not_set(cancelled)?;
+                work(job)
+            })
+            .collect()
+    });
+
+    let mut out = Vec::with_capacity(results.len());
+    for r in results {
+        out.push(r?);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

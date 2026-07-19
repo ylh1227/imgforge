@@ -85,9 +85,8 @@ pub fn resize_image(
         resized = center_crop(&resized, target_w, target_h)?;
     }
 
-    if scale < 1.0 {
-        apply_auto_downscale_sharpen(&mut resized, scale);
-    }
+    // 非 RAW 全流水线不自动锐化：缩放下采样本身已改分辨率，
+    // 再套 USM 会额外改变清晰度观感；需要锐化时用显式 adjust.sharpen。
 
     Ok(resized)
 }
@@ -197,27 +196,6 @@ fn pick_resize_alg(scale: f32) -> fir::ResizeOptions {
     } else {
         fir::ResizeOptions::new().resize_alg(fir::ResizeAlg::Convolution(fir::FilterType::Lanczos3))
     }
-}
-
-fn apply_auto_downscale_sharpen(image: &mut DynamicImage, scale: f32) {
-    if scale >= 0.75 {
-        return;
-    }
-    let amount = if scale < 0.25 {
-        0.45
-    } else if scale < 0.5 {
-        0.32
-    } else {
-        0.22
-    };
-    let radius = if scale < 0.25 {
-        1.2
-    } else if scale < 0.5 {
-        1.0
-    } else {
-        0.8
-    };
-    apply_unsharp_mask(image, radius, amount, 4);
 }
 
 #[inline]

@@ -9,7 +9,11 @@ use std::thread;
 use eframe::egui;
 
 use crate::config::AppConfig;
-use crate::core::types::{ImageFormat, MetadataPolicy, Quality, ResizeOptions};
+use crate::core::types::{
+    BrightnessMatchMetric, BrightnessMatchMode, BrightnessMatchOptions, ImageFormat, MetadataPolicy,
+    Quality,
+    ResizeOptions,
+};
 use crate::gui::app_types::{AppMode, RunState, WorkerMessage};
 use crate::gui::prefs::{self, ConvertPresetSnapshot, TaskHistoryEntry};
 use crate::gui::quality_preview::{self, QualityPreviewWorker};
@@ -70,6 +74,32 @@ impl ImgforgeApp {
         }
         config.burn_review_annotations = self.burn_review_annotations;
         config.bayer_only = self.bayer_only;
+        config.brightness_match = BrightnessMatchOptions {
+            enabled: match self.brightness_match_mode {
+                BrightnessMatchMode::Global => {
+                    self.brightness_match_enabled && !self.brightness_match_path.trim().is_empty()
+                }
+                BrightnessMatchMode::Paired => self.brightness_match_enabled,
+            },
+            mode: self.brightness_match_mode,
+            reference_path: {
+                let p = self.brightness_match_path.trim();
+                if p.is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(p))
+                }
+            },
+            metric: if self.brightness_match_metric_percentile {
+                BrightnessMatchMetric::Percentile
+            } else {
+                BrightnessMatchMetric::Mean
+            },
+            percentile: self.brightness_match_percentile.clamp(0.0, 100.0),
+            regional: self.brightness_match_regional,
+            grid_cols: 3,
+            grid_rows: 3,
+        };
         config.remote = self.remote_config.clone();
         config.validate().map_err(|e| e.to_string())?;
         Ok(config)
@@ -96,6 +126,12 @@ impl ImgforgeApp {
                 None
             },
             use_target_max_bytes: self.use_target_max_bytes,
+            brightness_match_enabled: self.brightness_match_enabled,
+            brightness_match_mode: self.brightness_match_mode,
+            brightness_match_path: self.brightness_match_path.clone(),
+            brightness_match_metric_percentile: self.brightness_match_metric_percentile,
+            brightness_match_percentile: self.brightness_match_percentile,
+            brightness_match_regional: self.brightness_match_regional,
         }
     }
 
@@ -114,7 +150,116 @@ impl ImgforgeApp {
         if let Some(bytes) = snapshot.target_max_bytes {
             self.target_max_kb = (bytes / 1024).max(1) as u32;
         }
+        self.brightness_match_enabled = snapshot.brightness_match_enabled;
+        self.brightness_match_mode = snapshot.brightness_match_mode;
+        self.brightness_match_path = snapshot.brightness_match_path.clone();
+        self.brightness_match_metric_percentile = snapshot.brightness_match_metric_percentile;
+        self.brightness_match_percentile = snapshot.brightness_match_percentile.clamp(90.0, 99.0);
+        self.brightness_match_regional = snapshot.brightness_match_regional;
+        self.brightness_match_preview = None;
         self.refresh_previews();
+    }
+
+    pub(super) fn persist_brightness_match_prefs(&mut self) {
+        self.gui_prefs.brightness_match = prefs::BrightnessMatchPrefs {
+            enabled: self.brightness_match_enabled,
+            mode: self.brightness_match_mode,
+            path: self.brightness_match_path.clone(),
+            metric_percentile: self.brightness_match_metric_percentile,
+            percentile: self.brightness_match_percentile,
+            regional: self.brightness_match_regional,
+        };
+        let _ = self.gui_prefs.save();
+    }
+
+    pub(super) fn set_brightness_match_path(&mut self, path: PathBuf) {
+        self.brightness_match_path = path.display().to_string();
+        self.brightness_match_enabled = true;
+        self.brightness_match_mode = BrightnessMatchMode::Global;
+        self.brightness_match_preview = None;
+        self.persist_brightness_match_prefs();
+    }
+
+    pub(super) fn clear_brightness_match_path(&mut self) {
+        self.brightness_match_path.clear();
+        self.brightness_match_preview = None;
+        if self.brightness_match_mode == BrightnessMatchMode::Global {
+            self.brightness_match_enabled = false;
+        }
+        self.persist_brightness_match_prefs();
+    }
+
+    pub(super) fn pick_reference_from_input_dir(&mut self) {
+        let input = PathBuf::from(self.input_dir.trim());
+        if self.input_dir.trim().is_empty() || !input.is_dir() {
+            self.status = "请先选择输入文件夹".into();
+            return;
+        }
+        match crate::io::reference_pick::pick_reference_from_input(&input, self.recursive) {
+            Some(path) => {
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.display().to_string());
+                self.set_brightness_match_path(path);
+                self.status = format!("已从输入目录选择参考图：{name}");
+            }
+            None => {
+                self.status = "未找到可用参考图（jpg/jpeg/png/webp）".into();
+            }
+        }
+    }
+
+    fn brightness_match_path_issue(&self) -> Option<String> {
+        if !self.brightness_match_enabled
+            || self.brightness_match_mode != BrightnessMatchMode::Global
+        {
+            return None;
+        }
+        let p = self.brightness_match_path.trim();
+        if p.is_empty() {
+            return Some("已启用但未选择参考图".into());
+        }
+        let path = PathBuf::from(p);
+        if !path.exists() {
+            return Some("参考图文件不存在".into());
+        }
+        if !path.is_file() {
+            return Some("参考图路径不是文件".into());
+        }
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if !crate::io::reference_pick::is_reference_image_ext(ext) {
+            return Some("格式仅支持 jpg/jpeg/png/webp".into());
+        }
+        None
+    }
+
+    fn ensure_brightness_match_preview(&mut self, ctx: &egui::Context) {
+        let path = self.brightness_match_path.trim().to_string();
+        if path.is_empty() {
+            self.brightness_match_preview = None;
+            return;
+        }
+        if self
+            .brightness_match_preview
+            .as_ref()
+            .is_some_and(|(p, _)| p == &path)
+        {
+            return;
+        }
+        self.brightness_match_preview = None;
+        let Ok(img) = image::open(&path) else {
+            return;
+        };
+        let thumb = img.thumbnail(48, 48).to_rgba8();
+        let size = [thumb.width() as usize, thumb.height() as usize];
+        let color = egui::ColorImage::from_rgba_unmultiplied(size, thumb.as_raw());
+        let tex = ctx.load_texture(
+            "brightness_match_ref_preview",
+            color,
+            egui::TextureOptions::LINEAR,
+        );
+        self.brightness_match_preview = Some((path, tex));
     }
 
     pub(super) fn refresh_previews(&mut self) {
@@ -246,6 +391,7 @@ impl ImgforgeApp {
                 return;
             }
         };
+        self.persist_brightness_match_prefs();
 
         if let Some(ref preview) = self.batch_preview {
             if preview.output_conflicts > 0 {
@@ -504,40 +650,566 @@ impl ImgforgeApp {
         ];
 
         widgets::settings_subheading(ui, "文件选项");
-        ui.add_space(4.0);
+        ui.add_space(theme::SETTINGS_HEADING_GAP);
         widgets::checkbox_grid(ui, &mut file_options, enabled, 2);
 
+        ui.add_space(8.0);
+        widgets::settings_subheading(ui, "高级");
+        ui.add_space(theme::SETTINGS_HEADING_GAP);
+
+        let mut labels: Vec<&str> = Vec::new();
+        #[cfg(feature = "bayer")]
+        labels.push("RAW");
+        labels.push("亮度匹配");
+        labels.push("远端");
+        labels.push("JIRA");
+        widgets::settings_section_tabs(ui, &mut self.convert_advanced_tab, &labels);
+        ui.add_space(8.0);
+
+        let tab = self.convert_advanced_tab.min(labels.len().saturating_sub(1));
+        let mut i = 0usize;
         #[cfg(feature = "bayer")]
         {
-            widgets::inset_separator(ui);
-            widgets::settings_subheading(ui, "RAW 处理");
-            ui.add_space(4.0);
-            let mut raw_options = [(&mut self.bayer_only, "仅解 Bayer/RAW（不做缩放锐化）")];
-            widgets::checkbox_grid(ui, &mut raw_options, enabled, 1);
+            if tab == i {
+                let mut raw_options =
+                    [(&mut self.bayer_only, "仅解 Bayer/RAW（跳过缩放/锐化/水印）")];
+                widgets::checkbox_grid(ui, &mut raw_options, enabled, 1);
+                ui.label(
+                    egui::RichText::new("非 RAW 全流水线同样不做缩放与锐化，以保留清晰度")
+                        .size(11.0)
+                        .weak(),
+                );
+            }
+            i += 1;
         }
+        if tab == i {
+            ui.add_enabled_ui(enabled && !self.bayer_only, |ui| {
+                let bm_was = self.brightness_match_enabled;
+                ui.checkbox(
+                    &mut self.brightness_match_enabled,
+                    "亮度匹配：RAW 贴近同名 JPG",
+                );
+                if bm_was != self.brightness_match_enabled {
+                    self.persist_brightness_match_prefs();
+                }
+                ui.label(
+                    egui::RichText::new(
+                        "相机匹配（矩阵+曲线+LUT）· Bayer 仅解除外 · 失败回退增益",
+                    )
+                    .size(11.0)
+                    .weak(),
+                );
+                widgets::settings_row_gap(ui);
 
-        widgets::inset_separator(ui);
-        widgets::settings_subheading(ui, "远端执行");
-        ui.add_space(4.0);
-        ui.add_enabled_ui(enabled, |ui| {
-            ui.checkbox(
-                &mut self.prefer_remote_execution,
-                "全模块远程任务（需配置 [remote]；失败不会自动回退本地）",
+                widgets::settings_labeled_row(ui, "非 RAW", |ui| {
+                    if widgets::toggle_chip(
+                        ui,
+                        "全局参考",
+                        self.brightness_match_mode == BrightnessMatchMode::Global,
+                        true,
+                    ) {
+                        self.brightness_match_mode = BrightnessMatchMode::Global;
+                        self.persist_brightness_match_prefs();
+                    }
+                    if widgets::toggle_chip(
+                        ui,
+                        "按文件配对",
+                        self.brightness_match_mode == BrightnessMatchMode::Paired,
+                        true,
+                    ) {
+                        self.brightness_match_mode = BrightnessMatchMode::Paired;
+                        self.persist_brightness_match_prefs();
+                    }
+                });
+                ui.label(
+                    egui::RichText::new(match self.brightness_match_mode {
+                        BrightnessMatchMode::Global => {
+                            "非 RAW 用下方全局参考；RAW 始终对同目录同名 jpg"
+                        }
+                        BrightnessMatchMode::Paired => {
+                            "RAW / 非 RAW 均对同目录同名 jpg/jpeg/png/webp；无配对则跳过"
+                        }
+                    })
+                    .size(11.0)
+                    .weak(),
+                );
+                widgets::settings_row_gap(ui);
+
+                if self.brightness_match_mode == BrightnessMatchMode::Global {
+                    self.ensure_brightness_match_preview(ui.ctx());
+                    let path_issue = self.brightness_match_path_issue();
+                    let drop_zone = ui.group(|ui| {
+                        widgets::settings_labeled_row(ui, "参考图", |ui| {
+                            if let Some((_, tex)) = &self.brightness_match_preview {
+                                ui.add(
+                                    egui::Image::new(tex)
+                                        .fit_to_exact_size(egui::vec2(48.0, 48.0)),
+                                );
+                            }
+                            if widgets::compact_secondary_button(ui, "选择…", true).clicked() {
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .add_filter("Images", &["jpg", "jpeg", "png", "webp"])
+                                    .pick_file()
+                                {
+                                    self.set_brightness_match_path(path);
+                                }
+                            }
+                            if widgets::compact_secondary_button(
+                                ui,
+                                "从输入目录",
+                                !self.input_dir.trim().is_empty(),
+                            )
+                            .clicked()
+                            {
+                                self.pick_reference_from_input_dir();
+                            }
+                            if widgets::compact_secondary_button(
+                                ui,
+                                "清除",
+                                !self.brightness_match_path.is_empty(),
+                            )
+                            .clicked()
+                            {
+                                self.clear_brightness_match_path();
+                            }
+                            let (display, full) = if self.brightness_match_path.is_empty() {
+                                ("未选择参考图".to_string(), String::new())
+                            } else {
+                                let p = PathBuf::from(&self.brightness_match_path);
+                                let name = p
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().into_owned())
+                                    .unwrap_or_else(|| self.brightness_match_path.clone());
+                                (name, self.brightness_match_path.clone())
+                            };
+                            let resp = ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(display).size(12.0).weak(),
+                                )
+                                .truncate(),
+                            );
+                            if !full.is_empty() {
+                                resp.on_hover_text(full);
+                            }
+                        });
+                        if path_issue.is_none()
+                            && self.brightness_match_enabled
+                            && !self.brightness_match_path.is_empty()
+                            && self.brightness_match_preview.is_none()
+                        {
+                            ui.label(
+                                egui::RichText::new("无法预览参考图")
+                                    .size(11.0)
+                                    .color(theme::secondary_label(ui.visuals().dark_mode)),
+                            );
+                        }
+                    });
+                    if drop_zone.response.contains_pointer() {
+                        let dropped = ui.ctx().input(|i| i.raw.dropped_files.clone());
+                        for file in dropped {
+                            if let Some(path) = file.path {
+                                let ext = path
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                                    .unwrap_or("");
+                                if path.is_file()
+                                    && crate::io::reference_pick::is_reference_image_ext(ext)
+                                {
+                                    self.set_brightness_match_path(path);
+                                    self.status = "已拖入参考图".into();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if let Some(issue) = &path_issue {
+                        ui.label(
+                            egui::RichText::new(issue)
+                                .size(11.0)
+                                .color(theme::error_color(ui.visuals().dark_mode)),
+                        );
+                    }
+                }
+
+                widgets::settings_labeled_row(ui, "统计", |ui| {
+                    if widgets::toggle_chip(
+                        ui,
+                        "均值",
+                        !self.brightness_match_metric_percentile,
+                        true,
+                    ) {
+                        self.brightness_match_metric_percentile = false;
+                        self.persist_brightness_match_prefs();
+                    }
+                    if widgets::toggle_chip(
+                        ui,
+                        "百分位",
+                        self.brightness_match_metric_percentile,
+                        true,
+                    ) {
+                        self.brightness_match_metric_percentile = true;
+                        self.persist_brightness_match_prefs();
+                    }
+                    if widgets::toggle_chip(ui, "分区", self.brightness_match_regional, true) {
+                        self.brightness_match_regional = !self.brightness_match_regional;
+                        self.persist_brightness_match_prefs();
+                    }
+                });
+                if self.brightness_match_metric_percentile {
+                    widgets::settings_labeled_row(ui, "百分位", |ui| {
+                        let slider_w = ui.available_width().max(80.0);
+                        let resp = ui.add_sized(
+                            egui::vec2(slider_w, widgets::TOOLBAR_ROW_HEIGHT),
+                            egui::Slider::new(&mut self.brightness_match_percentile, 90.0..=99.0)
+                                .suffix("%"),
+                        );
+                        if resp.changed() {
+                            self.persist_brightness_match_prefs();
+                        }
+                    });
+                }
+            });
+            if self.bayer_only {
+                ui.label(
+                    egui::RichText::new("仅解 Bayer 模式下跳过亮度匹配")
+                        .size(11.0)
+                        .weak(),
+                );
+            }
+        }
+        i += 1;
+        if tab == i {
+            ui.add_enabled_ui(enabled, |ui| {
+                ui.checkbox(
+                    &mut self.prefer_remote_execution,
+                    "优先远程执行（需 [remote]；失败不回退本地）",
+                );
+            });
+            ui.label(
+                egui::RichText::new(format!(
+                    "远端：{}{}",
+                    self.remote_config.status_label(),
+                    self.remote_config
+                        .base_url
+                        .as_ref()
+                        .map(|u| format!(" · {u}"))
+                        .unwrap_or_default()
+                ))
+                .size(11.0)
+                .weak(),
             );
+        }
+        i += 1;
+        if tab == i {
+            self.jira_settings_body(ui, enabled);
+        }
+    }
+
+    fn jira_settings_body(&mut self, ui: &mut egui::Ui, enabled: bool) {
+        ui.checkbox(&mut self.jira_config.enabled, "启用 JIRA 批量提 Bug");
+
+        let jira_on = self.jira_config.enabled;
+        ui.add_enabled_ui(jira_on && enabled, |ui| {
+            let dark = ui.visuals().dark_mode;
+            let row_h = widgets::TOOLBAR_ROW_HEIGHT;
+
+            widgets::settings_row_gap(ui);
+            ui.label(
+                egui::RichText::new("连接")
+                    .size(11.0)
+                    .strong()
+                    .color(theme::secondary_label(dark)),
+            );
+            ui.add_space(2.0);
+            widgets::settings_span_row(ui, "Base URL", |ui, span_w| {
+                let mut url = self.jira_config.base_url.clone().unwrap_or_default();
+                let resp = ui.add_sized(
+                    egui::vec2(span_w, row_h),
+                    egui::TextEdit::singleline(&mut url)
+                        .hint_text("https://your.atlassian.net")
+                        .horizontal_align(egui::Align::Center),
+                );
+                if resp.changed() {
+                    self.jira_config.base_url = if url.trim().is_empty() {
+                        None
+                    } else {
+                        Some(url.trim().to_string())
+                    };
+                }
+            });
+            widgets::settings_pair_row(
+                ui,
+                "项目",
+                "类型",
+                |ui, field_w| {
+                    let mut key = self.jira_config.project_key.clone().unwrap_or_default();
+                    let resp = ui.add_sized(
+                        egui::vec2(field_w, row_h),
+                        egui::TextEdit::singleline(&mut key)
+                            .hint_text("CAM")
+                            .horizontal_align(egui::Align::Center),
+                    );
+                    if resp.changed() {
+                        self.jira_config.project_key = if key.trim().is_empty() {
+                            None
+                        } else {
+                            Some(key.trim().to_string())
+                        };
+                    }
+                },
+                |ui, field_w| {
+                    ui.add_sized(
+                        egui::vec2(field_w, row_h),
+                        egui::TextEdit::singleline(&mut self.jira_config.issue_type)
+                            .hint_text("Bug")
+                            .horizontal_align(egui::Align::Center),
+                    );
+                },
+            );
+            widgets::settings_pair_row(
+                ui,
+                "API",
+                "认证",
+                |ui, field_w| {
+                    let api_label = match self.jira_config.api_version {
+                        crate::jira::JiraApiVersion::V3 => "v3 · Cloud",
+                        crate::jira::JiraApiVersion::V2 => "v2 · Server",
+                    };
+                    widgets::toolbar_combo_box(ui, "jira_api_version", api_label, field_w, |ui| {
+                        if ui
+                            .selectable_label(
+                                self.jira_config.api_version == crate::jira::JiraApiVersion::V3,
+                                "v3 · Cloud",
+                            )
+                            .clicked()
+                        {
+                            self.jira_config.api_version = crate::jira::JiraApiVersion::V3;
+                        }
+                        if ui
+                            .selectable_label(
+                                self.jira_config.api_version == crate::jira::JiraApiVersion::V2,
+                                "v2 · Server / DC",
+                            )
+                            .clicked()
+                        {
+                            self.jira_config.api_version = crate::jira::JiraApiVersion::V2;
+                        }
+                    });
+                },
+                |ui, field_w| {
+                    let auth_label = match self.jira_config.auth_mode {
+                        crate::jira::JiraAuthMode::EnvBasic => "Basic · Token",
+                        crate::jira::JiraAuthMode::EnvBearer => "Bearer · PAT",
+                    };
+                    widgets::toolbar_combo_box(ui, "jira_auth_mode", auth_label, field_w, |ui| {
+                        if ui
+                            .selectable_label(
+                                self.jira_config.auth_mode == crate::jira::JiraAuthMode::EnvBasic,
+                                "Basic · 邮箱+Token",
+                            )
+                            .clicked()
+                        {
+                            self.jira_config.auth_mode = crate::jira::JiraAuthMode::EnvBasic;
+                        }
+                        if ui
+                            .selectable_label(
+                                self.jira_config.auth_mode == crate::jira::JiraAuthMode::EnvBearer,
+                                "Bearer · PAT",
+                            )
+                            .clicked()
+                        {
+                            self.jira_config.auth_mode = crate::jira::JiraAuthMode::EnvBearer;
+                        }
+                    });
+                },
+            );
+            widgets::settings_hint(
+                ui,
+                match self.jira_config.auth_mode {
+                    crate::jira::JiraAuthMode::EnvBasic => {
+                        "凭证：IMGFORGE_JIRA_EMAIL + IMGFORGE_JIRA_API_TOKEN（不落盘）"
+                    }
+                    crate::jira::JiraAuthMode::EnvBearer => "凭证：IMGFORGE_JIRA_PAT（不落盘）",
+                },
+            );
+
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new("提交")
+                    .size(11.0)
+                    .strong()
+                    .color(theme::secondary_label(dark)),
+            );
+            ui.add_space(2.0);
+            widgets::settings_pair_row(
+                ui,
+                "附件",
+                "并发",
+                |ui, field_w| {
+                    let attach_label = match (
+                        self.jira_config.attach_screenshots,
+                        self.jira_config.attach_defect_zip,
+                    ) {
+                        (true, true) => "截图 + zip",
+                        (true, false) => "仅截图",
+                        (false, true) => "仅 zip",
+                        (false, false) => "不上传",
+                    };
+                    widgets::toolbar_combo_box(
+                        ui,
+                        "jira_attach_defaults",
+                        attach_label,
+                        field_w,
+                        |ui| {
+                            let cur = (
+                                self.jira_config.attach_screenshots,
+                                self.jira_config.attach_defect_zip,
+                            );
+                            let options = [
+                                ((true, true), "截图 + 缺陷 zip"),
+                                ((true, false), "仅截图"),
+                                ((false, true), "仅缺陷 zip"),
+                                ((false, false), "不上传"),
+                            ];
+                            for (val, label) in options {
+                                if ui.selectable_label(cur == val, label).clicked() {
+                                    self.jira_config.attach_screenshots = val.0;
+                                    self.jira_config.attach_defect_zip = val.1;
+                                }
+                            }
+                        },
+                    );
+                },
+                |ui, field_w| {
+                    let mut n = self.jira_config.max_concurrent.clamp(1, 4);
+                    if ui
+                        .add_sized(
+                            egui::vec2(field_w, row_h),
+                            egui::DragValue::new(&mut n).range(1..=4).speed(0.2),
+                        )
+                        .changed()
+                    {
+                        self.jira_config.max_concurrent = n;
+                    }
+                },
+            );
+            widgets::settings_hint(ui, "同时建单 1–4，1=串行");
+
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new("字段映射")
+                    .size(11.0)
+                    .strong()
+                    .color(theme::secondary_label(dark)),
+            );
+            ui.add_space(2.0);
+            widgets::settings_pair_row(
+                ui,
+                "标签",
+                "优先级",
+                |ui, field_w| {
+                    let mut labels = self.jira_config.labels.join(", ");
+                    let resp = ui.add_sized(
+                        egui::vec2(field_w, row_h),
+                        egui::TextEdit::singleline(&mut labels)
+                            .hint_text("imgforge, review")
+                            .horizontal_align(egui::Align::Center),
+                    );
+                    if resp.changed() {
+                        self.jira_config.labels = labels
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                    }
+                },
+                |ui, field_w| {
+                    const OPTIONS: &[&str] = &["Highest", "High", "Medium", "Low", "Lowest"];
+                    let current = if self.jira_config.default_priority.trim().is_empty() {
+                        "Medium"
+                    } else {
+                        self.jira_config.default_priority.as_str()
+                    };
+                    let mut chosen = current.to_string();
+                    widgets::toolbar_combo_box(
+                        ui,
+                        "jira_default_priority",
+                        current,
+                        field_w,
+                        |ui| {
+                            for opt in OPTIONS {
+                                if ui.selectable_label(current == *opt, *opt).clicked() {
+                                    chosen = (*opt).to_string();
+                                }
+                            }
+                            if !OPTIONS.contains(&current) {
+                                if ui
+                                    .selectable_label(true, format!("{current}（自定义）"))
+                                    .clicked()
+                                {
+                                    chosen = current.to_string();
+                                }
+                            }
+                        },
+                    );
+                    if chosen != current {
+                        self.jira_config.default_priority = chosen;
+                    }
+                },
+            );
+            widgets::settings_hint(ui, "视频缺陷仍按 S1→Highest … S5→Lowest 映射（内置）");
         });
-        ui.label(
-            egui::RichText::new(format!(
-                "远端：{}{}",
-                self.remote_config.status_label(),
-                self.remote_config
-                    .base_url
-                    .as_ref()
-                    .map(|u| format!(" · {u}"))
-                    .unwrap_or_default()
-            ))
-            .size(11.0)
-            .weak(),
-        );
+
+        ui.add_space(6.0);
+        widgets::settings_indented(ui, |ui| {
+            ui.label(
+                egui::RichText::new(format!(
+                    "状态：{} · 凭证 {}",
+                    self.jira_config.status_label(),
+                    if self.jira_config.has_credentials() {
+                        "已检测到"
+                    } else {
+                        "未设置"
+                    }
+                ))
+                .size(11.0)
+                .weak(),
+            );
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if widgets::secondary_button(ui, "探活 myself", jira_on && enabled).clicked() {
+                    self.jira_config.apply_env_overrides();
+                    match crate::jira::JiraClient::probe(&self.jira_config) {
+                        Ok(me) => {
+                            let msg = format!("JIRA 探活成功：{}", me.display_name);
+                            self.jira_probe_status = Some(msg.clone());
+                            self.status = msg.clone();
+                            self.push_log(msg);
+                        }
+                        Err(e) => {
+                            let msg = format!("JIRA 探活失败：{e}");
+                            self.jira_probe_status = Some(msg.clone());
+                            self.status = msg.clone();
+                            self.push_log(msg);
+                        }
+                    }
+                }
+                if widgets::primary_button(ui, "保存设置", true).clicked() {
+                    self.persist_jira_prefs();
+                    self.status = "已保存 JIRA 设置（不含凭证）".into();
+                    self.push_log(self.status.clone());
+                }
+            });
+            if let Some(status) = &self.jira_probe_status {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(status).size(11.0));
+            }
+        });
+    }
+
+    pub(super) fn persist_jira_prefs(&mut self) {
+        self.gui_prefs.jira = crate::jira::JiraPrefsSnapshot::from_config(&self.jira_config);
+        let _ = self.gui_prefs.save();
     }
 
     pub(super) fn sync_remote_jobs(&mut self) {
@@ -693,8 +1365,8 @@ impl ImgforgeApp {
         use eframe::egui::{Layout, RichText};
         use crate::mobile::MobilePullBackend;
 
-        const ROW_GAP: f32 = 6.0;
-        const FIELD_GAP: f32 = 8.0;
+        const ROW_GAP: f32 = 8.0;
+        const FIELD_GAP: f32 = 6.0;
         let field_h = widgets::TOOLBAR_ROW_HEIGHT;
 
         widgets::grouped_section(ui, "设备导入", |ui| {
@@ -706,6 +1378,8 @@ impl ImgforgeApp {
             ui.add_space(8.0);
 
             let narrow = ui.available_width() < theme::NARROW_BREAKPOINT;
+            // 设备导入区比全局窄断点更早进入紧凑，避免侧栏小窗横向挤压
+            let compact = ui.available_width() < 440.0;
 
             let label_cell = |ui: &mut egui::Ui, text: &str| {
                 ui.allocate_ui_with_layout(
@@ -723,7 +1397,7 @@ impl ImgforgeApp {
 
             // 控件列吃满标签后的全部剩余宽度，与上方「文件夹」/下方右栏右缘对齐
             let control_row = |ui: &mut egui::Ui, label: &str, add: &mut dyn FnMut(&mut egui::Ui)| {
-                if narrow {
+                if narrow || compact {
                     if !label.is_empty() {
                         ui.label(
                             RichText::new(label)
@@ -760,8 +1434,14 @@ impl ImgforgeApp {
                 }
             };
 
-            // 方式
-            control_row(ui, "方式", &mut |ui| {
+            // 方式：与来源/暂存/设备/并发共用 settings_span_row，左缘对齐
+            if compact || narrow {
+                ui.label(
+                    RichText::new("方式")
+                        .font(theme::section_font())
+                        .color(theme::primary_label(dark)),
+                );
+                ui.add_space(4.0);
                 let w = ui.available_width().max(80.0);
                 let label = match self.mobile_backend {
                     MobilePullBackend::Auto => "自动（挂载优先，否则 ADB）",
@@ -790,28 +1470,62 @@ impl ImgforgeApp {
                         }
                     }
                 });
-            });
+            } else {
+                widgets::settings_span_row(ui, "方式", |ui, span_w| {
+                    let label = match self.mobile_backend {
+                        MobilePullBackend::Auto => "自动（挂载优先，否则 ADB）",
+                        MobilePullBackend::Fs => "本地挂载（U 盘 / SD 卡）",
+                        MobilePullBackend::Adb => "ADB（移动设备）",
+                    };
+                    widgets::toolbar_combo_box(ui, "mobile_backend", label, span_w, |ui| {
+                        for (backend, text) in [
+                            (
+                                MobilePullBackend::Auto,
+                                "自动（挂载优先，否则 ADB）",
+                            ),
+                            (MobilePullBackend::Fs, "本地挂载（U 盘 / SD 卡）"),
+                            (MobilePullBackend::Adb, "ADB（移动设备）"),
+                        ] {
+                            if ui
+                                .selectable_label(self.mobile_backend == backend, text)
+                                .clicked()
+                            {
+                                self.mobile_backend = backend;
+                                if matches!(backend, MobilePullBackend::Adb)
+                                    && !self.mobile_source.starts_with('/')
+                                {
+                                    self.mobile_source = "/sdcard/DCIM".into();
+                                }
+                            }
+                        }
+                    });
+                });
+            }
             ui.add_space(ROW_GAP);
 
-            // 来源
+            // 来源 / 暂存 / 设备：settings_path_action_row 内部已处理小窗堆叠
+            let source_hint = match self.mobile_backend {
+                MobilePullBackend::Fs => "选择设备挂载目录…",
+                MobilePullBackend::Adb => "默认路径（刷新设备后可按台修改）",
+                MobilePullBackend::Auto => "/sdcard/DCIM 或本地挂载路径",
+            };
             let source_needs_browse = matches!(
                 self.mobile_backend,
                 MobilePullBackend::Fs | MobilePullBackend::Auto
             );
-            let mut source_browse = false;
-            let source_hint = match self.mobile_backend {
-                MobilePullBackend::Fs => "选择设备挂载目录…",
-                _ => "/sdcard/DCIM 或本地挂载路径",
-            };
-            control_row(ui, "来源", &mut |ui| {
-                source_browse = widgets::path_field_fill(
-                    ui,
-                    &mut self.mobile_source,
-                    source_hint,
-                    enabled,
-                    source_needs_browse,
-                );
-            });
+            let align_trailing = !matches!(self.mobile_backend, MobilePullBackend::Fs);
+            let browse_label = if compact { "浏览" } else { "浏览…" };
+            let refresh_label = if compact { "刷新" } else { "刷新设备" };
+
+            let source_browse = widgets::settings_path_action_row(
+                ui,
+                "来源",
+                &mut self.mobile_source,
+                source_hint,
+                enabled,
+                source_needs_browse.then_some(browse_label),
+                align_trailing && !source_needs_browse,
+            );
             if source_browse {
                 if let Some(folder) = rfd::FileDialog::new().pick_folder() {
                     self.mobile_source = folder.display().to_string();
@@ -822,17 +1536,15 @@ impl ImgforgeApp {
             }
             ui.add_space(ROW_GAP);
 
-            // 暂存
-            let mut staging_browse = false;
-            control_row(ui, "暂存", &mut |ui| {
-                staging_browse = widgets::path_field_fill(
-                    ui,
-                    &mut self.mobile_staging,
-                    "本地暂存目录…",
-                    enabled,
-                    true,
-                );
-            });
+            let staging_browse = widgets::settings_path_action_row(
+                ui,
+                "暂存",
+                &mut self.mobile_staging,
+                "共用保存根目录；未单独指定时按设备建子文件夹",
+                enabled,
+                Some(browse_label),
+                false,
+            );
             if staging_browse {
                 if let Some(folder) = rfd::FileDialog::new().pick_folder() {
                     self.mobile_staging = folder.display().to_string();
@@ -842,65 +1554,315 @@ impl ImgforgeApp {
 
             // 设备
             if !matches!(self.mobile_backend, MobilePullBackend::Fs) {
-                control_row(ui, "设备", &mut |ui| {
-                    let _ = widgets::path_field_fill(
-                        ui,
-                        &mut self.mobile_adb_serial,
-                        "多设备时填写 ADB serial，可留空",
-                        enabled,
-                        false,
+                let refresh = widgets::settings_path_action_row(
+                    ui,
+                    "设备",
+                    &mut self.mobile_adb_serial,
+                    "或手动填写 serial，可逗号分隔",
+                    enabled,
+                    Some(refresh_label),
+                    false,
+                );
+                if refresh {
+                    self.refresh_adb_devices();
+                }
+                if self.mobile_adb_devices_loaded {
+                    ui.add_space(4.0);
+                    let n = self.mobile_adb_devices.len();
+                    let selected = self
+                        .mobile_adb_devices
+                        .iter()
+                        .filter(|row| row.selected)
+                        .count();
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "已识别 {n} 台，已勾选 {selected}（勾选后点导入）"
+                        ))
+                        .size(11.0)
+                        .weak(),
                     );
-                });
+                    if n > 0 {
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(enabled, egui::Button::new("全选"))
+                                .clicked()
+                            {
+                                for row in &mut self.mobile_adb_devices {
+                                    row.selected = true;
+                                }
+                            }
+                            if ui
+                                .add_enabled(enabled, egui::Button::new("全不选"))
+                                .clicked()
+                            {
+                                for row in &mut self.mobile_adb_devices {
+                                    row.selected = false;
+                                }
+                            }
+                        });
+                    }
+                }
+                if !self.mobile_adb_devices.is_empty() {
+                    ui.add_space(4.0);
+                    ui.vertical(|ui| {
+                        for row in &mut self.mobile_adb_devices {
+                            ui.add_enabled_ui(enabled, |ui| {
+                                ui.checkbox(&mut row.selected, row.info.display_label());
+                                let field_w = (ui.available_width() - 36.0).max(80.0);
+                                ui.horizontal(|ui| {
+                                    ui.add_space(18.0);
+                                    ui.label(egui::RichText::new("来源").size(11.0).weak());
+                                    ui.add_sized(
+                                        egui::vec2(field_w, field_h * 0.9),
+                                        egui::TextEdit::singleline(&mut row.source_path)
+                                            .hint_text("/sdcard/DCIM"),
+                                    );
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.add_space(18.0);
+                                    ui.label(egui::RichText::new("保存").size(11.0).weak());
+                                    let staging_hint = if self.mobile_staging.trim().is_empty() {
+                                        "留空则须填写上方「暂存」".to_string()
+                                    } else {
+                                        format!("留空 → {}/<serial>", self.mobile_staging.trim())
+                                    };
+                                    ui.add_sized(
+                                        egui::vec2(field_w, field_h * 0.9),
+                                        egui::TextEdit::singleline(&mut row.staging_path)
+                                            .hint_text(staging_hint),
+                                    );
+                                });
+                            });
+                            ui.add_space(4.0);
+                        }
+                    });
+                }
                 ui.add_space(ROW_GAP);
             }
 
-            // 导入按钮
-            control_row(ui, "", &mut |ui| {
-                let w = ui.available_width().max(80.0);
-                if widgets::full_width_primary_button_in(ui, "从设备导入", enabled, w).clicked()
-                {
-                    self.start_device_import();
-                }
-            });
+            // 并发：与「设备」等路径行共用 settings_span_row，保证控件左缘对齐
+            let concurrency_hint = "每台设备内文件并发（1–8）";
+            if compact || narrow {
+                ui.label(
+                    RichText::new("并发")
+                        .font(theme::section_font())
+                        .color(theme::primary_label(dark)),
+                );
+                ui.add_space(4.0);
+                ui.add_sized(
+                    egui::vec2(88.0_f32.min(ui.available_width()), field_h),
+                    egui::DragValue::new(&mut self.mobile_pull_concurrency)
+                        .range(1..=8)
+                        .speed(0.2)
+                        .suffix(" 路"),
+                );
+                ui.add_space(2.0);
+                ui.label(egui::RichText::new(concurrency_hint).size(11.0).weak());
+            } else {
+                widgets::settings_span_row(ui, "并发", |ui, _span_w| {
+                    ui.spacing_mut().item_spacing.x = 16.0;
+                    ui.with_layout(Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add_sized(
+                            egui::vec2(88.0, field_h),
+                            egui::DragValue::new(&mut self.mobile_pull_concurrency)
+                                .range(1..=8)
+                                .speed(0.2)
+                                .suffix(" 路"),
+                        );
+                        ui.label(
+                            egui::RichText::new(concurrency_hint)
+                                .size(12.0)
+                                .color(theme::secondary_label(dark)),
+                        );
+                    });
+                });
+            }
+            ui.add_space(ROW_GAP);
+
+            // 导入按钮：与路径行同一套 span 几何（不受 compact 影响）
+            if widgets::settings_primary_action_row(ui, "从设备导入", enabled).clicked() {
+                self.start_device_import();
+            }
         });
+    }
+
+    pub(super) fn refresh_adb_devices(&mut self) {
+        use crate::mobile::{list_ready_devices, MobilePullConfig};
+        use super::MobileAdbDeviceRow;
+
+        let config = MobilePullConfig {
+            enabled: true,
+            backend: crate::mobile::MobilePullBackend::Adb,
+            ..MobilePullConfig::default()
+        };
+        match list_ready_devices(&config) {
+            Ok(devices) => {
+                let n = devices.len();
+                let default_path = if self.mobile_source.trim().is_empty() {
+                    "/sdcard/DCIM".to_string()
+                } else {
+                    self.mobile_source.trim().to_string()
+                };
+                // 保留同 serial 已填路径与勾选；新设备默认不勾选
+                let previous = std::mem::take(&mut self.mobile_adb_devices);
+                self.mobile_adb_devices = devices
+                    .into_iter()
+                    .map(|info| {
+                        if let Some(prev) =
+                            previous.iter().find(|row| row.info.serial == info.serial)
+                        {
+                            MobileAdbDeviceRow {
+                                info,
+                                selected: prev.selected,
+                                source_path: if prev.source_path.trim().is_empty() {
+                                    default_path.clone()
+                                } else {
+                                    prev.source_path.clone()
+                                },
+                                staging_path: prev.staging_path.clone(),
+                            }
+                        } else {
+                            MobileAdbDeviceRow {
+                                info,
+                                selected: false,
+                                source_path: default_path.clone(),
+                                staging_path: String::new(),
+                            }
+                        }
+                    })
+                    .collect();
+                self.mobile_adb_devices_loaded = true;
+                if n == 0 {
+                    self.status = "未发现已授权 ADB 设备".into();
+                } else {
+                    self.status = format!("已识别 {n} 台设备（请勾选、确认来源/保存路径后导入）");
+                }
+                self.push_log(self.status.clone());
+            }
+            Err(e) => {
+                self.mobile_adb_devices.clear();
+                self.mobile_adb_devices_loaded = false;
+                self.status = format!("刷新设备失败：{e}");
+                self.push_log(self.status.clone());
+            }
+        }
     }
 
     pub(super) fn start_device_import(&mut self) {
         use crate::gui::app_types::DeviceImportResult;
-        use crate::mobile::{import_media, MobilePullConfig};
+        use crate::mobile::{import_media, parse_serial_list, AdbDevicePull, MobilePullConfig};
 
         if self.is_running() {
             return;
         }
-        if self.mobile_source.trim().is_empty() {
-            self.status = "请填写设备来源路径".into();
-            self.push_log(self.status.clone());
-            return;
-        }
         if self.mobile_staging.trim().is_empty() {
-            self.status = "请填写本地暂存目录".into();
+            let any_without_staging = self.mobile_adb_devices.iter().any(|row| {
+                row.selected && row.staging_path.trim().is_empty()
+            });
+            let manual_serials = parse_serial_list(&self.mobile_adb_serial);
+            if any_without_staging || !manual_serials.is_empty() {
+                // 手动 serial 依赖全局暂存；勾选但未填保存路径也依赖全局暂存
+                self.status = "请填写共用「暂存」目录，或为每台勾选设备单独填写「保存」路径".into();
+                self.push_log(self.status.clone());
+                return;
+            }
+        }
+
+        let default_source = self.mobile_source.trim().to_string();
+        let mut adb_devices: Vec<AdbDevicePull> = self
+            .mobile_adb_devices
+            .iter()
+            .filter(|row| row.selected)
+            .map(|row| {
+                let src = row.source_path.trim();
+                let staging = row.staging_path.trim();
+                AdbDevicePull::with_paths(
+                    row.info.serial.clone(),
+                    if src.is_empty() {
+                        default_source.as_str()
+                    } else {
+                        src
+                    },
+                    if staging.is_empty() {
+                        None
+                    } else {
+                        Some(PathBuf::from(staging))
+                    },
+                )
+            })
+            .collect();
+
+        // 手动 serial：用全局来源路径 + 共用暂存/<serial>
+        for s in parse_serial_list(&self.mobile_adb_serial) {
+            if adb_devices.iter().any(|d| d.serial == s) {
+                continue;
+            }
+            if default_source.is_empty() {
+                self.status = format!("设备 {s} 需要来源路径：请填写上方「来源」或在列表中勾选并填路径");
+                self.push_log(self.status.clone());
+                return;
+            }
+            adb_devices.push(AdbDevicePull::new(s, default_source.clone()));
+        }
+
+        // GUI：必须明确勾选或填写，禁止「未指定 → 自动拉全部」
+        if adb_devices.is_empty() {
+            self.status = "请先刷新并勾选要导入的设备，或填写 serial".into();
             self.push_log(self.status.clone());
             return;
         }
 
+        for device in &adb_devices {
+            if device.resolved_source(&default_source).is_empty() {
+                self.status = format!(
+                    "设备 {} 的来源路径为空，请填写路径",
+                    device.serial
+                );
+                self.push_log(self.status.clone());
+                return;
+            }
+        }
+
+        let adb_serials: Vec<String> = adb_devices.iter().map(|d| d.serial.clone()).collect();
+        let adb_serial = if adb_serials.len() == 1 {
+            Some(adb_serials[0].clone())
+        } else {
+            None
+        };
+
+        let source_path = if default_source.is_empty() {
+            adb_devices
+                .first()
+                .and_then(|d| d.source_path.clone())
+                .unwrap_or_else(|| "/sdcard/DCIM".into())
+        } else {
+            default_source
+        };
+
+        let staging_dir = if self.mobile_staging.trim().is_empty() {
+            // 全部设备都有独立保存路径时，用第一台的保存目录作为 outcome 根
+            adb_devices
+                .iter()
+                .find_map(|d| d.staging_override().cloned())
+                .unwrap_or_else(|| PathBuf::from(".imgforge/mobile-import"))
+        } else {
+            PathBuf::from(self.mobile_staging.trim())
+        };
+
         let config = MobilePullConfig {
             enabled: true,
             backend: self.mobile_backend,
-            source_path: self.mobile_source.trim().to_string(),
-            staging_dir: PathBuf::from(self.mobile_staging.trim()),
+            source_path,
+            staging_dir,
             preserve_structure: true,
-            adb_serial: {
-                let s = self.mobile_adb_serial.trim();
-                if s.is_empty() {
-                    None
-                } else {
-                    Some(s.to_string())
-                }
-            },
+            adb_serial,
+            adb_serials,
+            adb_devices,
             adb_mode: crate::mobile::AdbBinaryMode::Auto,
             adb_path: None,
             allow_path_fallback: true,
             delete_after_pull: false,
+            concurrency: self.mobile_pull_concurrency.clamp(1, 8),
         };
 
         if let Err(e) = config.validate() {
@@ -918,12 +1880,36 @@ impl ImgforgeApp {
             progress: Arc::clone(&progress),
         };
         self.status = "正在从设备导入媒体…".into();
+        let targets_summary: Vec<String> = config
+            .adb_devices
+            .iter()
+            .map(|d| {
+                format!(
+                    "{}:{}",
+                    d.serial,
+                    d.resolved_source(&config.source_path)
+                )
+            })
+            .collect();
         self.push_log(format!(
-            "设备导入：{:?} {} → {}",
+            "设备导入：{:?} [{}] → 共用暂存 {}",
             config.backend,
-            config.source_path,
+            targets_summary.join(", "),
             config.staging_dir.display()
         ));
+        for d in &config.adb_devices {
+            let root = crate::mobile::resolve_device_staging_root(
+                &d.serial,
+                d.staging_override(),
+                &config.staging_dir,
+            );
+            self.push_log(format!(
+                "  {} 来源={} 保存={}",
+                d.serial,
+                d.resolved_source(&config.source_path),
+                root.display()
+            ));
+        }
 
         thread::spawn(move || {
             let result = import_media(config, cancelled, Some(progress));
@@ -1039,56 +2025,78 @@ impl ImgforgeApp {
         use crate::gui::theme;
 
         widgets::grouped_section(ui, "转换设置", |ui| {
-            widgets::settings_labeled_row(ui, "目标格式", |ui| {
-                let combo_w = f32::min(140.0, ui.available_width());
-                egui::ComboBox::from_id_salt("format")
-                    .width(combo_w)
-                    .selected_text(self.formats[self.format_index].extension().to_uppercase())
-                    .show_ui(ui, |ui| {
-                        for (idx, format) in self.formats.iter().enumerate() {
-                            ui.selectable_value(
-                                &mut self.format_index,
-                                idx,
+            widgets::settings_span_row(ui, "目标格式", |ui, span_w| {
+                let label = self.formats[self.format_index]
+                    .extension()
+                    .to_uppercase();
+                widgets::toolbar_combo_box(ui, "format", &label, span_w, |ui| {
+                    for (idx, format) in self.formats.iter().enumerate() {
+                        if ui
+                            .selectable_label(
+                                self.format_index == idx,
                                 format.extension().to_uppercase(),
-                            );
+                            )
+                            .clicked()
+                        {
+                            self.format_index = idx;
                         }
-                    });
+                    }
+                });
             });
 
-            ui.add_space(6.0);
+            widgets::settings_row_gap(ui);
             widgets::quality_slider_row(ui, &mut self.quality, enabled && !self.use_target_max_bytes);
-            ui.add_space(6.0);
-            widgets::quality_presets_row(
-                ui,
-                &mut self.quality,
-                enabled && !self.use_target_max_bytes,
-            );
 
-            ui.add_space(6.0);
-            widgets::settings_labeled_row(ui, "目标体积", |ui| {
-                ui.checkbox(&mut self.use_target_max_bytes, "限制单文件 ≤");
-                ui.add_enabled_ui(enabled && self.use_target_max_bytes, |ui| {
-                    ui.add(
-                        egui::DragValue::new(&mut self.target_max_kb)
-                            .range(16..=20_480)
-                            .suffix(" KB"),
+            widgets::settings_row_gap(ui);
+            // 左：勾选文案；右：体积数值 —— 控件列左右外缘对齐
+            widgets::settings_span_row(ui, "目标体积", |ui, span_w| {
+                let h = widgets::TOOLBAR_ROW_HEIGHT;
+                let drag_w = 88.0_f32.min(span_w);
+                let (span, _) = ui.allocate_exact_size(egui::vec2(span_w, h), egui::Sense::hover());
+                let drag_rect = egui::Rect::from_min_size(
+                    egui::pos2(span.max.x - drag_w, span.min.y),
+                    egui::vec2(drag_w, h),
+                );
+                let check_rect = egui::Rect::from_min_max(
+                    span.min,
+                    egui::pos2((drag_rect.min.x - 6.0).max(span.min.x), span.max.y),
+                );
+                ui.allocate_ui_at_rect(check_rect, |ui| {
+                    ui.set_min_size(check_rect.size());
+                    ui.set_max_size(check_rect.size());
+                    ui.with_layout(
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            ui.checkbox(&mut self.use_target_max_bytes, "限制单文件 ≤");
+                        },
                     );
+                });
+                ui.allocate_ui_at_rect(drag_rect, |ui| {
+                    ui.set_min_size(drag_rect.size());
+                    ui.set_max_size(drag_rect.size());
+                    ui.add_enabled_ui(enabled && self.use_target_max_bytes, |ui| {
+                        ui.add_sized(
+                            drag_rect.size(),
+                            egui::DragValue::new(&mut self.target_max_kb)
+                                .range(16..=20_480)
+                                .suffix(" KB"),
+                        );
+                    });
                 });
             });
             if self.use_target_max_bytes {
-                ui.label(
-                    RichText::new("启用后将对 JPEG/WebP 等自动二分搜索质量以控制体积")
-                        .size(11.0)
-                        .color(theme::secondary_label(dark)),
+                widgets::settings_hint(
+                    ui,
+                    "启用后将对 JPEG/WebP 等自动二分搜索质量以控制体积",
                 );
             }
 
-            ui.add_space(6.0);
-            widgets::settings_labeled_row(ui, "重命名", |ui| {
+            widgets::settings_row_gap(ui);
+            widgets::settings_span_row(ui, "重命名", |ui, span_w| {
                 let response = ui.add_enabled_ui(enabled, |ui| {
-                    ui.add(
+                    ui.add_sized(
+                        egui::vec2(span_w.max(80.0), widgets::TOOLBAR_ROW_HEIGHT),
                         egui::TextEdit::singleline(&mut self.rename_template)
-                            .desired_width(ui.available_width().min(280.0))
                             .hint_text("{dir}_{stem}_{index}"),
                     )
                 });
@@ -1099,17 +2107,15 @@ impl ImgforgeApp {
             if let Some(err) = &self.rename_preview_error {
                 ui.colored_label(theme::error_color(dark), err);
             } else if !self.rename_preview.is_empty() {
-                ui.label(
-                    RichText::new("预览输出名")
-                        .size(11.0)
-                        .color(theme::secondary_label(dark)),
-                );
+                widgets::settings_hint(ui, "预览输出名");
                 for (src, out) in &self.rename_preview {
-                    ui.label(
-                        RichText::new(format!("{src} → {out}"))
-                            .size(11.0)
-                            .family(egui::FontFamily::Monospace),
-                    );
+                    widgets::settings_indented(ui, |ui| {
+                        ui.label(
+                            RichText::new(format!("{src} → {out}"))
+                                .size(11.0)
+                                .family(egui::FontFamily::Monospace),
+                        );
+                    });
                 }
             }
 
@@ -1172,6 +2178,7 @@ impl ImgforgeApp {
                 if name.is_empty() {
                     self.status = "请输入预设名称".into();
                 } else {
+                    self.persist_brightness_match_prefs();
                     self.gui_prefs
                         .upsert_preset(name.clone(), self.snapshot_from_ui());
                     let _ = self.gui_prefs.save();
@@ -1271,7 +2278,7 @@ impl ImgforgeApp {
         use crate::gui::theme;
 
         widgets::grouped_section(ui, "转换前摘要", |ui| {
-            ui.horizontal_wrapped(|ui| {
+            widgets::equal_height_row(ui, 6.0, |ui| {
                 if widgets::compact_secondary_button(ui, "刷新预估", enabled).clicked() {
                     self.refresh_previews();
                 }

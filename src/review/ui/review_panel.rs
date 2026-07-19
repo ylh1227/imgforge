@@ -20,9 +20,9 @@ use crate::review::domain::{BatchStats, ReviewBatch, ReviewImageItem, ReviewStat
 use crate::review::error::ReviewResult;
 use crate::review::is_irreversible_transition;
 use crate::review::service::{
-    BatchAnnotateRequest, BatchImageScreenshotRequest, BatchImageScreenshotResult,
-    BatchImageScreenshotService, BatchRemarkRequest, BatchStatusRequest, ExportService,
-    ShortcutAction, StatusTransitionWarning,
+    format_roi_label, scan_images, BatchAnnotateRequest, BatchImageScreenshotRequest,
+    BatchImageScreenshotResult, BatchImageScreenshotService, BatchRemarkRequest, BatchStatusRequest,
+    ExportService, ShortcutAction, StatusTransitionWarning,
 };
 use crate::review::service::{ImageAnalysis, ImageAnalysisService, ReviewModuleConfig};
 use crate::review::storage::SqliteReviewRepository;
@@ -46,8 +46,9 @@ use crate::review::ui::review_panel_helpers::{
     histogram_ui, truncate_text, viewport_size,
 };
 
-use crate::review::ui::review_panel_types::{BatchOpKind, DialogState, RightTab};
+use crate::review::ui::review_panel_types::{BatchOpKind, DialogState, JiraResultLine, RightTab};
 pub use crate::review::ui::review_panel_types::{ReviewPanelHost, ReviewPanelOutput};
+use crate::review::ui::roi_picker::{FolderRoiDialogAction, FolderRoiDialogState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReviewLayoutMode {
@@ -99,6 +100,7 @@ pub struct ReviewPanel {
     last_batch_annotation_ids: Vec<i64>,
     config: ReviewModuleConfig,
     remote_config: crate::remote::RemoteConfig,
+    jira_config: crate::jira::JiraConfig,
     remote_batch_id: Option<String>,
     remote_item_ids: HashMap<i64, String>,
     data_source: crate::remote::DataSource,
@@ -132,9 +134,18 @@ pub struct ReviewPanel {
     screenshot_format: ScreenshotFormat,
     screenshot_write_json: bool,
     screenshot_write_contact_sheet: bool,
+    /// 从文件夹导出时是否递归子目录。
+    screenshot_folder_recursive: bool,
     screenshot_job: BackgroundJob<BatchImageScreenshotResult>,
     screenshot_job_started: Option<Instant>,
     screenshot_job_dir: Option<PathBuf>,
+    /// 当前截图任务是否为「文件夹批量截图」（影响完成文案 / 历史）。
+    screenshot_job_from_folder: bool,
+    jira_job: BackgroundJob<crate::jira::JiraBatchSubmitResult>,
+    /// 文件夹导出 ROI 对话框。
+    folder_roi_dialog: Option<FolderRoiDialogState>,
+    /// 最近一次文件夹导出使用的 ROI 标签（写入 history）。
+    screenshot_last_roi_label: String,
     /// 画布区域最近一次布局尺寸（用于「适应窗口」，避免用整窗 viewport 误算）。
     canvas_area_size: egui::Vec2,
     last_viewport_size: egui::Vec2,
@@ -148,6 +159,8 @@ impl ReviewPanel {
         let config = ReviewModuleConfig::load().unwrap_or_default();
         let mut remote_config = crate::remote::RemoteConfig::default();
         remote_config.apply_env_overrides();
+        let mut jira_config = crate::jira::JiraConfig::default();
+        jira_config.apply_env_overrides();
         let data_source =
             DataSource::from_remote_enabled(crate::remote::remote_enabled(&remote_config));
         let mut panel = Self {
@@ -172,6 +185,7 @@ impl ReviewPanel {
             last_batch_annotation_ids: Vec::new(),
             config,
             remote_config,
+            jira_config,
             remote_batch_id: None,
             remote_item_ids: HashMap::new(),
             data_source,
@@ -203,9 +217,14 @@ impl ReviewPanel {
             screenshot_format: ScreenshotFormat::Jpeg,
             screenshot_write_json: false,
             screenshot_write_contact_sheet: false,
+            screenshot_folder_recursive: true,
             screenshot_job: BackgroundJob::default(),
             screenshot_job_started: None,
             screenshot_job_dir: None,
+            screenshot_job_from_folder: false,
+            jira_job: BackgroundJob::default(),
+            folder_roi_dialog: None,
+            screenshot_last_roi_label: "full".into(),
             canvas_area_size: egui::Vec2::ZERO,
             last_viewport_size: egui::Vec2::ZERO,
             viewport_resize_frames: 0,
@@ -231,6 +250,11 @@ impl ReviewPanel {
             self.data_source = want;
             let _ = self.reload_batches();
         }
+    }
+
+    pub fn set_jira_config(&mut self, mut jira_config: crate::jira::JiraConfig) {
+        jira_config.apply_env_overrides();
+        self.jira_config = jira_config;
     }
 
     /// 由主应用在切换 Tab 前调度：从转换队列创建评审批次。
@@ -267,6 +291,8 @@ impl ReviewPanel {
         self.process_pending_import();
         self.handle_shortcut_actions(ctx);
         self.poll_screenshot_job(ctx);
+        self.poll_jira_job(ctx);
+        self.show_folder_roi_dialog(ctx);
         let vp = viewport_size(ctx);
         if (vp - self.last_viewport_size).length_sq() > 4.0 {
             self.viewport_resize_frames = 12;
@@ -352,18 +378,8 @@ impl ReviewPanel {
         compact: bool,
     ) {
         if compact {
-            ui.label(
-                RichText::new("ImgForge")
-                    .font(theme::title_font())
-                    .strong()
-                    .color(theme::primary_label(dark)),
-            );
-            ui.label(
-                RichText::new("批注、对比与通过状态")
-                    .font(theme::subtitle_font())
-                    .color(theme::secondary_label(dark)),
-            );
-            ui.add_space(8.0);
+            widgets::page_subtitle(ui, "批注、对比与通过状态");
+            ui.add_space(6.0);
         } else {
             widgets::navigation_header(ui, "批注、对比与通过状态");
             widgets::page_header_gap(ui);
@@ -643,10 +659,8 @@ impl ReviewPanel {
             let page_label = idx.map(|i| format!("{}/{}", i + 1, self.images.len()));
             let narrow = avail < theme::REVIEW_TWO_COL_BREAKPOINT;
 
-            // 导航 + 状态：始终可换行，避免小窗单行挤压
-            ui.horizontal_wrapped(|ui| {
-                ui.set_max_width(avail);
-                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            // 导航 + 状态：固定行高，避免 horizontal_wrapped 阶梯错位
+            widgets::toolbar_row(ui, |ui| {
                 if widgets::compact_secondary_button(ui, "◀ 上一张", can_prev).clicked() {
                     self.select_relative(-1);
                 }
@@ -654,10 +668,16 @@ impl ReviewPanel {
                     self.select_relative(1);
                 }
                 if let Some(label) = &page_label {
-                    ui.label(
-                        RichText::new(label)
-                            .size(13.0)
-                            .color(theme::secondary_label(dark)),
+                    ui.add_sized(
+                        egui::vec2(
+                            widgets::toolbar_control_width(ui, label),
+                            widgets::TOOLBAR_ROW_HEIGHT,
+                        ),
+                        egui::Label::new(
+                            RichText::new(label)
+                                .size(13.0)
+                                .color(theme::secondary_label(dark)),
+                        ),
                     );
                 }
                 let current_status = self.current_item().map(|item| item.status);
@@ -671,9 +691,7 @@ impl ReviewPanel {
             ui.add_space(8.0);
 
             if narrow {
-                ui.horizontal_wrapped(|ui| {
-                    ui.set_max_width(avail);
-                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                widgets::toolbar_row(ui, |ui| {
                     widgets::toolbar_field_label(ui, "对比", dark);
                     self.compare_view.mode_selector_ui(ui);
                 });
@@ -689,9 +707,7 @@ impl ReviewPanel {
                     self.start_batch_compare();
                 }
             } else {
-                ui.horizontal_wrapped(|ui| {
-                    ui.set_max_width(avail);
-                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                widgets::toolbar_row(ui, |ui| {
                     widgets::toolbar_field_label(ui, "对比模式", dark);
                     self.compare_view.mode_selector_ui(ui);
                     let batch_label = format!("批量对比 ({selected_count})");
@@ -708,9 +724,7 @@ impl ReviewPanel {
 
             ui.add_space(8.0);
 
-            ui.horizontal_wrapped(|ui| {
-                ui.set_max_width(avail);
-                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            widgets::toolbar_row(ui, |ui| {
                 let canvas = self.canvas_size_for_view(ctx);
                 if widgets::compact_secondary_button(
                     ui,
@@ -1658,9 +1672,7 @@ impl ReviewPanel {
             ui.add_space(8.0);
             let gap = 6.0;
             let cell = widgets::equal_cell_width(inner_w, gap, 2);
-            ui.horizontal(|ui| {
-                ui.set_max_width(inner_w);
-                ui.spacing_mut().item_spacing.x = gap;
+            widgets::equal_height_row(ui, gap, |ui| {
                 if widgets::full_width_secondary_button_in(ui, "更新状态", true, cell).clicked() {
                     self.dialog = Some(DialogState::ConfirmBatchOp(BatchOpKind::SetStatus(
                         self.batch_target_status,
@@ -1678,9 +1690,7 @@ impl ReviewPanel {
             }
 
             ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.set_max_width(inner_w);
-                ui.spacing_mut().item_spacing.x = gap;
+            widgets::equal_height_row(ui, gap, |ui| {
                 if widgets::tab_chip_sized(
                     ui,
                     "覆盖备注",
@@ -1703,6 +1713,49 @@ impl ReviewPanel {
             ui.add_space(gap);
             if widgets::full_width_primary_button(ui, "批量写入备注", true).clicked() {
                 self.dialog = Some(DialogState::ConfirmBatchOp(BatchOpKind::AddRemark));
+            }
+
+            ui.add_space(10.0);
+            ui.separator();
+            ui.add_space(8.0);
+            ui.label(RichText::new("JIRA").strong());
+            let jira_ready = self.jira_config.is_configured() && self.jira_config.has_credentials();
+            ui.label(
+                RichText::new(format!(
+                    "{} · {}",
+                    self.jira_config.status_label(),
+                    self.jira_config
+                        .project_key
+                        .as_deref()
+                        .unwrap_or("未设 project")
+                ))
+                .size(12.0)
+                .color(theme::secondary_label(dark)),
+            );
+            let jira_enabled = !self.sidebar.selected_ids.is_empty()
+                && jira_ready
+                && !self.jira_job.is_running();
+            ui.add_space(6.0);
+            if widgets::full_width_secondary_button(ui, "提交 JIRA", jira_enabled).clicked() {
+                self.dialog = Some(DialogState::ConfirmJiraSubmit {
+                    force_recreate: false,
+                    attach: self.jira_config.attach_screenshots,
+                });
+            }
+            if self.jira_job.is_running() {
+                if let Some(progress) = self.jira_job.progress() {
+                    ui.add(egui::ProgressBar::new(progress.fraction()).show_percentage());
+                }
+                if widgets::full_width_secondary_button(ui, "取消提交", true).clicked() {
+                    self.jira_job.request_cancel();
+                    self.set_status("正在取消 JIRA 提交…");
+                }
+            } else if !jira_ready {
+                ui.label(
+                    RichText::new("需启用 [jira] 并设置环境变量凭证")
+                        .size(11.0)
+                        .weak(),
+                );
             }
 
             if !self.last_batch_annotation_ids.is_empty() {
@@ -1733,9 +1786,7 @@ impl ReviewPanel {
                     .color(theme::secondary_label(dark)),
             );
             ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.set_max_width(inner_w);
-                ui.spacing_mut().item_spacing.x = gap;
+            widgets::equal_height_row(ui, gap, |ui| {
                 if widgets::tab_chip_sized(
                     ui,
                     "选中图片",
@@ -1756,10 +1807,8 @@ impl ReviewPanel {
                 }
             });
             ui.add_space(6.0);
-            ui.checkbox(&mut self.screenshot_include_annotations, "包含标注");
-            ui.horizontal(|ui| {
-                ui.set_max_width(inner_w);
-                ui.spacing_mut().item_spacing.x = gap;
+            ui.checkbox(&mut self.screenshot_include_annotations, "包含标注（仅批次导出）");
+            widgets::equal_height_row(ui, gap, |ui| {
                 ui.add_sized(
                     egui::vec2(36.0, widgets::TOOLBAR_ROW_HEIGHT),
                     egui::Label::new(
@@ -1802,8 +1851,9 @@ impl ReviewPanel {
                 &mut self.screenshot_write_contact_sheet,
                 "生成索引图（自动分页）",
             );
+            ui.checkbox(&mut self.screenshot_folder_recursive, "文件夹导出包含子目录");
             ui.label(
-                RichText::new("默认生成 CSV；失败项不中断整批")
+                RichText::new("默认生成 CSV；失败项不中断整批；文件夹导出不写评审库")
                     .weak()
                     .size(11.0),
             );
@@ -1820,6 +1870,12 @@ impl ReviewPanel {
             if widgets::full_width_secondary_button(ui, "批量导出截图…", export_enabled).clicked()
             {
                 self.export_batch_screenshots(ctx);
+            }
+            ui.add_space(4.0);
+            let folder_enabled = !self.screenshot_job.is_running();
+            if widgets::full_width_secondary_button(ui, "从文件夹导出…", folder_enabled).clicked()
+            {
+                self.export_folder_screenshots(ctx);
             }
         });
     }
@@ -1859,16 +1915,94 @@ impl ReviewPanel {
                 write_csv_manifest: true,
                 write_json_manifest: self.screenshot_write_json,
                 write_contact_sheet: self.screenshot_write_contact_sheet,
+                crop: None,
             };
             let total = targets.len();
             self.screenshot_job_started = Some(Instant::now());
             self.screenshot_job_dir = Some(dir);
+            self.screenshot_job_from_folder = false;
             self.screenshot_job.spawn(ctx, total, move |progress| {
                 let repo = SqliteReviewRepository::open().map_err(|e| e.to_string())?;
                 BatchImageScreenshotService::export(&repo, &request, Some(&*progress))
                     .map_err(|e| e.to_string())
             });
         }
+    }
+
+    fn export_folder_screenshots(&mut self, _ctx: &egui::Context) {
+        if self.screenshot_job.is_running() {
+            return;
+        }
+        let Some(source_dir) = rfd::FileDialog::new().pick_folder() else {
+            return;
+        };
+        let paths = match scan_images(&source_dir, self.screenshot_folder_recursive) {
+            Ok(paths) if !paths.is_empty() => paths,
+            Ok(_) => {
+                self.error = Some("所选文件夹中没有可导出的图片".into());
+                return;
+            }
+            Err(e) => {
+                self.error = Some(e.to_string());
+                return;
+            }
+        };
+        self.folder_roi_dialog = Some(FolderRoiDialogState::new(
+            paths,
+            source_dir.display().to_string(),
+        ));
+    }
+
+    fn show_folder_roi_dialog(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = self.folder_roi_dialog.as_mut() else {
+            return;
+        };
+        let action = dialog.show(ctx);
+        match action {
+            FolderRoiDialogAction::None => {}
+            FolderRoiDialogAction::Cancel => {
+                self.folder_roi_dialog = None;
+            }
+            FolderRoiDialogAction::Confirm { crop } => {
+                let dialog = self.folder_roi_dialog.take().expect("dialog just shown");
+                self.start_folder_screenshot_export(ctx, dialog.paths, dialog.source_label, crop);
+            }
+        }
+    }
+
+    fn start_folder_screenshot_export(
+        &mut self,
+        ctx: &egui::Context,
+        paths: Vec<PathBuf>,
+        source_label: String,
+        crop: Option<crate::review::domain::NormRect>,
+    ) {
+        if self.screenshot_job.is_running() {
+            return;
+        }
+        let Some(out_dir) = rfd::FileDialog::new().pick_folder() else {
+            return;
+        };
+        let mut request = BatchImageScreenshotRequest::from_paths(paths, out_dir.clone());
+        request.format = self.screenshot_format;
+        request.write_json_manifest = self.screenshot_write_json;
+        request.write_contact_sheet = self.screenshot_write_contact_sheet;
+        request.include_annotations = false;
+        request.crop = crop;
+        let roi_label = format_roi_label(crop);
+        let total = request.items.len();
+        self.screenshot_job_started = Some(Instant::now());
+        self.screenshot_job_dir = Some(out_dir);
+        self.screenshot_job_from_folder = true;
+        self.screenshot_last_roi_label = roi_label.clone();
+        self.set_status(&format!(
+            "正在从文件夹导出 {} 张…（源：{source_label} · {roi_label}）",
+            total
+        ));
+        self.screenshot_job.spawn(ctx, total, move |progress| {
+            BatchImageScreenshotService::export_paths(&request, Some(&*progress))
+                .map_err(|e| e.to_string())
+        });
     }
 
     fn poll_screenshot_job(&mut self, ctx: &egui::Context) {
@@ -1883,6 +2017,13 @@ impl ReviewPanel {
             .screenshot_job_dir
             .take()
             .unwrap_or_else(|| PathBuf::from("."));
+        let from_folder = self.screenshot_job_from_folder;
+        self.screenshot_job_from_folder = false;
+        let operation = if from_folder {
+            "文件夹批量截图"
+        } else {
+            "批量导出截图"
+        };
         match result {
             Ok(result) => {
                 let msg = format!(
@@ -1900,8 +2041,18 @@ impl ReviewPanel {
                 } else {
                     ActionHistoryStatus::Failed
                 };
+                let annotations_note = if from_folder {
+                    false
+                } else {
+                    self.screenshot_include_annotations
+                };
+                let roi_part = if from_folder {
+                    format!(" · {}", self.screenshot_last_roi_label)
+                } else {
+                    String::new()
+                };
                 self.record_action_history(
-                    "批量导出截图",
+                    operation,
                     dir.display().to_string(),
                     status,
                     result.succeeded,
@@ -1909,15 +2060,16 @@ impl ReviewPanel {
                     result.requested,
                     started.elapsed().as_millis() as u64,
                     Some(format!(
-                        "格式：{} · 标注：{} · JSON {} · 索引 {}",
+                        "格式：{} · 标注：{} · JSON {} · 索引 {}{}",
                         self.screenshot_format.extension().to_uppercase(),
-                        self.screenshot_include_annotations,
+                        annotations_note,
                         if result.json_manifest.is_some() {
                             "是"
                         } else {
                             "否"
                         },
                         format_contact_sheets(&result.contact_sheets),
+                        roi_part,
                     )),
                 );
             }
@@ -2019,6 +2171,268 @@ impl ReviewPanel {
                         confirm,
                     });
                 }
+            }
+            DialogState::ConfirmJiraSubmit {
+                mut force_recreate,
+                mut attach,
+            } => {
+                let count = self.sidebar.selected_ids.len();
+                let project = self
+                    .jira_config
+                    .project_key
+                    .clone()
+                    .unwrap_or_else(|| "？".into());
+                egui::Window::new("提交 JIRA")
+                    .collapsible(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.label(format!(
+                            "将为已选 {count} 张图片在项目 {project} 各创建 1 个 Bug。"
+                        ));
+                        ui.checkbox(&mut attach, "上传截图附件（含标注可选，见批量截图设置）");
+                        ui.checkbox(&mut force_recreate, "已有关联 Issue 时仍强制新建");
+                        ui.horizontal(|ui| {
+                            if widgets::primary_button(ui, "开始提交", true).clicked() {
+                                self.start_jira_submit(ctx, force_recreate, attach);
+                                self.dialog = None;
+                            }
+                            if widgets::secondary_button(ui, "取消", true).clicked() {
+                                self.dialog = None;
+                            }
+                        });
+                    });
+                if self.dialog.is_some() {
+                    self.dialog = Some(DialogState::ConfirmJiraSubmit {
+                        force_recreate,
+                        attach,
+                    });
+                }
+            }
+            DialogState::JiraSubmitResult { summary, lines } => {
+                egui::Window::new("JIRA 提交结果")
+                    .collapsible(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .default_width(420.0)
+                    .show(ctx, |ui| {
+                        ui.label(RichText::new(&summary).strong());
+                        ui.add_space(6.0);
+                        ScrollArea::vertical()
+                            .id_salt("review_jira_result")
+                            .max_height(220.0)
+                            .show(ui, |ui| {
+                                for line in &lines {
+                                    if let Some(url) = &line.browse_url {
+                                        if ui
+                                            .link(RichText::new(&line.text).size(12.0))
+                                            .on_hover_text(url)
+                                            .clicked()
+                                        {
+                                            let _ = open::that(url);
+                                        }
+                                    } else {
+                                        ui.label(RichText::new(&line.text).size(12.0));
+                                    }
+                                }
+                            });
+                        if widgets::primary_button(ui, "关闭", true).clicked() {
+                            self.dialog = None;
+                        }
+                    });
+            }
+        }
+    }
+
+    fn start_jira_submit(&mut self, ctx: &egui::Context, force_recreate: bool, attach: bool) {
+        let ids = self.sidebar.selected_ids.clone();
+        if ids.is_empty() {
+            self.error = Some("请先在列表中多选图片".into());
+            return;
+        }
+        if self.jira_job.is_running() {
+            return;
+        }
+        let items = match self.service.repo().get_images_by_ids(&ids) {
+            Ok(items) => items,
+            Err(e) => {
+                self.error = Some(e.to_string());
+                return;
+            }
+        };
+        let mut annotation_summaries: Vec<(i64, String)> = Vec::new();
+        for item in &items {
+            if let Ok(anns) = self.service.load_annotations(item.id) {
+                if !anns.is_empty() {
+                    annotation_summaries.push((
+                        item.id,
+                        crate::jira::mapping::format_annotation_summary(&anns),
+                    ));
+                }
+            }
+        }
+        let mut jira_cfg = self.jira_config.clone();
+        jira_cfg.apply_env_overrides();
+        let include_annotations = self.screenshot_include_annotations;
+        let screenshot_format = self.screenshot_format;
+        let total = items.len();
+        self.set_status("正在提交 JIRA…");
+        self.jira_job
+            .spawn_with_context(ctx, total, move |job| {
+                use crate::ui::progress::ProgressReporter;
+                let progress = job.progress;
+                let options = crate::jira::JiraBatchOptions {
+                    force_recreate,
+                    attach,
+                };
+                let mut temp_dir: Option<PathBuf> = None;
+                let attachments = if attach && jira_cfg.attach_screenshots {
+                    let out_dir = std::env::temp_dir().join(format!(
+                        "imgforge-jira-{}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis())
+                            .unwrap_or(0)
+                    ));
+                    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+                    temp_dir = Some(out_dir.clone());
+                    progress.set_total(items.len());
+                    progress.set_current_label(&format!("导出截图 0/{}", items.len()));
+                    let request = BatchImageScreenshotRequest {
+                        items: items
+                            .iter()
+                            .map(|i| (i.id, i.file_path.clone()))
+                            .collect(),
+                        output_dir: out_dir,
+                        include_annotations,
+                        format: screenshot_format,
+                        quality: 85,
+                        naming_template: "{index}_{filename}.{ext}".into(),
+                        write_csv_manifest: false,
+                        write_json_manifest: false,
+                        write_contact_sheet: false,
+                        crop: None,
+                    };
+                    let repo = SqliteReviewRepository::open().map_err(|e| e.to_string())?;
+                    let shot =
+                        BatchImageScreenshotService::export(&repo, &request, Some(&*progress))
+                            .map_err(|e| e.to_string())?;
+                    shot.manifest_entries
+                        .into_iter()
+                        .filter(|e| e.success)
+                        .map(|e| (e.image_id, PathBuf::from(e.output_path)))
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+
+                if job.cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    if let Some(dir) = temp_dir {
+                        let _ = std::fs::remove_dir_all(dir);
+                    }
+                    let items: Vec<_> = items
+                        .iter()
+                        .map(|i| crate::jira::JiraSubmitItemResult {
+                            source: crate::jira::JiraSubmitSource::ReviewImage,
+                            local_id: i.id,
+                            skipped: true,
+                            skip_reason: Some("用户取消".into()),
+                            issue_key: None,
+                            browse_url: None,
+                            attachment_warning: None,
+                            persist_warning: None,
+                            error: None,
+                        })
+                        .collect();
+                    return Ok(crate::jira::JiraBatchSubmitResult { items });
+                }
+
+                progress.set_total(total);
+                progress.set_current_label(&format!("创建 Issue 0/{total}"));
+                let service = crate::jira::JiraIssueService::try_new(&jira_cfg)
+                    .map_err(|e| e.to_string())?;
+                let mut result = service
+                    .batch_create_from_review_items(
+                        &items,
+                        &attachments,
+                        &annotation_summaries,
+                        &options,
+                        Some(&|done, tot, label| {
+                            progress
+                                .completed
+                                .store(done, std::sync::atomic::Ordering::Relaxed);
+                            progress
+                                .total
+                                .store(tot, std::sync::atomic::Ordering::Relaxed);
+                            progress.set_current_label(label);
+                        }),
+                        Some(job.cancel.as_ref()),
+                    )
+                    .map_err(|e| e.to_string())?;
+
+                let repo = SqliteReviewRepository::open().map_err(|e| e.to_string())?;
+                for item in &mut result.items {
+                    if let Some(key) = &item.issue_key {
+                        if !item.skipped && item.error.is_none() {
+                            if let Err(e) = repo.update_image_jira(
+                                item.local_id,
+                                key,
+                                item.browse_url.as_deref(),
+                            ) {
+                                item.persist_warning =
+                                    Some(format!("已建单但本地未关联：{e}"));
+                            }
+                        }
+                    }
+                }
+                if let Some(dir) = temp_dir {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
+                Ok(result)
+            });
+    }
+
+    fn poll_jira_job(&mut self, ctx: &egui::Context) {
+        let Some(result) = self.jira_job.poll(ctx) else {
+            return;
+        };
+        match result {
+            Ok(result) => {
+                let summary = result.summary_line();
+                let lines: Vec<JiraResultLine> = result
+                    .items
+                    .iter()
+                    .map(|i| {
+                        let (text, browse_url) = if i.skipped {
+                            (
+                                format!(
+                                    "#{} 跳过：{}",
+                                    i.local_id,
+                                    i.skip_reason.as_deref().unwrap_or("已关联")
+                                ),
+                                i.browse_url.clone(),
+                            )
+                        } else if let Some(err) = &i.error {
+                            (format!("#{} 失败：{err}", i.local_id), None)
+                        } else if let Some(key) = &i.issue_key {
+                            let mut warn = String::new();
+                            if let Some(w) = &i.attachment_warning {
+                                warn.push_str(&format!("（{w}）"));
+                            }
+                            if let Some(w) = &i.persist_warning {
+                                warn.push_str(&format!("（{w}）"));
+                            }
+                            (format!("#{} → {key}{warn}", i.local_id), i.browse_url.clone())
+                        } else {
+                            (format!("#{} 未知结果", i.local_id), None)
+                        };
+                        JiraResultLine { text, browse_url }
+                    })
+                    .collect();
+                self.set_status(&summary);
+                let _ = self.reload_images();
+                self.dialog = Some(DialogState::JiraSubmitResult { summary, lines });
+            }
+            Err(e) => {
+                self.error = Some(e);
             }
         }
     }
