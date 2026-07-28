@@ -1,6 +1,9 @@
 //! 链接 libmpv 时补充 Homebrew 库搜索路径（macOS）。
 
 fn main() {
+    if std::env::var("CARGO_FEATURE_MPV").is_err() {
+        return;
+    }
     #[cfg(target_os = "macos")]
     {
         for candidate in [

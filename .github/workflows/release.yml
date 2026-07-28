@@ -134,6 +134,13 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }} --features gui --bin imgforge-app
         env:
           CARGO_BUILD_JOBS: 2
+        if: runner.os == 'Windows'
+
+      - name: Build GUI with mpv
+        run: cargo build --release --target ${{ matrix.target }} --features "gui,mpv" --bin imgforge-app
+        env:
+          CARGO_BUILD_JOBS: 2
+        if: runner.os != 'Windows'
 
       - name: Package Windows GUI
         if: runner.os == 'Windows'

@@ -34,6 +34,9 @@ jobs:
       - name: Clippy (default features)
         run: cargo clippy --all-targets --message-format=short
 
+      - name: Clippy (with mpv)
+        run: cargo clippy --all-targets --features mpv --message-format=short
+
       - name: Clippy (common P2 features)
         run: cargo clippy --all-targets --features "incremental,rename,thumbnails,watermark" --message-format=short
 
@@ -53,8 +56,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-    # Windows 暂无完整 libmpv 开发头文件，链接失败不挡主线。
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -76,8 +77,16 @@ jobs:
       - name: Build
         run: cargo build --verbose
 
+      - name: Build with mpv
+        if: runner.os != 'Windows'
+        run: cargo build --verbose --features mpv
+
       - name: Test
         run: cargo test --verbose
+
+      - name: Test with mpv
+        if: runner.os != 'Windows'
+        run: cargo test --verbose --features mpv
 
       - name: Build with common features
         run: cargo build --features "incremental,rename,thumbnails,watermark"
@@ -97,7 +106,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -129,5 +137,13 @@ jobs:
       - name: Build GUI features
         run: cargo build --features gui --bins
 
+      - name: Build GUI + mpv
+        if: runner.os != 'Windows'
+        run: cargo build --features "gui,mpv" --bins
+
       - name: Test GUI features
         run: cargo test --features gui
+
+      - name: Test GUI + mpv
+        if: runner.os != 'Windows'
+        run: cargo test --features "gui,mpv"
