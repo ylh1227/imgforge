@@ -311,3 +311,5 @@
 | 2026-07-28 | 分支 `feat/native-ui`；核心 Rust 保留；换壳；追求高完成度一次发版 |
 | 2026-07-28 | 计划默认壳 = Flutter Desktop；桥 = JSON-RPC Host；egui 对照至切流 |
 | 2026-07-28 | **壳选型锁定 Flutter Desktop**（Mac+Win 一次做完、控件精致、适合工具密度 UI）；Tauri 仅作团队强 Web 时的备选 |
+| 2026-07-28 | Phase 0 落地：`imgforge-host` + `src/host/*` + `tests/host_rpc.rs`；prefs 抽到顶层；五模块 RPC 已接线 |
+| 2026-07-28 | Phase 1–5 源码落地：`ui_flutter/` 五 Tab（转换/评审/视频/提取/任务）+ HostClient；待 Flutter SDK 就绪后 `flutter create` 补平台工程并跑通 |

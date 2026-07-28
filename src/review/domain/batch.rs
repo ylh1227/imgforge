@@ -1,11 +1,12 @@
 //! 评审批次实体。
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 use super::image_item::ReviewStatus;
 
 /// 评审批次。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewBatch {
     pub id: i64,
     pub name: String,
@@ -15,7 +16,7 @@ pub struct ReviewBatch {
 }
 
 /// 批次内各状态数量统计。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BatchStats {
     pub pending: i32,
     pub approved: i32,

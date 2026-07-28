@@ -93,7 +93,7 @@ impl Default for AnnotationStyle {
 }
 
 /// 单条标注记录。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Annotation {
     pub id: i64,
     pub image_item_id: i64,

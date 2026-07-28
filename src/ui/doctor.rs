@@ -2,6 +2,8 @@
 
 use std::process::Command;
 
+use serde::Serialize;
+
 /// 打印运行时环境与已启用 feature 状态。
 pub fn run_doctor() {
     println!("imgforge doctor — environment check");
@@ -15,6 +17,179 @@ pub fn run_doctor() {
     print_remote_status();
     print_jira_status();
     println!("───────────────────────────────────────");
+}
+
+/// 结构化诊断报告（Host / Flutter 用）。
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorReport {
+    pub version: String,
+    pub rustc: String,
+    pub cpu_cores: usize,
+    pub platform: String,
+    pub features: Vec<DoctorFeature>,
+    pub tools: Vec<DoctorTool>,
+    pub remote: DoctorRemote,
+    pub jira: DoctorJira,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorFeature {
+    pub name: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorTool {
+    pub name: String,
+    pub available: bool,
+    pub detail: String,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorRemote {
+    pub status: String,
+    pub enabled: bool,
+    pub base_url: Option<String>,
+    pub configured: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorJira {
+    pub status: String,
+    pub enabled: bool,
+    pub base_url: Option<String>,
+    pub project_key: Option<String>,
+    pub has_credentials: bool,
+}
+
+/// 收集结构化 doctor 报告。
+pub fn doctor_report() -> DoctorReport {
+    let features = [
+        ("gui", cfg!(feature = "gui")),
+        ("host", cfg!(feature = "host")),
+        ("review", cfg!(feature = "review")),
+        ("video-review", cfg!(feature = "video-review")),
+        ("data-extract", cfg!(feature = "data-extract")),
+        ("ocr", cfg!(feature = "ocr")),
+        ("incremental", cfg!(feature = "incremental")),
+        ("rename", cfg!(feature = "rename")),
+        ("thumbnails", cfg!(feature = "thumbnails")),
+        ("watermark", cfg!(feature = "watermark")),
+        ("avif", cfg!(feature = "avif")),
+        ("jpegxl", cfg!(feature = "jpegxl")),
+        ("bayer", cfg!(feature = "bayer")),
+        ("vips", cfg!(feature = "vips")),
+    ]
+    .into_iter()
+    .map(|(name, enabled)| DoctorFeature {
+        name: name.into(),
+        enabled,
+    })
+    .collect();
+
+    let mut tools = vec![
+        probe_tool("ffmpeg", "ffmpeg", &["-version"], cfg!(feature = "video-review")),
+        probe_tool(
+            "ffprobe",
+            "ffprobe",
+            &["-version"],
+            cfg!(feature = "video-review"),
+        ),
+        probe_tool(
+            "tesseract",
+            "tesseract",
+            &["--version"],
+            cfg!(feature = "data-extract"),
+        ),
+    ];
+
+    #[cfg(feature = "video-review")]
+    {
+        use crate::video_review::service::VideoBackend;
+        let backend = crate::video_review::service::FfmpegBackend::with_defaults();
+        let avail = backend.availability();
+        if let Some(v) = avail.ffmpeg_version {
+            if let Some(t) = tools.iter_mut().find(|t| t.name == "ffmpeg") {
+                t.detail = v;
+                t.available = avail.ffmpeg_ok;
+            }
+        }
+        if let Some(v) = avail.ffprobe_version {
+            if let Some(t) = tools.iter_mut().find(|t| t.name == "ffprobe") {
+                t.detail = v;
+                t.available = avail.ffprobe_ok;
+            }
+        }
+    }
+
+    let mut remote = crate::remote::RemoteConfig::default();
+    remote.apply_env_overrides();
+    let jira = crate::jira::load_jira_config();
+
+    DoctorReport {
+        version: env!("CARGO_PKG_VERSION").into(),
+        rustc: rustc_version(),
+        cpu_cores: num_cpus::get(),
+        platform: std::env::consts::OS.into(),
+        features,
+        tools,
+        remote: DoctorRemote {
+            status: remote.status_label().to_string(),
+            enabled: remote.enabled,
+            base_url: remote.base_url.clone(),
+            configured: remote.is_configured(),
+        },
+        jira: DoctorJira {
+            status: jira.status_label().to_string(),
+            enabled: jira.enabled,
+            base_url: jira.base_url.clone(),
+            project_key: jira.project_key.clone(),
+            has_credentials: jira.has_credentials(),
+        },
+    }
+}
+
+fn probe_tool(name: &str, bin: &str, args: &[&str], required: bool) -> DoctorTool {
+    if !required {
+        return DoctorTool {
+            name: name.into(),
+            available: false,
+            detail: "not required (feature disabled)".into(),
+            required: false,
+        };
+    }
+    match crate::process_util::command(bin).args(args).output() {
+        Ok(out) if out.status.success() => {
+            let first = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .next()
+                .unwrap_or("available")
+                .to_string();
+            DoctorTool {
+                name: name.into(),
+                available: true,
+                detail: if first.is_empty() {
+                    "available".into()
+                } else {
+                    first
+                },
+                required: true,
+            }
+        }
+        Ok(out) => DoctorTool {
+            name: name.into(),
+            available: false,
+            detail: format!("exit {}", out.status.code().unwrap_or(-1)),
+            required: true,
+        },
+        Err(e) => DoctorTool {
+            name: name.into(),
+            available: false,
+            detail: e.to_string(),
+            required: true,
+        },
+    }
 }
 
 fn rustc_version() -> String {

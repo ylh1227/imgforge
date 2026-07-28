@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 use crate::review::domain::image_item::ReviewStatus;
 
@@ -10,7 +11,7 @@ use super::metadata::VideoMetadata;
 
 pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "webm", "avi", "m4v"];
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoItem {
     pub id: i64,
     pub batch_id: i64,

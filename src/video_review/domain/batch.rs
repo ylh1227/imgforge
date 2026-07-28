@@ -1,10 +1,11 @@
 //! 视频评审批次。
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 use crate::review::domain::image_item::ReviewStatus;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoBatch {
     pub id: i64,
     pub name: String,
@@ -13,7 +14,7 @@ pub struct VideoBatch {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BatchStats {
     pub pending: i32,
     pub approved: i32,

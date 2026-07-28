@@ -23,6 +23,11 @@ path = "src/bin/imgforge-app.rs"
 required-features = ["gui"]
 
 [[bin]]
+name = "imgforge-host"
+path = "src/bin/imgforge-host.rs"
+required-features = ["host"]
+
+[[bin]]
 name = "imgforge-server"
 path = "src/bin/imgforge-server.rs"
 required-features = ["server"]
@@ -50,6 +55,12 @@ gui = [
   "dep:rfd",
   "dep:open",
   "dep:ab_glyph",
+  "host",
+]
+## JSON-RPC host for Flutter / external shells (no egui).
+host = [
+  "dep:open",
+  "dep:uuid",
   "review",
   "video-review",
   "data-extract",
@@ -137,6 +148,7 @@ axum = { version = "0.8", optional = true, features = ["macros"] }
 tower = { version = "0.5", optional = true }
 tower-http = { version = "0.6", optional = true, features = ["cors", "trace"] }
 uuid = { version = "1", optional = true, features = ["v4", "serde"] }
+# uuid also used by `host` feature (JSON-RPC job ids).
 tokio-stream = { version = "0.1", optional = true }
 redis = { version = "0.27", optional = true, features = ["streams"] }
 postgres = { version = "0.19", optional = true }

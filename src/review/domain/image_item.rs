@@ -316,7 +316,7 @@ impl ImageFilter {
 }
 
 /// 评审图片条目。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewImageItem {
     pub id: i64,
     pub batch_id: i64,

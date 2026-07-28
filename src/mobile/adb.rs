@@ -15,7 +15,7 @@ use crate::mobile::{
 use crate::ui::progress::ProgressReporter;
 
 /// 已连接 ADB 设备信息（供 GUI 列表）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct AdbDeviceInfo {
     pub serial: String,
     pub state: String,

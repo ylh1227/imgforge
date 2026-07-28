@@ -1,6 +1,8 @@
 //! 视频元数据（ffprobe 解析结果）。
 
-#[derive(Debug, Clone, Default)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct VideoMetadata {
     pub duration_ms: u64,
     pub fps: f32,

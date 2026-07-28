@@ -1,8 +1,9 @@
 //! 视频标签。
 
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VideoTag {
     pub id: i64,
     pub name: String,
