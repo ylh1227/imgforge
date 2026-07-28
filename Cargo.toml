@@ -28,8 +28,8 @@ path = "src/bin/imgforge-server.rs"
 required-features = ["server"]
 
 [features]
-# gui 默认可在无 libmpv 的 CI（尤其 Windows）上构建；本地连续播放请加 --features mpv。
-default = ["gui"]
+# macOS/Linux 默认启用 libmpv 连续播放；Windows CI/发布用 --no-default-features --features gui。
+default = ["gui", "mpv"]
 ## 可选服务端：axum 控制面 + 远程栈（Postgres 元数据 / Redis Streams / S3-MinIO；未配置时回退 SQLite+磁盘+内存队列）。
 server = [
   "dep:axum",
@@ -73,7 +73,7 @@ video-review = [
   "dep:bytemuck",
   "dep:pollster",
 ]
-## libmpv 连续播放（macOS/Linux 需系统安装 mpv；Windows CI 默认关闭）。
+## libmpv 连续播放（默认开启；Windows 无开发库时可 --no-default-features --features gui）。
 mpv = ["dep:libmpv2", "dep:libmpv2-sys"]
 data-extract = ["dep:csv", "ocr"]
 ocr = []

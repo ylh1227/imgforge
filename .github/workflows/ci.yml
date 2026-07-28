@@ -31,22 +31,23 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
-      - name: Clippy (default features)
+      - name: Clippy (default = gui+mpv)
         run: cargo clippy --all-targets --message-format=short
 
-      - name: Clippy (with mpv)
-        run: cargo clippy --all-targets --features mpv --message-format=short
+      - name: Clippy (gui without mpv)
+        run: cargo clippy --all-targets --no-default-features --features gui --message-format=short
 
       - name: Clippy (common P2 features)
-        run: cargo clippy --all-targets --features "incremental,rename,thumbnails,watermark" --message-format=short
+        run: cargo clippy --all-targets --no-default-features --features "incremental,rename,thumbnails,watermark" --message-format=short
 
       - name: Clippy (server feature)
-        run: cargo clippy --all-targets --features server --message-format=short
+        run: cargo clippy --all-targets --no-default-features --features server --message-format=short
 
       # 逐步收敛告警后再升级为 -D warnings；当前先保证 lint 任务可运行。
       - name: Clippy deny new panics in core paths
         run: >
           cargo clippy --all-targets
+          --no-default-features
           --features "incremental,rename,thumbnails,watermark"
           -- -W clippy::unwrap_used -W clippy::expect_used
         continue-on-error: true
@@ -74,31 +75,33 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install mpv
 
-      - name: Build
+      - name: Build (default gui+mpv)
+        if: runner.os != 'Windows'
         run: cargo build --verbose
 
-      - name: Build with mpv
-        if: runner.os != 'Windows'
-        run: cargo build --verbose --features mpv
+      - name: Build (Windows gui without mpv)
+        if: runner.os == 'Windows'
+        run: cargo build --verbose --no-default-features --features gui
 
-      - name: Test
+      - name: Test (default gui+mpv)
+        if: runner.os != 'Windows'
         run: cargo test --verbose
 
-      - name: Test with mpv
-        if: runner.os != 'Windows'
-        run: cargo test --verbose --features mpv
+      - name: Test (Windows gui without mpv)
+        if: runner.os == 'Windows'
+        run: cargo test --verbose --no-default-features --features gui
 
       - name: Build with common features
-        run: cargo build --features "incremental,rename,thumbnails,watermark"
+        run: cargo build --no-default-features --features "incremental,rename,thumbnails,watermark"
 
       - name: Test with common features
-        run: cargo test --features "incremental,rename,thumbnails,watermark"
+        run: cargo test --no-default-features --features "incremental,rename,thumbnails,watermark"
 
       - name: Build server feature
-        run: cargo build --features server --bins
+        run: cargo build --no-default-features --features server --bins
 
       - name: Test server feature
-        run: cargo test --features server
+        run: cargo test --no-default-features --features server
 
   build-gui:
     name: gui-${{ matrix.os }}
@@ -134,16 +137,18 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install mpv
 
-      - name: Build GUI features
-        run: cargo build --features gui --bins
-
       - name: Build GUI + mpv
         if: runner.os != 'Windows'
-        run: cargo build --features "gui,mpv" --bins
+        run: cargo build --bins
 
-      - name: Test GUI features
-        run: cargo test --features gui
+      - name: Build GUI without mpv
+        if: runner.os == 'Windows'
+        run: cargo build --no-default-features --features gui --bins
 
       - name: Test GUI + mpv
         if: runner.os != 'Windows'
-        run: cargo test --features "gui,mpv"
+        run: cargo test
+
+      - name: Test GUI without mpv
+        if: runner.os == 'Windows'
+        run: cargo test --no-default-features --features gui

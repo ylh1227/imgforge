@@ -130,17 +130,17 @@ jobs:
           VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Build GUI
-        run: cargo build --release --target ${{ matrix.target }} --features gui --bin imgforge-app
-        env:
-          CARGO_BUILD_JOBS: 2
+      - name: Build GUI (Windows without mpv)
         if: runner.os == 'Windows'
-
-      - name: Build GUI with mpv
-        run: cargo build --release --target ${{ matrix.target }} --features "gui,mpv" --bin imgforge-app
+        run: cargo build --release --target ${{ matrix.target }} --no-default-features --features gui --bin imgforge-app
         env:
           CARGO_BUILD_JOBS: 2
+
+      - name: Build GUI (macOS/Linux with mpv)
         if: runner.os != 'Windows'
+        run: cargo build --release --target ${{ matrix.target }} --bin imgforge-app
+        env:
+          CARGO_BUILD_JOBS: 2
 
       - name: Package Windows GUI
         if: runner.os == 'Windows'
