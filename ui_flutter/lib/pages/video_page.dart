@@ -8,6 +8,14 @@ import '../host/host_controller.dart';
 import '../widgets/page_chrome.dart';
 import '../widgets/section_card.dart';
 
+/// Keep toolbar controls on one 40px baseline (dropdown + buttons).
+final ButtonStyle _toolbarBtnStyle = ButtonStyle(
+  minimumSize: const WidgetStatePropertyAll(Size(0, 40)),
+  visualDensity: VisualDensity.compact,
+  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+  padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 16)),
+);
+
 class VideoPage extends StatefulWidget {
   const VideoPage({super.key});
 
@@ -286,28 +294,60 @@ class _VideoPageState extends State<VideoPage> {
                   child: Wrap(
                     spacing: 8,
                     runSpacing: 8,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      DropdownButton<String>(
-                        value: alignQuality,
-                        items: const [
-                          DropdownMenuItem(value: 'fast', child: Text('快速对齐')),
-                          DropdownMenuItem(value: 'standard', child: Text('标准对齐')),
-                          DropdownMenuItem(value: 'fine', child: Text('精细对齐')),
-                        ],
-                        onChanged: (v) => setState(() => alignQuality = v ?? 'fast'),
+                      SizedBox(
+                        width: 140,
+                        height: 40,
+                        child: DropdownMenu<String>(
+                          width: 140,
+                          initialSelection: alignQuality,
+                          requestFocusOnTap: false,
+                          inputDecorationTheme: const InputDecorationTheme(
+                            isDense: true,
+                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            border: OutlineInputBorder(),
+                          ),
+                          onSelected: (v) {
+                            if (v != null) setState(() => alignQuality = v);
+                          },
+                          dropdownMenuEntries: const [
+                            DropdownMenuEntry(value: 'fast', label: '快速对齐'),
+                            DropdownMenuEntry(value: 'standard', label: '标准对齐'),
+                            DropdownMenuEntry(value: 'fine', label: '精细对齐'),
+                          ],
+                        ),
                       ),
-                      FilledButton(onPressed: _align, child: const Text('偏移校准')),
-                      OutlinedButton(onPressed: _exportSheet, child: const Text('导出宫格 PNG')),
-                      OutlinedButton(onPressed: _exportGridVideo, child: const Text('导出对比视频')),
+                      FilledButton(
+                        style: _toolbarBtnStyle,
+                        onPressed: _align,
+                        child: const Text('偏移校准'),
+                      ),
                       OutlinedButton(
+                        style: _toolbarBtnStyle,
+                        onPressed: _exportSheet,
+                        child: const Text('导出宫格 PNG'),
+                      ),
+                      OutlinedButton(
+                        style: _toolbarBtnStyle,
+                        onPressed: _exportGridVideo,
+                        child: const Text('导出对比视频'),
+                      ),
+                      OutlinedButton(
+                        style: _toolbarBtnStyle,
                         onPressed: () => _setStatus('Approved'),
                         child: const Text('批量通过'),
                       ),
                       OutlinedButton(
+                        style: _toolbarBtnStyle,
                         onPressed: () => _setStatus('NeedsFix'),
                         child: const Text('批量需修'),
                       ),
-                      OutlinedButton(onPressed: _clearCache, child: const Text('清理抽帧缓存')),
+                      OutlinedButton(
+                        style: _toolbarBtnStyle,
+                        onPressed: _clearCache,
+                        child: const Text('清理抽帧缓存'),
+                      ),
                     ],
                   ),
                 ),

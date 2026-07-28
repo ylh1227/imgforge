@@ -97,8 +97,8 @@ class _ShellScaffoldState extends State<ShellScaffold> {
                     host.connected ? 'Host 已连接' : '连接中…',
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
                           color: host.connected
-                              ? const Color(0xFF1F7A4D)
-                              : const Color(0xFF9A6B2F),
+                              ? Theme.of(context).colorScheme.primary
+                              : const Color(0xFFFF9F0A),
                         ),
                   ),
                 ],
