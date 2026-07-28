@@ -75,7 +75,8 @@ winget install Gyan.FFmpeg
 
 ```bash
 export LIBRARY_PATH="$(brew --prefix)/lib:$LIBRARY_PATH"
-cargo run --features gui --bin imgforge-app
+cargo run --bin imgforge-app
+# 默认已含 gui + mpv
 ```
 
 未安装 ffmpeg 时 App 可正常启动，顶部会提示；导入与抽帧功能不可用。
@@ -143,7 +144,10 @@ chmod +x scripts/package-gui.sh
 
 ```bash
 # 开发时直接运行 GUI
-cargo run --release --features gui --bin imgforge-app
+cargo run --release --bin imgforge-app
+# 等价于默认 features：gui + mpv（需 brew install mpv）
+# Windows 无 libmpv 时：cargo run --no-default-features --features gui --bin imgforge-app
+
 ```
 
 ## 特性
@@ -294,8 +298,8 @@ cargo build --release --features thumbnails
 # 全量 P2 功能
 cargo build --release --features "incremental,rename,thumbnails,watermark,jpegxl,vips"
 
-# GUI（捆绑 review / video-review / data-extract / jpegxl / bayer 等）
-cargo build --release --features gui --bin imgforge-app
+# GUI（默认 gui + mpv；Windows 无 libmpv 时加 --no-default-features --features gui）
+cargo build --release --bin imgforge-app
 
 # Bayer/RAW 马赛克解码
 cargo build --release --features bayer
@@ -318,7 +322,8 @@ cargo test
 cargo test --features "incremental,rename,thumbnails,watermark"
 
 # GUI 相关模块测试（需本机 GUI 依赖）
-cargo test --features gui
+cargo test
+# 或仅 gui、不含 mpv：cargo test --no-default-features --features gui
 
 # 转换/缩放/扫描性能基准
 cargo bench --bench conversion_bench
