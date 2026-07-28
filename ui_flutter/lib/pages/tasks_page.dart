@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../host/host_controller.dart';
+import '../widgets/glass_list_panel.dart';
+import '../widgets/liquid_glass.dart';
 import '../widgets/page_chrome.dart';
 import '../widgets/section_card.dart';
 
@@ -67,9 +69,9 @@ class _TasksPageState extends State<TasksPage> {
       title: '任务中心',
       subtitle: '转换历史、操作日志、远端 / JIRA / Doctor',
       actions: [
-        OutlinedButton(onPressed: _reload, child: const Text('刷新')),
+        GlassCapsuleButton(label: '刷新', onPressed: _reload),
         const SizedBox(width: 8),
-        OutlinedButton(onPressed: _clearHistory, child: const Text('清空转换历史')),
+        GlassCapsuleButton(label: '清空转换历史', onPressed: _clearHistory),
         const SizedBox(width: 12),
       ],
       child: ListView(
@@ -106,7 +108,7 @@ class _TasksPageState extends State<TasksPage> {
                   'JIRA：${jira?['status']}  project=${jira?['project_key'] ?? '-'}  creds=${jira?['has_credentials']}',
                 ),
                 const SizedBox(height: 8),
-                OutlinedButton(onPressed: _probeJira, child: const Text('探测 JIRA')),
+                GlassCapsuleButton(label: '探测 JIRA', onPressed: _probeJira),
               ],
             ),
           ),
@@ -118,12 +120,10 @@ class _TasksPageState extends State<TasksPage> {
                 itemCount: convertHistory.length,
                 itemBuilder: (_, i) {
                   final h = convertHistory[i];
-                  return ListTile(
-                    dense: true,
-                    title: Text('${h['input_dir']} → ${h['output_dir']}'),
-                    subtitle: Text(
-                      '成功 ${h['successes']}/${h['total']}  失败 ${h['failures']}  ${h['elapsed_ms']}ms',
-                    ),
+                  return GlassListTile(
+                    title: '${h['input_dir']} → ${h['output_dir']}',
+                    subtitle:
+                        '成功 ${h['successes']}/${h['total']}  失败 ${h['failures']}  ${h['elapsed_ms']}ms',
                   );
                 },
               ),
@@ -137,10 +137,9 @@ class _TasksPageState extends State<TasksPage> {
                 itemCount: actionHistory.length,
                 itemBuilder: (_, i) {
                   final h = actionHistory[i];
-                  return ListTile(
-                    dense: true,
-                    title: Text('${h['module']} / ${h['operation']}'),
-                    subtitle: Text('${h['target']}  ${h['status']}'),
+                  return GlassListTile(
+                    title: '${h['module']} / ${h['operation']}',
+                    subtitle: '${h['target']}  ${h['status']}',
                   );
                 },
               ),

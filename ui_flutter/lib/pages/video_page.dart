@@ -5,16 +5,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../host/host_controller.dart';
+import '../widgets/glass_list_panel.dart';
+import '../widgets/liquid_glass.dart';
 import '../widgets/page_chrome.dart';
 import '../widgets/section_card.dart';
-
-/// Keep toolbar controls on one 40px baseline (dropdown + buttons).
-final ButtonStyle _toolbarBtnStyle = ButtonStyle(
-  minimumSize: const WidgetStatePropertyAll(Size(0, 40)),
-  visualDensity: VisualDensity.compact,
-  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-  padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 16)),
-);
 
 class VideoPage extends StatefulWidget {
   const VideoPage({super.key});
@@ -156,10 +150,10 @@ class _VideoPageState extends State<VideoPage> {
       title: '视频评审',
       subtitle: '导入、预览帧、多路勾选、对齐、宫格导出与缓存',
       actions: [
-        OutlinedButton.icon(
+        GlassCapsuleButton(
+          label: '导入',
+          primary: true,
           onPressed: _import,
-          icon: const Icon(Icons.folder_open),
-          label: const Text('导入'),
         ),
         const SizedBox(width: 8),
         IconButton(
@@ -170,54 +164,70 @@ class _VideoPageState extends State<VideoPage> {
         const SizedBox(width: 8),
       ],
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SizedBox(
+          GlassListPanel(
             width: 300,
             child: Column(
               children: [
                 Expanded(
                   child: ListView(
+                    padding: EdgeInsets.zero,
                     children: [
-                      const ListTile(dense: true, title: Text('批次')),
+                      const GlassSectionLabel('批次'),
                       ...batches.map(
-                        (b) => ListTile(
-                          dense: true,
+                        (b) => GlassListTile(
                           selected: batchId == (b['id'] as num?)?.toInt(),
-                          title: Text(b['name']?.toString() ?? ''),
-                          subtitle: Text('共 ${b['total_count']}'),
+                          title: b['name']?.toString() ?? '',
+                          subtitle: '共 ${b['total_count']}',
                           onTap: () => _loadVideos((b['id'] as num).toInt()),
                         ),
                       ),
-                      const Divider(),
+                      const GlassPanelDivider(),
+                      const GlassSectionLabel('视频'),
                       if (!cardView)
                         ...videos.map((v) {
                           final id = (v['id'] as num).toInt();
-                          return CheckboxListTile(
-                            dense: true,
-                            value: selectedIds.contains(id),
-                            onChanged: (on) {
+                          final selected = selectedIds.contains(id);
+                          return GlassListTile(
+                            selected: activeId == id,
+                            title: v['file_path']
+                                    ?.toString()
+                                    .split(Platform.pathSeparator)
+                                    .last ??
+                                '',
+                            subtitle:
+                                '${v['width']}x${v['height']}  offset=${v['offset_ms']}ms',
+                            leading: SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: Checkbox(
+                                value: selected,
+                                onChanged: (on) {
+                                  setState(() {
+                                    if (on == true) {
+                                      selectedIds.add(id);
+                                    } else {
+                                      selectedIds.remove(id);
+                                    }
+                                    activeId = id;
+                                  });
+                                  _seek();
+                                },
+                              ),
+                            ),
+                            onTap: () {
                               setState(() {
-                                if (on == true) {
-                                  selectedIds.add(id);
-                                } else {
-                                  selectedIds.remove(id);
-                                }
                                 activeId = id;
+                                selectedIds.add(id);
                               });
                               _seek();
                             },
-                            title: Text(
-                              v['file_path']?.toString().split(Platform.pathSeparator).last ?? '',
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: Text(
-                              '${v['width']}x${v['height']}  offset=${v['offset_ms']}ms',
-                            ),
                           );
                         })
                       else
                         Padding(
-                          padding: const EdgeInsets.all(8),
+                          padding: const EdgeInsets.all(6),
                           child: Wrap(
                             spacing: 8,
                             runSpacing: 8,
@@ -225,7 +235,13 @@ class _VideoPageState extends State<VideoPage> {
                               final id = (v['id'] as num).toInt();
                               return SizedBox(
                                 width: 120,
-                                child: InkWell(
+                                child: GlassListTile(
+                                  selected: activeId == id,
+                                  title: v['file_path']
+                                          ?.toString()
+                                          .split(Platform.pathSeparator)
+                                          .last ??
+                                      '',
                                   onTap: () {
                                     setState(() {
                                       activeId = id;
@@ -233,20 +249,6 @@ class _VideoPageState extends State<VideoPage> {
                                     });
                                     _ensureCover(id);
                                   },
-                                  child: Card(
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(8),
-                                      child: Text(
-                                        v['file_path']
-                                                ?.toString()
-                                                .split(Platform.pathSeparator)
-                                                .last ??
-                                            '',
-                                        maxLines: 3,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                  ),
                                 ),
                               );
                             }).toList(),
@@ -255,17 +257,17 @@ class _VideoPageState extends State<VideoPage> {
                     ],
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.all(8),
-                  child: Text(info, style: Theme.of(context).textTheme.labelSmall),
-                ),
+                if (info.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 4, 10, 6),
+                    child: Text(info, style: Theme.of(context).textTheme.labelSmall),
+                  ),
               ],
             ),
           ),
-          const VerticalDivider(width: 1),
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(8, 0, 16, 16),
               children: [
                 SectionCard(
                   title: '预览帧',
@@ -291,10 +293,7 @@ class _VideoPageState extends State<VideoPage> {
                 ),
                 SectionCard(
                   title: '对比与导出',
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    crossAxisAlignment: WrapCrossAlignment.center,
+                  child: GlassActionBar(
                     children: [
                       SizedBox(
                         width: 140,
@@ -303,11 +302,6 @@ class _VideoPageState extends State<VideoPage> {
                           width: 140,
                           initialSelection: alignQuality,
                           requestFocusOnTap: false,
-                          inputDecorationTheme: const InputDecorationTheme(
-                            isDense: true,
-                            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                            border: OutlineInputBorder(),
-                          ),
                           onSelected: (v) {
                             if (v != null) setState(() => alignQuality = v);
                           },
@@ -318,36 +312,22 @@ class _VideoPageState extends State<VideoPage> {
                           ],
                         ),
                       ),
-                      FilledButton(
-                        style: _toolbarBtnStyle,
+                      GlassCapsuleButton(
+                        label: '偏移校准',
+                        primary: true,
                         onPressed: _align,
-                        child: const Text('偏移校准'),
                       ),
-                      OutlinedButton(
-                        style: _toolbarBtnStyle,
-                        onPressed: _exportSheet,
-                        child: const Text('导出宫格 PNG'),
-                      ),
-                      OutlinedButton(
-                        style: _toolbarBtnStyle,
-                        onPressed: _exportGridVideo,
-                        child: const Text('导出对比视频'),
-                      ),
-                      OutlinedButton(
-                        style: _toolbarBtnStyle,
+                      GlassCapsuleButton(label: '导出宫格 PNG', onPressed: _exportSheet),
+                      GlassCapsuleButton(label: '导出对比视频', onPressed: _exportGridVideo),
+                      GlassCapsuleButton(
+                        label: '批量通过',
                         onPressed: () => _setStatus('Approved'),
-                        child: const Text('批量通过'),
                       ),
-                      OutlinedButton(
-                        style: _toolbarBtnStyle,
+                      GlassCapsuleButton(
+                        label: '批量需修',
                         onPressed: () => _setStatus('NeedsFix'),
-                        child: const Text('批量需修'),
                       ),
-                      OutlinedButton(
-                        style: _toolbarBtnStyle,
-                        onPressed: _clearCache,
-                        child: const Text('清理抽帧缓存'),
-                      ),
+                      GlassCapsuleButton(label: '清理抽帧缓存', onPressed: _clearCache),
                     ],
                   ),
                 ),

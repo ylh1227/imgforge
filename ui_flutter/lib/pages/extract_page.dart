@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../host/host_controller.dart';
+import '../widgets/glass_list_panel.dart';
+import '../widgets/liquid_glass.dart';
 import '../widgets/page_chrome.dart';
 import '../widgets/section_card.dart';
 
@@ -73,9 +75,9 @@ class _ExtractPageState extends State<ExtractPage> {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    OutlinedButton(onPressed: _pick, child: const Text('选择')),
+                    GlassCapsuleButton(label: '选择', onPressed: _pick),
                     const SizedBox(width: 8),
-                    FilledButton(onPressed: _scan, child: const Text('扫描')),
+                    GlassCapsuleButton(label: '扫描', primary: true, onPressed: _scan),
                   ],
                 ),
                 const SizedBox(height: 8),
@@ -89,9 +91,8 @@ class _ExtractPageState extends State<ExtractPage> {
               height: 220,
               child: ListView.builder(
                 itemCount: files.length,
-                itemBuilder: (_, i) => ListTile(
-                  dense: true,
-                  title: Text(files[i], overflow: TextOverflow.ellipsis),
+                itemBuilder: (_, i) => GlassListTile(
+                  title: files[i],
                   onTap: () => _extract(files[i]),
                 ),
               ),
@@ -105,10 +106,9 @@ class _ExtractPageState extends State<ExtractPage> {
                 itemCount: records.length,
                 itemBuilder: (_, i) {
                   final r = (records[i] as Map).cast<String, dynamic>();
-                  return ListTile(
-                    dense: true,
-                    title: Text(r['metric_name']?.toString() ?? r.toString()),
-                    subtitle: Text('${r['module'] ?? ''}  ${r['value'] ?? ''}'),
+                  return GlassListTile(
+                    title: r['metric_name']?.toString() ?? r.toString(),
+                    subtitle: '${r['module'] ?? ''}  ${r['value'] ?? ''}',
                   );
                 },
               ),

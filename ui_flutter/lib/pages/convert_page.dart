@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../host/host_controller.dart';
+import '../widgets/glass_list_panel.dart';
+import '../widgets/liquid_glass.dart';
 import '../widgets/page_chrome.dart';
 import '../widgets/section_card.dart';
 
@@ -293,9 +295,8 @@ class _ConvertPageState extends State<ConvertPage> {
                     hintText: '{stem}_{width}x{height}',
                   ),
                 ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('限制目标体积'),
+                GlassSwitchTile(
+                  title: '限制目标体积',
                   value: useTargetMax,
                   onChanged: (v) => setState(() => useTargetMax = v),
                 ),
@@ -332,9 +333,8 @@ class _ConvertPageState extends State<ConvertPage> {
                 ),
                 const SizedBox(height: 12),
                 if (advancedTab == 0) ...[
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('亮度匹配'),
+                  GlassSwitchTile(
+                    title: '亮度匹配',
                     value: brightnessMatch,
                     onChanged: (v) => setState(() => brightnessMatch = v),
                   ),
@@ -356,10 +356,9 @@ class _ConvertPageState extends State<ConvertPage> {
                   }),
                 ],
                 if (advancedTab == 1)
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('优先远端执行'),
-                    subtitle: const Text('需配置远端服务；本地仍可强制执行'),
+                  GlassSwitchTile(
+                    title: '优先远端执行',
+                    subtitle: '需配置远端服务；本地仍可强制执行',
                     value: preferRemote,
                     onChanged: (v) async {
                       setState(() => preferRemote = v);
@@ -373,19 +372,18 @@ class _ConvertPageState extends State<ConvertPage> {
                       Wrap(
                         spacing: 8,
                         children: [
-                          FilledButton.tonal(
+                          GlassCapsuleButton(
+                            label: '保存当前为预设',
                             onPressed: _savePreset,
-                            child: const Text('保存当前为预设'),
                           ),
                         ],
                       ),
                       const SizedBox(height: 8),
                       ...presets.map(
-                        (p) => ListTile(
-                          dense: true,
-                          title: Text(p['name']?.toString() ?? ''),
+                        (p) => GlassListTile(
+                          title: p['name']?.toString() ?? '',
                           trailing: IconButton(
-                            icon: const Icon(Icons.delete_outline),
+                            icon: const Icon(Icons.delete_outline, size: 18),
                             onPressed: () async {
                               await host.call('prefs.delete_preset', {
                                 'name': p['name'],
@@ -394,7 +392,8 @@ class _ConvertPageState extends State<ConvertPage> {
                             },
                           ),
                           onTap: () {
-                            final snap = (p['snapshot'] as Map?)?.cast<String, dynamic>() ?? {};
+                            final snap =
+                                (p['snapshot'] as Map?)?.cast<String, dynamic>() ?? {};
                             setState(() {
                               format = snap['format']?.toString() ?? format;
                               quality = (snap['quality'] as num?)?.toDouble() ?? quality;
@@ -422,14 +421,14 @@ class _ConvertPageState extends State<ConvertPage> {
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    FilledButton.icon(
+                    GlassCapsuleButton(
+                      label: '开始转换',
+                      primary: true,
                       onPressed: _run,
-                      icon: const Icon(Icons.play_arrow),
-                      label: const Text('开始转换'),
                     ),
-                    OutlinedButton(onPressed: _preview, child: const Text('预览')),
-                    OutlinedButton(onPressed: _cancel, child: const Text('取消')),
-                    OutlinedButton(onPressed: _openOutput, child: const Text('打开输出')),
+                    GlassCapsuleButton(label: '预览', onPressed: _preview),
+                    GlassCapsuleButton(label: '取消', onPressed: _cancel),
+                    GlassCapsuleButton(label: '打开输出', onPressed: _openOutput),
                   ],
                 ),
                 const SizedBox(height: 8),
@@ -474,7 +473,7 @@ class _ConvertPageState extends State<ConvertPage> {
           ),
         ),
         const SizedBox(width: 8),
-        OutlinedButton(onPressed: onPick, child: const Text('选择')),
+        GlassCapsuleButton(label: '选择', onPressed: onPick),
       ],
     );
   }
@@ -532,7 +531,7 @@ class _DeviceImportPanelState extends State<_DeviceImportPanel> {
         Wrap(
           spacing: 8,
           children: [
-            OutlinedButton(onPressed: _refresh, child: const Text('刷新设备')),
+            GlassCapsuleButton(label: '刷新设备', onPressed: _refresh),
           ],
         ),
         const SizedBox(height: 8),
@@ -547,8 +546,7 @@ class _DeviceImportPanelState extends State<_DeviceImportPanel> {
         ),
         ...devices.map((d) {
           final serial = d['serial']?.toString() ?? '';
-          return CheckboxListTile(
-            dense: true,
+          return GlassCheckTile(
             value: selected.contains(serial),
             onChanged: (on) {
               setState(() {
@@ -559,10 +557,10 @@ class _DeviceImportPanelState extends State<_DeviceImportPanel> {
                 }
               });
             },
-            title: Text(d['model']?.toString().isNotEmpty == true
+            title: d['model']?.toString().isNotEmpty == true
                 ? '${d['model']} ($serial)'
-                : serial),
-            subtitle: Text(d['state']?.toString() ?? ''),
+                : serial,
+            subtitle: d['state']?.toString() ?? '',
           );
         }),
         if (devices.isEmpty)

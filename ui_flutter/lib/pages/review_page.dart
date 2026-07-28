@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../host/host_controller.dart';
+import '../widgets/glass_list_panel.dart';
+import '../widgets/liquid_glass.dart';
 import '../widgets/page_chrome.dart';
 import '../widgets/section_card.dart';
 
@@ -149,56 +151,57 @@ class _ReviewPageState extends State<ReviewPage> {
       title: '图片评审',
       subtitle: '批次、状态、备注、标注与导出',
       actions: [
-        OutlinedButton.icon(
+        GlassCapsuleButton(
+          label: '导入文件夹',
+          primary: true,
           onPressed: _importFolder,
-          icon: const Icon(Icons.folder_open),
-          label: const Text('导入文件夹'),
         ),
         const SizedBox(width: 8),
-        OutlinedButton(onPressed: _exportCsv, child: const Text('导出 CSV')),
+        GlassCapsuleButton(label: '导出 CSV', onPressed: _exportCsv),
         const SizedBox(width: 12),
       ],
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SizedBox(
+          GlassListPanel(
             width: 280,
             child: ListView(
+              padding: EdgeInsets.zero,
               children: [
-                const ListTile(dense: true, title: Text('批次')),
+                const GlassSectionLabel('批次'),
                 ...batches.map(
-                  (b) => ListTile(
-                    dense: true,
+                  (b) => GlassListTile(
                     selected: batchId == (b['id'] as num?)?.toInt(),
-                    title: Text(b['name']?.toString() ?? ''),
-                    subtitle: Text('共 ${b['total_count']}'),
+                    title: b['name']?.toString() ?? '',
+                    subtitle: '共 ${b['total_count']}',
                     onTap: () => _loadImages((b['id'] as num).toInt()),
                   ),
                 ),
-                const Divider(),
-                const ListTile(dense: true, title: Text('图片')),
+                const GlassPanelDivider(),
+                const GlassSectionLabel('图片'),
                 ...images.map(
-                  (img) => ListTile(
-                    dense: true,
+                  (img) => GlassListTile(
                     selected: imageId == (img['id'] as num?)?.toInt(),
-                    title: Text(
-                      img['file_path']?.toString().split(Platform.pathSeparator).last ?? '',
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    subtitle: Text(img['status']?.toString() ?? ''),
+                    title: img['file_path']
+                            ?.toString()
+                            .split(Platform.pathSeparator)
+                            .last ??
+                        '',
+                    subtitle: img['status']?.toString() ?? '',
                     onTap: () => _selectImage((img['id'] as num).toInt()),
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Text(info, style: Theme.of(context).textTheme.labelSmall),
-                ),
+                if (info.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
+                    child: Text(info, style: Theme.of(context).textTheme.labelSmall),
+                  ),
               ],
             ),
           ),
-          const VerticalDivider(width: 1),
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(8, 0, 16, 16),
               children: [
                 SectionCard(
                   title: '预览',
@@ -239,11 +242,16 @@ class _ReviewPageState extends State<ReviewPage> {
                       const SizedBox(height: 8),
                       Wrap(
                         spacing: 8,
+                        runSpacing: 8,
                         children: [
-                          FilledButton(onPressed: _saveMeta, child: const Text('保存')),
-                          OutlinedButton(
+                          GlassCapsuleButton(
+                            label: '保存',
+                            primary: true,
+                            onPressed: _saveMeta,
+                          ),
+                          GlassCapsuleButton(
+                            label: '添加矩形标注',
                             onPressed: _addRectAnnotation,
-                            child: const Text('添加矩形标注'),
                           ),
                         ],
                       ),
