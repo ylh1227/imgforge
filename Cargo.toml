@@ -7,6 +7,7 @@ description = "Cross-platform high-performance batch image format converter"
 license = "MIT"
 authors = ["imgforge contributors"]
 readme = "README.md"
+default-run = "imgforge-app"
 
 [lib]
 name = "imgforge"
@@ -27,7 +28,7 @@ path = "src/bin/imgforge-server.rs"
 required-features = ["server"]
 
 [features]
-default = []
+default = ["gui"]
 ## 可选服务端：axum 控制面 + 远程栈（Postgres 元数据 / Redis Streams / S3-MinIO；未配置时回退 SQLite+磁盘+内存队列）。
 server = [
   "dep:axum",
@@ -60,7 +61,19 @@ gui = [
   "bayer",
 ]
 review = ["dep:rusqlite", "dep:imageproc", "dep:csv"]
-video-review = ["review", "dep:csv", "dep:ab_glyph", "dep:imageproc", "dep:zip", "dep:rustfft"]
+video-review = [
+  "review",
+  "dep:csv",
+  "dep:ab_glyph",
+  "dep:imageproc",
+  "dep:zip",
+  "dep:rustfft",
+  "dep:wgpu",
+  "dep:bytemuck",
+  "dep:pollster",
+  "dep:libmpv2",
+  "dep:libmpv2-sys",
+]
 data-extract = ["dep:csv", "ocr"]
 ocr = []
 incremental = []
@@ -74,6 +87,8 @@ thumbnails = []
 rawloader = ["dep:rawloader"]
 demosaic = ["dep:demosaic"]
 bayer = ["dep:rawloader", "dep:demosaic"]
+libmpv2 = ["dep:libmpv2"]
+libmpv2-sys = ["dep:libmpv2-sys"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -137,9 +152,14 @@ rusqlite = { version = "0.32", optional = true, features = ["bundled"] }
 csv = { version = "1.3", optional = true }
 zip = { version = "2", optional = true }
 rustfft = { version = "6", optional = true }
+wgpu = { version = "24", optional = true, default-features = true }
+bytemuck = { version = "1", optional = true, features = ["derive"] }
+pollster = { version = "0.4", optional = true }
 webp = "0.3"
 rawloader = { version = "0.37", default-features = false, optional = true }
 demosaic = { version = "0.3", default-features = false, features = ["std"], optional = true }
+libmpv2 = { version = "6", features = ["render"], optional = true }
+libmpv2-sys = { version = "4", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", default-features = false, features = ["std"] }

@@ -18,6 +18,8 @@ struct CacheKey {
     mtime: u64,
     time_ms: u64,
     width: u32,
+    /// PNG 无损分析帧（示波器）；JPG 用于预览。
+    lossless: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -99,7 +101,7 @@ impl FrameCache {
         time_ms: u64,
         width: u32,
     ) -> VideoReviewResult<Option<PathBuf>> {
-        let key = self.make_key(video_path, time_ms, width)?;
+        let key = self.make_key(video_path, time_ms, width, false)?;
         let out = self.output_path(&key);
         if out.exists() {
             return Ok(Some(out));
@@ -130,14 +132,34 @@ impl FrameCache {
         Ok(None)
     }
 
-    /// 同步抽帧（导出、contact sheet 使用）。
+    /// 示波器分析用：PNG 抽帧，避免 JPEG 量化污染直方图。
+    pub fn ensure_frame_lossless(
+        &self,
+        video_path: &Path,
+        time_ms: u64,
+        width: u32,
+    ) -> VideoReviewResult<PathBuf> {
+        self.ensure_frame_inner(video_path, time_ms, width, true)
+    }
+
+    /// 同步抽帧（导出、contact sheet、预览用 JPG）。
     pub fn ensure_frame(
         &self,
         video_path: &Path,
         time_ms: u64,
         width: u32,
     ) -> VideoReviewResult<PathBuf> {
-        let key = self.make_key(video_path, time_ms, width)?;
+        self.ensure_frame_inner(video_path, time_ms, width, false)
+    }
+
+    fn ensure_frame_inner(
+        &self,
+        video_path: &Path,
+        time_ms: u64,
+        width: u32,
+        lossless: bool,
+    ) -> VideoReviewResult<PathBuf> {
+        let key = self.make_key(video_path, time_ms, width, lossless)?;
         let out = self.output_path(&key);
         if out.exists() {
             return Ok(out);
@@ -172,7 +194,13 @@ impl FrameCache {
         }
     }
 
-    fn make_key(&self, video_path: &Path, time_ms: u64, width: u32) -> VideoReviewResult<CacheKey> {
+    fn make_key(
+        &self,
+        video_path: &Path,
+        time_ms: u64,
+        width: u32,
+        lossless: bool,
+    ) -> VideoReviewResult<CacheKey> {
         let meta = fs::metadata(video_path)?;
         let mtime = meta
             .modified()
@@ -181,27 +209,36 @@ impl FrameCache {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         Ok(CacheKey {
-            path_hash: cache_key_hash(video_path, mtime, time_ms, width),
+            path_hash: cache_key_hash(video_path, mtime, time_ms, width, lossless),
             mtime,
             time_ms,
             width,
+            lossless,
         })
     }
 
     fn output_path(&self, key: &CacheKey) -> PathBuf {
+        let ext = if key.lossless { "png" } else { "jpg" };
         self.cache_dir.join(format!(
-            "{}_{}_{}_{}.jpg",
-            key.path_hash, key.mtime, key.time_ms, key.width
+            "{}_{}_{}_{}.{}",
+            key.path_hash, key.mtime, key.time_ms, key.width, ext
         ))
     }
 }
 
-pub fn cache_key_hash(video_path: &Path, mtime: u64, time_ms: u64, width: u32) -> u64 {
+pub fn cache_key_hash(
+    video_path: &Path,
+    mtime: u64,
+    time_ms: u64,
+    width: u32,
+    lossless: bool,
+) -> u64 {
     let mut hasher = DefaultHasher::new();
     video_path.to_string_lossy().hash(&mut hasher);
     mtime.hash(&mut hasher);
     time_ms.hash(&mut hasher);
     width.hash(&mut hasher);
+    lossless.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -211,10 +248,12 @@ mod tests {
 
     #[test]
     fn cache_key_stable() {
-        let a = cache_key_hash(Path::new("/tmp/v.mp4"), 100, 500, 320);
-        let b = cache_key_hash(Path::new("/tmp/v.mp4"), 100, 500, 320);
+        let a = cache_key_hash(Path::new("/tmp/v.mp4"), 100, 500, 320, false);
+        let b = cache_key_hash(Path::new("/tmp/v.mp4"), 100, 500, 320, false);
         assert_eq!(a, b);
-        let c = cache_key_hash(Path::new("/tmp/v.mp4"), 100, 501, 320);
+        let c = cache_key_hash(Path::new("/tmp/v.mp4"), 100, 501, 320, false);
         assert_ne!(a, c);
+        let d = cache_key_hash(Path::new("/tmp/v.mp4"), 100, 500, 320, true);
+        assert_ne!(a, d);
     }
 }

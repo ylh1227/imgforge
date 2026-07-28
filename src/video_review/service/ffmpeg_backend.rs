@@ -185,6 +185,11 @@ impl VideoBackend for FfmpegBackend {
         if !scale.is_empty() {
             cmd.args(["-vf", &scale]);
         }
+        // JPG 预览用较高质量，降低二次量化；PNG 由扩展名决定编码器。
+        let out_str = output.to_string_lossy();
+        if out_str.ends_with(".jpg") || out_str.ends_with(".jpeg") {
+            cmd.args(["-q:v", "2"]);
+        }
         cmd.args(["-y", output.to_string_lossy().as_ref()]);
 
         let output_proc = cmd

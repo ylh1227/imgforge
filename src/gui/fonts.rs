@@ -89,11 +89,18 @@ fn ttc_face_count(bytes: &[u8]) -> Option<u32> {
 
 #[cfg(target_os = "macos")]
 fn system_font_candidates() -> Vec<PathBuf> {
+    // 优先简体中文 UI 字体。Arial Unicode 虽能显示汉字，但不少字形是旧体/异体
+    //（例如「灰」），放最后兜底。
     vec![
-        PathBuf::from("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
+        PathBuf::from("/System/Library/Fonts/Hiragino Sans GB.ttc"),
+        PathBuf::from(
+            "/System/Library/PrivateFrameworks/FontServices.framework/Versions/A/Resources/Reserved/PingFangUI.ttc",
+        ),
         PathBuf::from("/System/Library/Fonts/PingFang.ttc"),
         PathBuf::from("/System/Library/Fonts/STHeiti Light.ttc"),
-        PathBuf::from("/System/Library/Fonts/Hiragino Sans GB.ttc"),
+        PathBuf::from("/System/Library/Fonts/STHeiti Medium.ttc"),
+        PathBuf::from("/System/Library/Fonts/Supplemental/Songti.ttc"),
+        PathBuf::from("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
         PathBuf::from("/Library/Fonts/Arial Unicode.ttf"),
     ]
 }

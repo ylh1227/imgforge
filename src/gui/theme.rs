@@ -73,6 +73,10 @@ pub const DATA_EXTRACT_LEFT_W: f32 = 272.0;
 pub const VIDEO_REVIEW_WIDE_BREAKPOINT: f32 = SIDE_MAIN_WIDE_BREAKPOINT;
 /// 视频评审左侧栏目标宽度。
 pub const VIDEO_REVIEW_LEFT_W: f32 = SIDE_MAIN_LEFT_W;
+/// 审片舞台圆角（略小于分组卡，贴近监视器井）。
+pub const VIDEO_STAGE_RADIUS: u8 = 8;
+/// 审片工具条行间距。
+pub const VIDEO_TOOLBAR_ROW_GAP: f32 = 6.0;
 /// 日志面板高度上下限。
 pub const LOG_MIN_HEIGHT: f32 = 96.0;
 pub const LOG_MAX_HEIGHT: f32 = 360.0;
@@ -220,6 +224,39 @@ pub fn toolbar_fill(dark: bool) -> Color32 {
     } else {
         Color32::from_rgb(251, 251, 253)
     }
+}
+
+/// 视频评审监视器井（始终偏暗，浅色主题下也不「漂白」画面）。
+pub fn video_stage_fill(_dark: bool) -> Color32 {
+    Color32::from_rgb(14, 14, 16)
+}
+
+/// 监视器井描边。
+pub fn video_stage_stroke(dark: bool) -> Stroke {
+    if dark {
+        Stroke::new(1.0, Color32::from_rgb(48, 48, 52))
+    } else {
+        Stroke::new(1.0, Color32::from_rgb(36, 36, 40))
+    }
+}
+
+/// 对比格标题条（叠在暗场上）。
+pub fn video_pane_title_fill() -> Color32 {
+    Color32::from_rgba_unmultiplied(22, 22, 26, 230)
+}
+
+/// 审片时间码读数色（钨丝暖色，区别于系统蓝强调）。
+pub fn video_timecode_color(dark: bool) -> Color32 {
+    if dark {
+        Color32::from_rgb(232, 196, 140)
+    } else {
+        Color32::from_rgb(150, 110, 48)
+    }
+}
+
+/// 暗场上的时间码（监视器井 / 对比格内）。
+pub fn video_timecode_on_stage() -> Color32 {
+    Color32::from_rgb(236, 204, 152)
 }
 
 /// 顶部分段切换轨道背景。

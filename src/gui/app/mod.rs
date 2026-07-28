@@ -112,11 +112,14 @@ impl ImgforgeApp {
         let formats = ImageFormat::all_supported();
         let review_panel = crate::review::ui::ReviewPanel::new().ok();
         #[cfg(feature = "video-review")]
-        let (video_review_panel, video_review_init_error) =
-            match crate::video_review::ui::VideoReviewPanel::new() {
+        let (video_review_panel, video_review_init_error) = {
+            let glow = crate::video_review::playback::GlowBridge::from_creation_context(cc)
+                .map(std::sync::Arc::new);
+            match crate::video_review::ui::VideoReviewPanel::new_with_glow(glow) {
                 Ok(panel) => (Some(panel), None),
                 Err(e) => (None, Some(e)),
-            };
+            }
+        };
         #[cfg(feature = "data-extract")]
         let data_extract_panel = Some(crate::data_extract::ui::DataExtractPanel::new());
         let gui_prefs = GuiPrefs::load();
@@ -207,6 +210,11 @@ impl ImgforgeApp {
 
 impl eframe::App for ImgforgeApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        #[cfg(feature = "video-review")]
+        if let Some(panel) = &mut self.video_review_panel {
+            panel.prepare_gl_textures(frame);
+        }
+
         self.poll_worker();
         self.poll_quality_preview();
 
@@ -541,6 +549,12 @@ impl eframe::App for ImgforgeApp {
                         });
                     });
             });
+
+        #[cfg(feature = "video-review")]
+        if let Some(panel) = &mut self.video_review_panel {
+            // present 之后再注册，首帧即可挂上 FBO 纹理
+            panel.prepare_gl_textures(frame);
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

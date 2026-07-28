@@ -229,6 +229,22 @@ pub struct GuiPrefs {
     /// 最近亮度匹配偏好。
     #[serde(default, skip_serializing_if = "BrightnessMatchPrefs::is_empty")]
     pub brightness_match: BrightnessMatchPrefs,
+    /// 视频对比宫格布局预设。
+    #[serde(default)]
+    pub video_compare_layout: VideoCompareLayoutPref,
+}
+
+/// 视频对比布局预设（持久化到 GuiPrefs）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoCompareLayoutPref {
+    #[default]
+    Auto,
+    TwoH,
+    TwoV,
+    Grid2x2,
+    Grid3x2,
+    OnePlusFive,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

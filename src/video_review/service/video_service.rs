@@ -13,7 +13,7 @@ use crate::video_review::domain::{
 };
 use crate::video_review::error::{VideoReviewError, VideoReviewResult};
 use crate::video_review::service::align_service::{
-    AlignBatchResult, AlignService, DEFAULT_ALIGN_SECONDS,
+    AlignBatchResult, AlignService,
 };
 use crate::video_review::service::contact_sheet::{ContactSheetResult, FrameProvider};
 use crate::video_review::service::defect_package::{
@@ -407,18 +407,23 @@ impl VideoReviewService {
         })
     }
 
-    /// 音频互相关对齐到主视频（第一路）。`around_ms` 为当前对比时间，用于截取分析窗。
+    /// 对齐到主视频（第一路）。`quality` 控制快速/标准/精细。
     pub fn align_videos(
         &self,
         reference: &VideoItem,
         others: &[VideoItem],
         around_ms: Option<u64>,
+        mode: crate::video_review::service::AlignMode,
+        quality: crate::video_review::service::AlignQuality,
+        progress: Option<&dyn ProgressReporter>,
     ) -> VideoReviewResult<AlignBatchResult> {
         AlignService::new(self.backend.ffmpeg_bin()).align_to_reference(
             reference,
             others,
-            DEFAULT_ALIGN_SECONDS,
             around_ms,
+            mode,
+            quality,
+            progress,
         )
     }
 

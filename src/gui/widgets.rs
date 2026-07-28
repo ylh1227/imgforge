@@ -206,14 +206,19 @@ pub fn toolbar_row<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R
 }
 
 /// 工具栏竖向分隔线（与行高等高）。
+///
+/// 用 `add_sized` 占位，勿用 `allocate_exact_size`——后者 Response 高度与占位不一致，
+/// 会在 `horizontal` 里造成后续控件阶梯错位。
 pub fn toolbar_separator(ui: &mut Ui) {
     let dark = ui.style().visuals.dark_mode;
     ui.add_space(6.0);
-    let (rect, _) =
-        ui.allocate_exact_size(egui::vec2(1.0, TOOLBAR_ROW_HEIGHT), egui::Sense::hover());
+    let response = ui.add_sized(
+        egui::vec2(1.0, TOOLBAR_ROW_HEIGHT),
+        egui::Label::new(RichText::new("\u{200B}").size(1.0)).selectable(false),
+    );
     ui.painter().vline(
-        rect.center().x,
-        rect.y_range(),
+        response.rect.center().x,
+        response.rect.y_range(),
         theme::separator_stroke(dark),
     );
     ui.add_space(6.0);
@@ -231,8 +236,9 @@ pub fn toolbar_combo_box(
     let popup_id = ui.id().with(id_salt).with("popup");
     let is_open = ui.memory(|m| m.is_popup_open(popup_id));
 
+    // 勿用 ▾ 等符号字：CJK 优先字体常缺字形，会显示成方框。
     let btn = Button::new(
-        RichText::new(format!("{selected_label}  ▾"))
+        RichText::new(selected_label)
             .size(13.0)
             .color(theme::primary_label(dark)),
     )

@@ -2,8 +2,12 @@
 
 pub mod domain;
 pub mod error;
+pub mod scopes;
 pub mod service;
 pub mod storage;
+
+#[cfg(feature = "gui")]
+pub mod playback;
 
 #[cfg(feature = "gui")]
 pub mod ui;

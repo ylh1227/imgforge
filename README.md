@@ -25,13 +25,13 @@
   - 从文件夹导入 mp4/mov/mkv/webm/avi/m4v
   - ffprobe 读取时长、分辨率、编码等元数据
   - 时间轴抽帧预览（非连续播放）；属性面板置于时间轴上方，时间轴占满主区域宽度
-  - 2–6 路视频同步时间点对比（2 路并排，3+ 宫格）
+  - 2–6 路视频同步时间点对比：画幅感知装箱、布局预设（自动/2H/2V/2×2/3×2/1+5）、Solo/Wipe/叠化
   - **列表 / 卡片双视图**：列表模式高密度浏览 + 悬停预览；卡片模式展示封面与关键元数据
   - **多宫格拼接导出**：将当前对比选择按统一时间点抽帧，导出 PNG contact sheet
   - **对比拼接视频导出**：从当前时间点起，将 2–6 路视频按宫格布局合成 MP4；支持**高质量**（CRF 17）与**无损**（CRF 0）两种模式
   - 状态、标签、时间点标记、片段备注（含常用问题模板）
   - 多选批量更新状态、追加备注、应用标签
-  - 偏移校准（`offset_ms`）对齐不同起点素材
+  - 偏移校准（`offset_ms`）：**快速/标准/精细** 质量档；默认快速=音频优先短窗；无声再走画面 raw 管线；特征仅精细档
   - 导出 CSV / JSON 报告（含标记/片段详情）
   - 抽帧缓存目录：`~/.imgforge/video_frames/`（可查看统计并清理）
 
@@ -61,13 +61,41 @@
 
 ```bash
 # macOS (Homebrew)
-brew install ffmpeg
+brew install ffmpeg mpv
 
 # Windows (winget)
 winget install Gyan.FFmpeg
+# 另需安装 mpv（提供 libmpv），否则预览回退为 ffmpeg 抽帧
 ```
 
-未安装时 App 可正常启动，顶部会提示；导入与抽帧功能不可用。
+- **ffmpeg / ffprobe**：导入、示波器抽帧、对齐、导出
+- **libmpv**（`brew install mpv`）：审片区常驻解码、播放/暂停与多路同步 scrub；不可用时自动回退抽帧预览
+
+若链接报 `library 'mpv' not found`，确认已 `brew install mpv`，或手动指定：
+
+```bash
+export LIBRARY_PATH="$(brew --prefix)/lib:$LIBRARY_PATH"
+cargo run --features gui --bin imgforge-app
+```
+
+未安装 ffmpeg 时 App 可正常启动，顶部会提示；导入与抽帧功能不可用。
+
+#### 视频审片快捷键（输入框聚焦时不生效）
+
+| 键 | 行为 |
+|----|------|
+| Space | 播放 / 暂停 |
+| ← / → | ±1 秒 |
+| `,` / `.` | 精确 ±1 帧 |
+| J / K / L | 减速 / 暂停 / 加速（0.5↔1↔1.5↔2） |
+| `[` / `]` | 设 A 点 / 设 B 点并开 A-B 循环 |
+| Home / End | 片头 / 片尾 |
+| Esc | 退出 Solo / Wipe / 叠化，回宫格 |
+| W | 开/关 Wipe（焦点+下一格） |
+| F | 焦点格 Solo 切换 |
+| Tab | 循环焦点格 |
+
+工具条另有：布局芯片、倍速、A-B、安全框、画质（性能/原片）；对比 pane 上可拖标题换位、🔊 听哪一路。状态提示如 `libmpv · VT · GL · perf · 面板`（OpenGL FBO 按面板物理像素出图，GPU 缩放）/ `… · native · 面板`（高质量缩放）/ `抽帧模式`。「原片」指色彩与缩放质量，不是每路存整幅 4K 位图。GUI 使用 eframe glow 后端以启用 GPU 出图。
 
 #### 数据提取（Imatest）
 

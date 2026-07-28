@@ -1,6 +1,8 @@
 //! 视频评审服务层。
 
+pub mod align_dsp;
 pub mod align_service;
+pub mod align_visual;
 pub mod analysis_service;
 pub mod contact_sheet;
 pub mod defect_package;
@@ -11,9 +13,9 @@ pub mod grid_video;
 pub mod screenshot_service;
 pub mod video_service;
 
+pub use align_dsp::{offset_after_frame_step, quantize_offset_to_fps, MAX_LAG_MS};
 pub use align_service::{
-    offset_after_frame_step, quantize_offset_to_fps, AlignBatchResult, AlignPairResult,
-    AlignService, DEFAULT_ALIGN_SECONDS,
+    AlignBatchResult, AlignMode, AlignPairResult, AlignQuality, AlignService, DEFAULT_ALIGN_SECONDS,
 };
 pub use analysis_service::{VideoAnalysisService, VideoAnalysisSuggestion};
 pub use contact_sheet::{

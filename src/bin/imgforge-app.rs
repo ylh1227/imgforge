@@ -13,6 +13,7 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: app_viewport(),
         centered: true,
+        renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
 

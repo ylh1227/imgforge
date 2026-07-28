@@ -27,7 +27,8 @@ use crate::video_review::service::frame_cache::FrameCache;
 use crate::video_review::service::screenshot_service::plan_shots;
 use crate::video_review::service::{
     compute_layout, compute_quality_cell_size, default_defect_output_dir, grid_dimensions,
-    max_export_duration_ms, offset_after_frame_step, AlignBatchResult, AlignPairResult,
+    max_export_duration_ms, offset_after_frame_step, AlignBatchResult, AlignMode, AlignPairResult,
+    AlignQuality,
     BatchOperationResult, BatchScreenshotRequest, BatchScreenshotResult, BatchScreenshotService,
     CreateDefectRequest, CreateDefectResult, GridVideoCaptionMode, GridVideoExportQuality,
     ImportFolderOptions, ImportFolderResult, ScreenshotFormat, ScreenshotMode,
@@ -35,11 +36,15 @@ use crate::video_review::service::{
     VideoReviewService, ALIGN_CONFIDENCE_WARN, DEFAULT_DEFECT_HALF_WINDOW_MS,
     DEFAULT_INTERVAL_SECS, DEFAULT_MAX_SHOTS,
 };
+use crate::video_review::ui::chrome;
 use crate::video_review::ui::hover_preview::HoverPreviewController;
+use crate::video_review::ui::compare_layout::{CompareLayoutPreset, CompareViewMode};
 use crate::video_review::ui::multi_compare::{format_ms, MultiVideoCompare, MAX_COMPARE_VIDEOS};
+use crate::video_review::ui::scopes_panel::{resolve_scope_source, ScopesPanel};
 use crate::video_review::ui::video_list::{
     video_list_body_ui, video_list_toolbar_ui, VideoListAction, VideoListState,
 };
+use crate::video_review::playback::{ComparePlayer, FidelityMode, ScopeSampleThrottle, SeekKind};
 
 #[derive(Debug, Clone, Default)]
 pub struct VideoReviewPanelOutput {
@@ -116,6 +121,8 @@ pub struct VideoReviewPanel {
     align_review: Option<AlignBatchResult>,
     align_review_open: bool,
     align_prev_offsets: HashMap<i64, i64>,
+    align_mode: AlignMode,
+    align_quality: AlignQuality,
     defect_job: BackgroundJob<CreateDefectResult>,
     defect_dialog_open: bool,
     defect_title: String,
@@ -159,6 +166,12 @@ pub struct VideoReviewPanel {
     pending_open_remote_batch_id: Option<String>,
     /// 小窗堆叠布局当前分段。
     stack_pane: VideoStackPane,
+    scopes: ScopesPanel,
+    /// 时间轴仍在拖动/刚拖完的宽限期，用于示波器降质异步更新。
+    timeline_scrub_until: Option<std::time::Instant>,
+    /// libmpv 多路播放器（不可用时回退抽帧）。
+    player: ComparePlayer,
+    scope_sample_throttle: ScopeSampleThrottle,
 }
 
 const MARKER_TEMPLATES: &[&str] = &["画面抖动", "字幕错误", "音画不同步", "黑场", "曝光异常"];
@@ -182,6 +195,12 @@ enum VideoStackPane {
 
 impl VideoReviewPanel {
     pub fn new() -> Result<Self, String> {
+        Self::new_with_glow(None)
+    }
+
+    pub fn new_with_glow(
+        glow: Option<std::sync::Arc<crate::video_review::playback::GlowBridge>>,
+    ) -> Result<Self, String> {
         let service = VideoReviewService::open().map_err(|e| e.to_string())?;
         let mut remote_config = crate::remote::RemoteConfig::default();
         remote_config.apply_env_overrides();
@@ -241,6 +260,8 @@ impl VideoReviewPanel {
             align_review: None,
             align_review_open: false,
             align_prev_offsets: HashMap::new(),
+            align_mode: AlignMode::Auto,
+            align_quality: AlignQuality::Fast,
             defect_job: BackgroundJob::default(),
             defect_dialog_open: false,
             defect_title: String::new(),
@@ -283,9 +304,30 @@ impl VideoReviewPanel {
             remote_loading: false,
             pending_open_remote_batch_id: None,
             stack_pane: VideoStackPane::default(),
+            scopes: ScopesPanel::default(),
+            timeline_scrub_until: None,
+            player: ComparePlayer::default(),
+            scope_sample_throttle: ScopeSampleThrottle::default(),
         };
+        if let Some(bridge) = glow {
+            panel.player.set_glow_bridge(bridge);
+        }
+        panel.player.ensure_probed();
+        let prefs = GuiPrefs::load();
+        panel.compare.layout_preset = prefs.video_compare_layout;
         panel.reload_batches().map_err(|e| e.to_string())?;
         Ok(panel)
+    }
+
+    fn persist_compare_layout(&self) {
+        let mut prefs = GuiPrefs::load();
+        prefs.video_compare_layout = self.compare.layout_preset;
+        let _ = prefs.save();
+    }
+
+    /// 每帧将 libmpv FBO 纹理注册进 egui（需 glow 后端）。
+    pub fn prepare_gl_textures(&mut self, frame: &mut eframe::Frame) {
+        self.player.register_gl_textures(frame);
     }
 
     pub fn set_remote_config(&mut self, remote_config: crate::remote::RemoteConfig) {
@@ -335,8 +377,18 @@ impl VideoReviewPanel {
         self.draw_align_review(ctx);
         self.draw_defect_dialog(ctx);
 
-        widgets::navigation_header(ui, "标记片段、对比与批量抽帧");
-        widgets::page_header_gap(ui);
+        let clip_line = self.current_video_item().map(|v| {
+            v.file_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| format!("视频 #{}", v.id))
+        });
+        let sync_ms = if self.compare_mode || self.current_video.is_some() {
+            Some(self.compare.current_time_ms)
+        } else {
+            None
+        };
+        chrome::review_page_header(ui, clip_line.as_deref(), sync_ms);
         self.show_ffmpeg_banner(ui);
 
         let geo = widgets::SideMainGeometry::compute(
@@ -518,6 +570,7 @@ impl VideoReviewPanel {
                             .clicked()
                         {
                             self.current_batch = Some(batch.id);
+                            self.player.clear();
                             let _ = self.reload_videos();
                         }
                     }
@@ -619,75 +672,28 @@ impl VideoReviewPanel {
     }
 
     fn center_ui(&mut self, ctx: &Context, ui: &mut egui::Ui, area: egui::Vec2) {
-        self.attribute_panel_ui(ctx, ui, area.x);
+        self.attribute_panel_ui(ctx, ui, area.x, self.scopes.enabled);
         ui.add_space(8.0);
 
         fixed_grouped_section(
             ui,
             if self.compare_mode {
-                "多视频对比"
+                "对比台"
             } else {
-                "时间轴"
+                "监视器"
             },
             area.x,
             |ui| {
-                if self.compare_mode {
-                    let ffmpeg_ok = self.service.availability().ffmpeg_ok;
+                self.stage_toolbar_ui(ctx, ui);
+
+                if self.scopes.enabled {
+                    chrome::toolbar_row_gap(ui);
+                    let in_out = (self.segment_start_ms, self.segment_end_ms);
                     ui.horizontal(|ui| {
-                        if widgets::compact_secondary_button(ui, "← 单视频", true).clicked() {
-                            self.compare_mode = false;
-                        }
-                        ui.label(format!(
-                            "同步时间：{}",
-                            format_ms(self.compare.current_time_ms)
-                        ));
-                        let can_export = self.selected_ids.len() >= 2;
-                        let busy = self.align_job.is_running() || self.defect_job.is_running();
-                        if widgets::compact_secondary_button(
-                            ui,
-                            if self.align_job.is_running() {
-                                "对齐中…"
-                            } else {
-                                "帧对齐"
-                            },
-                            can_export && ffmpeg_ok && !busy,
-                        )
-                        .clicked()
-                        {
-                            self.start_frame_align(ctx);
-                        }
-                        if !self.align_prev_offsets.is_empty()
-                            && widgets::compact_secondary_button(ui, "撤销对齐", !busy).clicked()
-                        {
-                            self.undo_align_offsets();
-                        }
-                        if self.align_review.is_some()
-                            && widgets::compact_secondary_button(ui, "对齐结果", true).clicked()
-                        {
-                            self.align_review_open = true;
-                        }
-                        if widgets::compact_primary_button(ui, "导出宫格", can_export).clicked()
-                        {
-                            self.export_contact_sheet();
-                        }
-                        if widgets::compact_secondary_button(
-                            ui,
-                            "导出视频",
-                            can_export && ffmpeg_ok,
-                        )
-                        .clicked()
-                        {
-                            self.export_compare_grid_video();
-                        }
-                        if widgets::compact_primary_button(
-                            ui,
-                            "从对比新建缺陷",
-                            can_export && ffmpeg_ok && !busy,
-                        )
-                        .clicked()
-                        {
-                            self.open_defect_dialog();
-                        }
+                        ui.vertical(|ui| {
+                            ui.set_width(340.0_f32.min(ui.available_width()));
+                            self.scopes.controls_ui(ui, in_out);
+                        });
                     });
                 }
 
@@ -697,16 +703,76 @@ impl VideoReviewPanel {
                     .unwrap_or(0)
                     .max(1);
 
+                let master_offset = self
+                    .player
+                    .audio_master()
+                    .and_then(|id| self.videos.iter().find(|v| v.id == id))
+                    .map(|v| v.offset_ms)
+                    .or_else(|| self.current_video_item().map(|v| v.offset_ms))
+                    .unwrap_or(0);
+
+                // 播放时钟推进 + A-B
+                if self.player.playing() {
+                    let mut t = self.player.tick_global_time(max_dur, master_offset);
+                    t = self.player.apply_ab_loop(
+                        t,
+                        self.segment_start_ms,
+                        self.segment_end_ms,
+                    );
+                    self.compare.current_time_ms = t;
+                    ctx.request_repaint();
+                }
+
+                self.handle_playback_keys(ctx, max_dur);
+
+                chrome::toolbar_row_gap(ui);
+                self.transport_toolbar_ui(ui, max_dur);
+
                 let mut t = self.compare.current_time_ms.min(max_dur) as f64;
-                if ui
-                    .add(
+                let slider = widgets::equal_height_row(ui, 6.0, |ui| {
+                    chrome::timecode_label(ui, self.compare.current_time_ms.min(max_dur), false);
+                    ui.label(
+                        RichText::new("/")
+                            .size(12.0)
+                            .color(theme::secondary_label(ui.visuals().dark_mode)),
+                    );
+                    ui.label(
+                        RichText::new(format_ms(max_dur))
+                            .monospace()
+                            .size(12.0)
+                            .color(theme::secondary_label(ui.visuals().dark_mode)),
+                    );
+                    ui.add_sized(
+                        egui::vec2(ui.available_width().max(120.0), widgets::TOOLBAR_ROW_HEIGHT),
                         egui::Slider::new(&mut t, 0.0..=max_dur as f64)
                             .smart_aim(true)
-                            .text("时间"),
+                            .show_value(false),
                     )
-                    .changed()
-                {
+                });
+                if slider.dragged() {
                     self.compare.current_time_ms = t as u64;
+                    self.player
+                        .on_user_seek(self.compare.current_time_ms, SeekKind::Scrubbing);
+                    self.timeline_scrub_until =
+                        Some(std::time::Instant::now() + std::time::Duration::from_millis(160));
+                } else if slider.changed() {
+                    self.compare.current_time_ms = t as u64;
+                    self.player
+                        .on_user_seek(self.compare.current_time_ms, SeekKind::Committed);
+                    self.timeline_scrub_until =
+                        Some(std::time::Instant::now() + std::time::Duration::from_millis(160));
+                }
+                let scrubbing = self
+                    .timeline_scrub_until
+                    .map(|until| std::time::Instant::now() < until)
+                    .unwrap_or(false);
+                if scrubbing {
+                    if let Some(until) = self.timeline_scrub_until {
+                        let rem = until.saturating_duration_since(std::time::Instant::now());
+                        ctx.request_repaint_after(rem.max(std::time::Duration::from_millis(16)));
+                    }
+                } else if self.timeline_scrub_until.is_some() {
+                    self.timeline_scrub_until = None;
                 }
 
                 if !self.compare_mode {
@@ -718,33 +784,572 @@ impl VideoReviewPanel {
                 ui.add_space(6.0);
                 let view_h = ui.available_height().max(120.0);
                 let pane_w = ui.available_width();
-                if self.compare_mode && self.selected_ids.len() >= 2 {
-                    let action = self.compare.ui(
-                        ctx,
-                        ui,
-                        &self.service,
-                        &self.videos,
-                        egui::vec2(pane_w, view_h.max(120.0)),
-                    );
-                    self.apply_compare_nudges(&action.frame_nudges);
-                } else if let Some(video) = self.current_video_item().cloned() {
-                    let mut compare = MultiVideoCompare::with_time(self.compare.current_time_ms);
-                    let action = compare.ui(
-                        ctx,
-                        ui,
-                        &self.service,
-                        std::slice::from_ref(&video),
-                        egui::vec2(pane_w, view_h.max(120.0)),
-                    );
-                    self.compare.current_time_ms = compare.current_time_ms;
-                    self.apply_compare_nudges(&action.frame_nudges);
+                let scope_w = self.scopes.panel_width();
+                let video_w = if scope_w > 0.0 {
+                    (pane_w - scope_w - 8.0).max(160.0)
                 } else {
-                    ui.centered_and_justified(|ui| {
-                        ui.label("选择或导入视频开始评审");
-                    });
-                }
+                    pane_w
+                };
+
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(video_w, view_h.max(120.0)),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            chrome::stage_frame(ui, |ui| {
+                                let stage = egui::vec2(
+                                    ui.available_width(),
+                                    ui.available_height().max(108.0),
+                                );
+                                if self.compare_mode && self.selected_ids.len() >= 2 {
+                                    let action = self.compare.ui(
+                                        ctx,
+                                        ui,
+                                        &self.service,
+                                        &mut self.player,
+                                        &self.videos,
+                                        stage,
+                                        scrubbing,
+                                    );
+                                    self.apply_compare_action(&action);
+                                } else if let Some(video) = self.current_video_item().cloned() {
+                                    let prev_ids = self.compare.compare_ids.clone();
+                                    self.compare.set_compare_ids(vec![video.id]);
+                                    let action = self.compare.ui(
+                                        ctx,
+                                        ui,
+                                        &self.service,
+                                        &mut self.player,
+                                        std::slice::from_ref(&video),
+                                        stage,
+                                        scrubbing,
+                                    );
+                                    self.compare.compare_ids = prev_ids;
+                                    self.apply_compare_nudges(&action.frame_nudges);
+                                    if let Some(id) = action.audio_master {
+                                        self.player.set_audio_master(id);
+                                    }
+                                } else {
+                                    ui.centered_and_justified(|ui| {
+                                        ui.label(
+                                            RichText::new("选择或导入视频开始评审")
+                                                .size(13.0)
+                                                .color(theme::secondary_label(true)),
+                                        );
+                                    });
+                                }
+                            });
+                        },
+                    );
+
+                    if self.scopes.enabled {
+                        ui.add_space(8.0);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(scope_w, view_h.max(120.0)),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                let source = resolve_scope_source(
+                                    &self.videos,
+                                    self.compare_mode,
+                                    &self.compare.compare_ids,
+                                    &self.selected_ids,
+                                    self.current_video,
+                                    self.player.audio_master(),
+                                );
+                                let time_ms = self.compare.current_time_ms;
+                                let in_out = (self.segment_start_ms, self.segment_end_ms);
+                                if let Some((s, e)) = self.scopes.take_pending_inout() {
+                                    self.segment_start_ms = s;
+                                    self.segment_end_ms = e.max(s + 1);
+                                }
+                                let playing = self.player.playing();
+                                let sample = self.scope_sample_throttle.should_sample(
+                                    time_ms,
+                                    playing,
+                                    scrubbing,
+                                );
+                                let scope_time = if sample {
+                                    time_ms
+                                } else {
+                                    self.scope_sample_throttle
+                                        .last_sampled_ms()
+                                        .unwrap_or(time_ms)
+                                };
+                                // 采样节拍从 mpv 截帧喂示波器；失败则面板内回退 ffmpeg。
+                                let live_frame = if sample
+                                    && self.scopes.view_is_current()
+                                    && self.player.backend_info().available
+                                {
+                                    source.and_then(|v| {
+                                        let (w, h) = scope_capture_size(v);
+                                        self.player.capture_video_rgba(v.id, w, h)
+                                    })
+                                } else {
+                                    None
+                                };
+                                self.scopes.ui(
+                                    ctx,
+                                    ui,
+                                    &self.service,
+                                    source,
+                                    scope_time,
+                                    scrubbing || playing,
+                                    in_out,
+                                    live_frame.as_ref(),
+                                );
+                            },
+                        );
+                    }
+                });
             },
         );
+    }
+
+    fn stage_toolbar_ui(&mut self, ctx: &Context, ui: &mut egui::Ui) {
+        let ffmpeg_ok = self.service.availability().ffmpeg_ok;
+        let scopes_label = if self.scopes.enabled {
+            "示波器 ✓"
+        } else {
+            "示波器"
+        };
+
+        widgets::equal_height_row(ui, 6.0, |ui| {
+            if widgets::compact_secondary_button(ui, scopes_label, true).clicked() {
+                self.scopes.enabled = !self.scopes.enabled;
+            }
+            if self.compare_mode {
+                if widgets::compact_secondary_button(ui, "← 单视频", true).clicked() {
+                    self.compare_mode = false;
+                }
+                widgets::toolbar_separator(ui);
+                let can_export = self.selected_ids.len() >= 2;
+                let busy = self.align_job.is_running() || self.defect_job.is_running();
+                if widgets::compact_primary_button(ui, "导出宫格", can_export).clicked() {
+                    self.export_contact_sheet();
+                }
+                if widgets::compact_secondary_button(ui, "导出视频", can_export && ffmpeg_ok)
+                    .clicked()
+                {
+                    self.export_compare_grid_video();
+                }
+                if widgets::compact_primary_button(
+                    ui,
+                    "新建缺陷",
+                    can_export && ffmpeg_ok && !busy,
+                )
+                .clicked()
+                {
+                    self.open_defect_dialog();
+                }
+            }
+        });
+
+        if self.compare_mode {
+            chrome::toolbar_row_gap(ui);
+            let can_export = self.selected_ids.len() >= 2;
+            let busy = self.align_job.is_running() || self.defect_job.is_running();
+            widgets::equal_height_row(ui, 6.0, |ui| {
+                chrome::chip_strip(ui, "质量", |ui| {
+                    for q in AlignQuality::ALL {
+                        if ui
+                            .selectable_label(self.align_quality == q, q.label())
+                            .on_hover_text(match q {
+                                AlignQuality::Fast => {
+                                    "5s·8kHz；包络+GCC；无声早切画面；128p 运动（默认）"
+                                }
+                                AlignQuality::Standard => {
+                                    "12s；包络+GCC；主路灰度复用；轻量 NCC"
+                                }
+                                AlignQuality::Fine => {
+                                    "30s；+chromagram+漂移；完整画面+特征"
+                                }
+                            })
+                            .clicked()
+                        {
+                            self.align_quality = q;
+                        }
+                    }
+                });
+                chrome::chip_strip(ui, "对齐", |ui| {
+                    for mode in AlignMode::ALL {
+                        if ui
+                            .selectable_label(self.align_mode == mode, mode.label())
+                            .on_hover_text(match mode {
+                                AlignMode::Auto => "优先音频；置信不够再画面",
+                                AlignMode::Audio => "仅音频互相关",
+                                AlignMode::Visual => "画面运动能量（raw 管线）",
+                                AlignMode::Features => "特征内点（建议精细档）",
+                            })
+                            .clicked()
+                        {
+                            self.align_mode = mode;
+                        }
+                    }
+                });
+                if widgets::compact_secondary_button(
+                    ui,
+                    if self.align_job.is_running() {
+                        "对齐中…"
+                    } else {
+                        "帧对齐"
+                    },
+                    can_export && ffmpeg_ok && !busy,
+                )
+                .clicked()
+                {
+                    self.start_frame_align(ctx);
+                }
+                if !self.align_prev_offsets.is_empty()
+                    && widgets::compact_secondary_button(ui, "撤销", !busy).clicked()
+                {
+                    self.undo_align_offsets();
+                }
+                if self.align_review.is_some()
+                    && widgets::compact_secondary_button(ui, "结果", true).clicked()
+                {
+                    self.align_review_open = true;
+                }
+            });
+            if self.align_job.is_running() {
+                chrome::toolbar_row_gap(ui);
+                if let Some(progress) = self.align_job.progress() {
+                    let fraction = progress.fraction();
+                    let label = ProgressReporter::status_label(progress.as_ref())
+                        .unwrap_or_else(|| "正在对齐…".into());
+                    self.status_hint = label.clone();
+                    ui.vertical(|ui| {
+                        ui.add(
+                            egui::ProgressBar::new(fraction)
+                                .desired_width(ui.available_width().min(320.0))
+                                .show_percentage(),
+                        );
+                        ui.label(RichText::new(label).weak().size(11.0));
+                    });
+                }
+            }
+            chrome::toolbar_row_gap(ui);
+            self.compare_layout_toolbar(ui);
+        }
+    }
+
+    fn transport_toolbar_ui(&mut self, ui: &mut egui::Ui, max_dur: u64) {
+        // 单层 equal_height_row：所有控件同高落盘，避免嵌套 horizontal / allocate_exact_size 阶梯错位。
+        widgets::equal_height_row(ui, 6.0, |ui| {
+            let play_label = if self.player.playing() {
+                "暂停"
+            } else {
+                "播放"
+            };
+            if widgets::compact_primary_button(
+                ui,
+                play_label,
+                self.player.backend_info().available || self.current_video_item().is_some(),
+            )
+            .clicked()
+            {
+                self.player
+                    .toggle_play(self.compare.current_time_ms.min(max_dur));
+            }
+
+            chrome::chip_strip(ui, "倍速", |ui| {
+                for rate in [0.5_f64, 1.0, 1.5, 2.0] {
+                    let selected = (self.player.rate() - rate).abs() < 0.01;
+                    if ui
+                        .selectable_label(selected, format!("{rate}x"))
+                        .clicked()
+                    {
+                        self.player.set_rate(rate);
+                    }
+                }
+            });
+
+            widgets::toolbar_separator(ui);
+
+            let ab_on = self.player.ab_loop();
+            let ab_label = if ab_on { "A-B ✓" } else { "A-B" };
+            if chrome::toolbar_toggle(ui, ab_on, ab_label)
+                .on_hover_text("用当前 In-Out 循环播放（[ ] 设点）")
+                .clicked()
+            {
+                self.player.set_ab_loop(!ab_on);
+            }
+            let safe_on = self.player.show_safe_frame();
+            let safe_label = if safe_on { "安全框 ✓" } else { "安全框" };
+            if chrome::toolbar_toggle(ui, safe_on, safe_label).clicked() {
+                self.player.toggle_safe_frame();
+            }
+
+            chrome::chip_strip(ui, "画质", |ui| {
+                for mode in [FidelityMode::Performance, FidelityMode::Native] {
+                    let selected = self.player.fidelity() == mode;
+                    if ui
+                        .selectable_label(selected, mode.label())
+                        .on_hover_text(match mode {
+                            FidelityMode::Performance => {
+                                "按面板物理像素出帧，缩放更省，多路更流畅（默认）"
+                            }
+                            FidelityMode::Native => {
+                                "片源色彩 + GPU 高质量缩放到面板（非整幅 4K 纹理）"
+                            }
+                        })
+                        .clicked()
+                    {
+                        self.player.set_fidelity(mode);
+                    }
+                }
+            });
+
+            ui.add_sized(
+                egui::vec2(
+                    ui.fonts(|f| {
+                        f.layout_no_wrap(
+                            self.player.status_label().to_owned(),
+                            egui::FontId::proportional(11.0),
+                            Color32::PLACEHOLDER,
+                        )
+                        .size()
+                        .x
+                    }) + 4.0,
+                    widgets::TOOLBAR_ROW_HEIGHT,
+                ),
+                egui::Label::new(
+                    RichText::new(self.player.status_label())
+                        .weak()
+                        .size(11.0),
+                )
+                .selectable(false),
+            );
+        });
+    }
+
+    fn compare_layout_toolbar(&mut self, ui: &mut egui::Ui) {
+        let n = self.compare.compare_ids.len().max(self.selected_ids.len());
+        widgets::equal_height_row(ui, 4.0, |ui| {
+            chrome::chip_strip(ui, "布局", |ui| {
+                for preset in CompareLayoutPreset::ALL {
+                    let enabled = preset.enabled_for(n.max(2));
+                    let selected = self.compare.layout_preset == preset;
+                    if ui
+                        .add_enabled(enabled, egui::SelectableLabel::new(selected, preset.label()))
+                        .on_hover_text(match preset {
+                            CompareLayoutPreset::Auto => "按路数自动选布局，格子按画幅装箱",
+                            CompareLayoutPreset::TwoH => "左右双联",
+                            CompareLayoutPreset::TwoV => "上下双联",
+                            CompareLayoutPreset::Grid2x2 => "2×2 宫格",
+                            CompareLayoutPreset::Grid3x2 => "3×2 宫格",
+                            CompareLayoutPreset::OnePlusFive => "左侧主画面 + 右侧最多 5 路",
+                        })
+                        .clicked()
+                    {
+                        if self.compare.set_layout_preset(preset) {
+                            self.persist_compare_layout();
+                        }
+                    }
+                }
+            });
+            chrome::chip_strip(ui, "视图", |ui| {
+                let in_grid = matches!(
+                    self.compare.view_mode,
+                    CompareViewMode::Grid | CompareViewMode::Solo { .. }
+                );
+                let can_pair = self.compare.compare_ids.len() >= 2;
+                let wipe_on = matches!(self.compare.view_mode, CompareViewMode::Wipe { .. });
+                let overlay_on = matches!(self.compare.view_mode, CompareViewMode::Overlay { .. });
+                let solo_on = matches!(self.compare.view_mode, CompareViewMode::Solo { .. });
+                if ui
+                    .selectable_label(in_grid && !solo_on, "宫格")
+                    .on_hover_text("多路宫格（Esc 也可退出 Solo/Wipe/叠化）")
+                    .clicked()
+                {
+                    self.compare.exit_special_mode();
+                }
+                if ui
+                    .add_enabled(can_pair, egui::SelectableLabel::new(wipe_on, "Wipe"))
+                    .on_hover_text("两路同时间点左右分割对比（W）")
+                    .clicked()
+                {
+                    if wipe_on {
+                        self.compare.exit_special_mode();
+                    } else {
+                        self.compare.enter_wipe();
+                    }
+                }
+                if ui
+                    .add_enabled(can_pair, egui::SelectableLabel::new(overlay_on, "叠化"))
+                    .on_hover_text("两路半透明叠加 / 差分")
+                    .clicked()
+                {
+                    if overlay_on {
+                        self.compare.exit_special_mode();
+                    } else {
+                        self.compare.enter_overlay();
+                    }
+                }
+                if ui
+                    .selectable_label(solo_on, "Solo")
+                    .on_hover_text("焦点格全屏（双击画面或 F）")
+                    .clicked()
+                {
+                    self.compare.toggle_solo_focused();
+                }
+            });
+        });
+    }
+
+    fn apply_compare_action(
+        &mut self,
+        action: &crate::video_review::ui::multi_compare::CompareUiAction,
+    ) {
+        self.apply_compare_nudges(&action.frame_nudges);
+        if let Some(id) = action.audio_master {
+            self.player.set_audio_master(id);
+        }
+        if let Some(ids) = &action.reorder_ids {
+            self.compare.compare_ids = ids.clone();
+            self.selected_ids = ids.clone();
+        }
+        if action.layout_changed {
+            self.persist_compare_layout();
+        }
+    }
+
+    fn handle_playback_keys(&mut self, ctx: &Context, max_dur: u64) {
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+        let keys = ctx.input(|i| {
+            (
+                i.key_pressed(egui::Key::Space),
+                i.key_pressed(egui::Key::ArrowLeft),
+                i.key_pressed(egui::Key::ArrowRight),
+                i.key_pressed(egui::Key::Comma),
+                i.key_pressed(egui::Key::Period),
+                i.key_pressed(egui::Key::J),
+                i.key_pressed(egui::Key::K),
+                i.key_pressed(egui::Key::L),
+                i.key_pressed(egui::Key::OpenBracket),
+                i.key_pressed(egui::Key::CloseBracket),
+                i.key_pressed(egui::Key::Home),
+                i.key_pressed(egui::Key::End),
+                i.key_pressed(egui::Key::Escape),
+                i.key_pressed(egui::Key::W),
+                i.key_pressed(egui::Key::F),
+                i.key_pressed(egui::Key::Tab),
+            )
+        });
+        let (
+            space,
+            left,
+            right,
+            comma,
+            period,
+            j,
+            k,
+            l,
+            open_b,
+            close_b,
+            home,
+            end,
+            escape,
+            wipe_key,
+            solo_key,
+            tab,
+        ) = keys;
+
+        if self.compare_mode {
+            if escape {
+                self.compare.exit_special_mode();
+            }
+            if wipe_key {
+                if matches!(self.compare.view_mode, CompareViewMode::Wipe { .. }) {
+                    self.compare.exit_special_mode();
+                } else {
+                    self.compare.enter_wipe();
+                }
+            }
+            if solo_key {
+                self.compare.toggle_solo_focused();
+            }
+            if tab {
+                self.compare.cycle_focus();
+            }
+        }
+
+        if space {
+            self.player
+                .toggle_play(self.compare.current_time_ms.min(max_dur));
+        }
+        if left {
+            self.compare.current_time_ms =
+                self.player
+                    .seek_relative(self.compare.current_time_ms, max_dur, -1000);
+        }
+        if right {
+            self.compare.current_time_ms =
+                self.player
+                    .seek_relative(self.compare.current_time_ms, max_dur, 1000);
+        }
+        if comma {
+            let vids = self.playback_video_ids();
+            let videos: Vec<&VideoItem> = vids
+                .iter()
+                .filter_map(|id| self.videos.iter().find(|v| v.id == *id))
+                .collect();
+            self.compare.current_time_ms =
+                self.player
+                    .frame_step_all(&videos, self.compare.current_time_ms, false);
+        }
+        if period {
+            let vids = self.playback_video_ids();
+            let videos: Vec<&VideoItem> = vids
+                .iter()
+                .filter_map(|id| self.videos.iter().find(|v| v.id == *id))
+                .collect();
+            self.compare.current_time_ms =
+                self.player
+                    .frame_step_all(&videos, self.compare.current_time_ms, true);
+        }
+        if j {
+            self.player.cycle_rate_slower();
+        }
+        if k {
+            self.player.pause(self.compare.current_time_ms);
+        }
+        if l {
+            self.player.cycle_rate_faster();
+            if !self.player.playing() {
+                self.player
+                    .toggle_play(self.compare.current_time_ms.min(max_dur));
+            }
+        }
+        if open_b {
+            self.segment_start_ms = self.compare.current_time_ms;
+            if self.segment_end_ms <= self.segment_start_ms {
+                self.segment_end_ms = self.segment_start_ms + 1;
+            }
+        }
+        if close_b {
+            self.segment_end_ms = self.compare.current_time_ms.max(self.segment_start_ms + 1);
+            self.player.set_ab_loop(true);
+        }
+        if home {
+            self.compare.current_time_ms = 0;
+            self.player.on_user_seek(0, SeekKind::Committed);
+        }
+        if end {
+            self.compare.current_time_ms = max_dur;
+            self.player.on_user_seek(max_dur, SeekKind::Committed);
+        }
+    }
+
+    fn playback_video_ids(&self) -> Vec<i64> {
+        if self.compare_mode && self.selected_ids.len() >= 2 {
+            self.selected_ids.clone()
+        } else if let Some(id) = self.current_video {
+            vec![id]
+        } else {
+            Vec::new()
+        }
     }
 
     fn draw_timeline_strip(&mut self, ctx: &Context, ui: &mut egui::Ui, video: &VideoItem) {
@@ -766,6 +1371,11 @@ impl VideoReviewPanel {
                             );
                             if resp.clicked() {
                                 self.compare.current_time_ms = *t;
+                                self.player.on_user_seek(*t, SeekKind::Committed);
+                                self.timeline_scrub_until = Some(
+                                    std::time::Instant::now()
+                                        + std::time::Duration::from_millis(160),
+                                );
                             }
                         }
                     }
@@ -775,7 +1385,13 @@ impl VideoReviewPanel {
         });
     }
 
-    fn attribute_panel_ui(&mut self, ctx: &Context, ui: &mut egui::Ui, width: f32) {
+    fn attribute_panel_ui(
+        &mut self,
+        ctx: &Context,
+        ui: &mut egui::Ui,
+        width: f32,
+        scopes_open: bool,
+    ) {
         let tabs = [
             (RightTab::Review, "评审"),
             (RightTab::Info, "信息"),
@@ -784,9 +1400,9 @@ impl VideoReviewPanel {
             (RightTab::Export, "导出"),
         ];
 
-        // 标题与「时间轴」左对齐；Tab 横排与「评审」芯片左缘对齐，放在圆角框外避免裁切。
+        // 标题与「监视器」左对齐；Tab 横排放在圆角框外避免裁切。
         widgets::section_header(ui, "属性");
-        ui.add_space(6.0);
+        ui.add_space(4.0);
         let mut picked = self.right_tab;
         widgets::tab_selector_row(ui, "video_attr_tab", &tabs, self.right_tab, |tab| {
             picked = tab;
@@ -794,11 +1410,12 @@ impl VideoReviewPanel {
         self.right_tab = picked;
         ui.add_space(8.0);
 
-        const ATTR_PANEL_MAX_H: f32 = 220.0;
+        // 示波器开启时压缩属性区，把垂直空间让给波形。
+        let attr_max_h = if scopes_open { 120.0 } else { 220.0 };
         fixed_grouped_frame(ui, width, |ui| {
             ScrollArea::vertical()
                 .id_salt("video_review_attr_panel")
-                .max_height(ATTR_PANEL_MAX_H)
+                .max_height(attr_max_h)
                 .show(ui, |ui| match self.right_tab {
                     RightTab::Review => self.review_tab_ui(ui),
                     RightTab::Info => self.info_tab_ui(ui),
@@ -1214,6 +1831,15 @@ impl VideoReviewPanel {
                     self.compare.current_time_ms = seg.start_ms;
                 }
                 ui.label(&seg.text);
+                if widgets::compact_secondary_button(ui, "用作聚合范围", true)
+                    .on_hover_text("填入 In-Out 并打开聚合示波器")
+                    .clicked()
+                {
+                    self.segment_start_ms = seg.start_ms;
+                    self.segment_end_ms = seg.end_ms.max(seg.start_ms + 1);
+                    self.scopes
+                        .use_aggregate_range(self.segment_start_ms, self.segment_end_ms);
+                }
                 if widgets::compact_secondary_button(ui, "删", true).clicked() {
                     self.pending_delete_segment = Some(seg.id);
                 }
@@ -1931,13 +2557,26 @@ impl VideoReviewPanel {
         let around_ms = self.compare.current_time_ms;
         let reference = videos[0].clone();
         let others = videos[1..].to_vec();
-        self.align_job.spawn(ctx, videos.len(), move |_progress| {
+        let mode = self.align_mode;
+        let quality = self.align_quality;
+        self.align_job.spawn(ctx, videos.len(), move |progress| {
             let service = VideoReviewService::open().map_err(|e| e.to_string())?;
             service
-                .align_videos(&reference, &others, Some(around_ms))
+                .align_videos(
+                    &reference,
+                    &others,
+                    Some(around_ms),
+                    mode,
+                    quality,
+                    Some(progress.as_ref()),
+                )
                 .map_err(|e| e.to_string())
         });
-        self.status_hint = "正在按音频对齐…".into();
+        self.status_hint = format!(
+            "正在{}·{}对齐…",
+            quality.label(),
+            mode.label()
+        );
     }
 
     fn poll_align_job(&mut self, ctx: &Context) {
@@ -1961,15 +2600,27 @@ impl VideoReviewPanel {
                         p.video_id != batch.reference_id && p.confidence < ALIGN_CONFIDENCE_WARN
                     })
                     .count();
-                self.defect_align_method = "audio_xcorr".into();
+                self.defect_align_method = batch
+                    .pairs
+                    .iter()
+                    .find(|p| p.video_id != batch.reference_id)
+                    .map(|p| p.method.clone())
+                    .unwrap_or_else(|| match batch.mode {
+                        AlignMode::Audio => "audio_xcorr".into(),
+                        AlignMode::Visual => "visual_ncc".into(),
+                        AlignMode::Features => "visual_orb".into(),
+                        AlignMode::Auto => "audio_xcorr".into(),
+                    });
+                let elapsed = batch.elapsed_ms;
                 self.align_review = Some(batch.clone());
                 self.align_review_open = true;
+                let method_label = format!("{}·{}", batch.quality.label(), batch.mode.label());
                 let msg = if low_conf > 0 {
                     format!(
-                        "已对齐 {applied} 路；{low_conf} 路置信度偏低，请在对齐结果中确认或微调"
+                        "已对齐 {applied} 路（{method_label}，{elapsed}ms）；{low_conf} 路置信度偏低"
                     )
                 } else {
-                    format!("已对齐 {applied} 路（音频互相关，已量化到整帧）")
+                    format!("已对齐 {applied} 路（{method_label}，{elapsed}ms）")
                 };
                 self.export_success = Some(msg.clone());
                 self.output.status_message = msg;
@@ -2049,6 +2700,7 @@ impl VideoReviewPanel {
             if let Some(v) = self.videos.iter_mut().find(|v| v.id == video_id) {
                 v.offset_ms = new_offset;
             }
+            self.player.invalidate_video(video_id);
             self.defect_align_method = "manual_frame".into();
         }
     }
@@ -2074,8 +2726,11 @@ impl VideoReviewPanel {
             .show(ctx, |ui| {
                 ui.label(
                     RichText::new(format!(
-                        "主视频 id={} · 低于 {:.0}% 置信度建议人工确认",
+                        "主视频 id={} · {}·{} · 耗时 {}ms · 低于 {:.0}% 建议确认 · 可用 Wipe 核对",
                         batch.reference_id,
+                        batch.quality.label(),
+                        batch.mode.label(),
+                        batch.elapsed_ms,
                         ALIGN_CONFIDENCE_WARN * 100.0
                     ))
                     .weak(),
@@ -2106,9 +2761,16 @@ impl VideoReviewPanel {
                                 ui.label(RichText::new(name).strong().size(12.0));
                                 ui.label(format!("{}ms", pair.offset_ms));
                                 ui.label(
-                                    RichText::new(format!("置信 {:.0}%", pair.confidence * 100.0))
-                                        .weak()
-                                        .size(11.0),
+                                    RichText::new(format!(
+                                        "{} · 置信 {:.0}%{}",
+                                        pair.method,
+                                        pair.confidence * 100.0,
+                                        pair.drift_ppm
+                                            .map(|p| format!(" · 漂移 {p:.1}ppm"))
+                                            .unwrap_or_default()
+                                    ))
+                                    .weak()
+                                    .size(11.0),
                                 );
                                 if pair.video_id != batch.reference_id {
                                     if ui.small_button("−1帧").clicked() {
@@ -2313,8 +2975,15 @@ impl VideoReviewPanel {
             return;
         }
         if self.defect_require_align
-            && self.defect_align_method != "audio_xcorr"
-            && self.defect_align_method != "manual_frame"
+            && !matches!(
+                self.defect_align_method.as_str(),
+                "audio_xcorr"
+                    | "visual_xcorr"
+                    | "visual_ncc"
+                    | "visual_orb"
+                    | "fused"
+                    | "manual_frame"
+            )
         {
             self.error = Some("已勾选「要求帧对齐」，请先执行帧对齐或逐帧微调".into());
             return;
@@ -3405,6 +4074,7 @@ impl VideoReviewPanel {
             self.remote_item_ids.clear();
             self.selected_ids.clear();
             self.video_tag_map.clear();
+            self.player.clear();
         }
 
         if let Some(batch_id) = self.current_batch {
@@ -3761,6 +4431,18 @@ fn format_video_contact_sheets(paths: &[PathBuf]) -> String {
     } else {
         format!("{} 页", paths.len())
     }
+}
+
+fn scope_capture_size(video: &crate::video_review::domain::VideoItem) -> (u32, u32) {
+    const MAX_W: u32 = 640;
+    let w = video.width.max(2);
+    let h = video.height.max(2);
+    if w <= MAX_W {
+        return (w, h);
+    }
+    let scale = MAX_W as f32 / w as f32;
+    let nh = ((h as f32) * scale).round().max(2.0) as u32;
+    (MAX_W, nh)
 }
 
 fn video_paths_for_folder(folder: &std::path::Path) -> std::io::Result<Vec<PathBuf>> {

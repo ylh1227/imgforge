@@ -57,7 +57,7 @@ pub fn video_list_toolbar_ui(
         &[(VideoListMode::List, "列表"), (VideoListMode::Card, "卡片")],
     );
 
-    ui.add_space(8.0);
+    ui.add_space(6.0);
 
     let gap = 6.0;
     let reset_w = 64.0_f32.min((ui.available_width() * 0.28).max(56.0));
