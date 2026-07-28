@@ -306,6 +306,9 @@ mod tests {
         // Reconstruct raw sum via fresh accumulator internals check:
         let mut raw = one.clone();
         add_waveform(&mut raw, &one);
-        assert_eq!(raw.bins.iter().sum::<u32>(), one.bins.iter().sum::<u32>() * 2);
+        assert_eq!(
+            raw.bins.iter().sum::<u32>(),
+            one.bins.iter().sum::<u32>() * 2
+        );
     }
 }

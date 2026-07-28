@@ -73,8 +73,8 @@ impl ScopeEngine {
             &wgpu::DeviceDescriptor {
                 label: Some("imgforge_scope_device"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults()
-                    .using_resolution(adapter.limits()),
+                required_limits:
+                    wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
                 memory_hints: wgpu::MemoryHints::MemoryUsage,
             },
             None,
@@ -456,11 +456,7 @@ impl ScopeEngine {
                 buffer: &outputs.staging,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(
-                        NonZeroU32::new(padded)
-                            .map(|n| n.get())
-                            .unwrap_or(padded),
-                    ),
+                    bytes_per_row: Some(NonZeroU32::new(padded).map(|n| n.get()).unwrap_or(padded)),
                     rows_per_image: Some(out_h),
                 },
             },

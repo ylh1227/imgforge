@@ -22,29 +22,28 @@ use crate::ui::progress::ProgressReporter;
 use crate::video_review::domain::{
     MarkerKind, VideoBatch, VideoDefect, VideoItem, VideoMarker, VideoSegment, VideoTag,
 };
+use crate::video_review::playback::{ComparePlayer, FidelityMode, ScopeSampleThrottle, SeekKind};
 use crate::video_review::service::ffmpeg_backend::FfmpegBackend;
 use crate::video_review::service::frame_cache::FrameCache;
 use crate::video_review::service::screenshot_service::plan_shots;
 use crate::video_review::service::{
     compute_layout, compute_quality_cell_size, default_defect_output_dir, grid_dimensions,
     max_export_duration_ms, offset_after_frame_step, AlignBatchResult, AlignMode, AlignPairResult,
-    AlignQuality,
-    BatchOperationResult, BatchScreenshotRequest, BatchScreenshotResult, BatchScreenshotService,
-    CreateDefectRequest, CreateDefectResult, GridVideoCaptionMode, GridVideoExportQuality,
-    ImportFolderOptions, ImportFolderResult, ScreenshotFormat, ScreenshotMode,
-    VideoAnalysisService, VideoExportRequest, VideoExportSchema, VideoExportService,
-    VideoReviewService, ALIGN_CONFIDENCE_WARN, DEFAULT_DEFECT_HALF_WINDOW_MS,
+    AlignQuality, BatchOperationResult, BatchScreenshotRequest, BatchScreenshotResult,
+    BatchScreenshotService, CreateDefectRequest, CreateDefectResult, GridVideoCaptionMode,
+    GridVideoExportQuality, ImportFolderOptions, ImportFolderResult, ScreenshotFormat,
+    ScreenshotMode, VideoAnalysisService, VideoExportRequest, VideoExportSchema,
+    VideoExportService, VideoReviewService, ALIGN_CONFIDENCE_WARN, DEFAULT_DEFECT_HALF_WINDOW_MS,
     DEFAULT_INTERVAL_SECS, DEFAULT_MAX_SHOTS,
 };
 use crate::video_review::ui::chrome;
-use crate::video_review::ui::hover_preview::HoverPreviewController;
 use crate::video_review::ui::compare_layout::{CompareLayoutPreset, CompareViewMode};
+use crate::video_review::ui::hover_preview::HoverPreviewController;
 use crate::video_review::ui::multi_compare::{format_ms, MultiVideoCompare, MAX_COMPARE_VIDEOS};
 use crate::video_review::ui::scopes_panel::{resolve_scope_source, ScopesPanel};
 use crate::video_review::ui::video_list::{
     video_list_body_ui, video_list_toolbar_ui, VideoListAction, VideoListState,
 };
-use crate::video_review::playback::{ComparePlayer, FidelityMode, ScopeSampleThrottle, SeekKind};
 
 #[derive(Debug, Clone, Default)]
 pub struct VideoReviewPanelOutput {
@@ -714,11 +713,9 @@ impl VideoReviewPanel {
                 // 播放时钟推进 + A-B
                 if self.player.playing() {
                     let mut t = self.player.tick_global_time(max_dur, master_offset);
-                    t = self.player.apply_ab_loop(
-                        t,
-                        self.segment_start_ms,
-                        self.segment_end_ms,
-                    );
+                    t = self
+                        .player
+                        .apply_ab_loop(t, self.segment_start_ms, self.segment_end_ms);
                     self.compare.current_time_ms = t;
                     ctx.request_repaint();
                 }
@@ -863,11 +860,9 @@ impl VideoReviewPanel {
                                     self.segment_end_ms = e.max(s + 1);
                                 }
                                 let playing = self.player.playing();
-                                let sample = self.scope_sample_throttle.should_sample(
-                                    time_ms,
-                                    playing,
-                                    scrubbing,
-                                );
+                                let sample = self
+                                    .scope_sample_throttle
+                                    .should_sample(time_ms, playing, scrubbing);
                                 let scope_time = if sample {
                                     time_ms
                                 } else {
@@ -932,12 +927,8 @@ impl VideoReviewPanel {
                 {
                     self.export_compare_grid_video();
                 }
-                if widgets::compact_primary_button(
-                    ui,
-                    "新建缺陷",
-                    can_export && ffmpeg_ok && !busy,
-                )
-                .clicked()
+                if widgets::compact_primary_button(ui, "新建缺陷", can_export && ffmpeg_ok && !busy)
+                    .clicked()
                 {
                     self.open_defect_dialog();
                 }
@@ -957,12 +948,8 @@ impl VideoReviewPanel {
                                 AlignQuality::Fast => {
                                     "5s·8kHz；包络+GCC；无声早切画面；128p 运动（默认）"
                                 }
-                                AlignQuality::Standard => {
-                                    "12s；包络+GCC；主路灰度复用；轻量 NCC"
-                                }
-                                AlignQuality::Fine => {
-                                    "30s；+chromagram+漂移；完整画面+特征"
-                                }
+                                AlignQuality::Standard => "12s；包络+GCC；主路灰度复用；轻量 NCC",
+                                AlignQuality::Fine => "30s；+chromagram+漂移；完整画面+特征",
                             })
                             .clicked()
                         {
@@ -1054,10 +1041,7 @@ impl VideoReviewPanel {
             chrome::chip_strip(ui, "倍速", |ui| {
                 for rate in [0.5_f64, 1.0, 1.5, 2.0] {
                     let selected = (self.player.rate() - rate).abs() < 0.01;
-                    if ui
-                        .selectable_label(selected, format!("{rate}x"))
-                        .clicked()
-                    {
+                    if ui.selectable_label(selected, format!("{rate}x")).clicked() {
                         self.player.set_rate(rate);
                     }
                 }
@@ -1074,7 +1058,11 @@ impl VideoReviewPanel {
                 self.player.set_ab_loop(!ab_on);
             }
             let safe_on = self.player.show_safe_frame();
-            let safe_label = if safe_on { "安全框 ✓" } else { "安全框" };
+            let safe_label = if safe_on {
+                "安全框 ✓"
+            } else {
+                "安全框"
+            };
             if chrome::toolbar_toggle(ui, safe_on, safe_label).clicked() {
                 self.player.toggle_safe_frame();
             }
@@ -1112,12 +1100,8 @@ impl VideoReviewPanel {
                     }) + 4.0,
                     widgets::TOOLBAR_ROW_HEIGHT,
                 ),
-                egui::Label::new(
-                    RichText::new(self.player.status_label())
-                        .weak()
-                        .size(11.0),
-                )
-                .selectable(false),
+                egui::Label::new(RichText::new(self.player.status_label()).weak().size(11.0))
+                    .selectable(false),
             );
         });
     }
@@ -1130,7 +1114,10 @@ impl VideoReviewPanel {
                     let enabled = preset.enabled_for(n.max(2));
                     let selected = self.compare.layout_preset == preset;
                     if ui
-                        .add_enabled(enabled, egui::SelectableLabel::new(selected, preset.label()))
+                        .add_enabled(
+                            enabled,
+                            egui::SelectableLabel::new(selected, preset.label()),
+                        )
                         .on_hover_text(match preset {
                             CompareLayoutPreset::Auto => "按路数自动选布局，格子按画幅装箱",
                             CompareLayoutPreset::TwoH => "左右双联",
@@ -2572,11 +2559,7 @@ impl VideoReviewPanel {
                 )
                 .map_err(|e| e.to_string())
         });
-        self.status_hint = format!(
-            "正在{}·{}对齐…",
-            quality.label(),
-            mode.label()
-        );
+        self.status_hint = format!("正在{}·{}对齐…", quality.label(), mode.label());
     }
 
     fn poll_align_job(&mut self, ctx: &Context) {

@@ -203,10 +203,7 @@ impl AlignService {
         let sample_rate = quality.audio_sample_rate();
         let visual_params = quality.visual_params();
 
-        let others: Vec<&VideoItem> = others
-            .iter()
-            .filter(|v| v.id != reference.id)
-            .collect();
+        let others: Vec<&VideoItem> = others.iter().filter(|v| v.id != reference.id).collect();
 
         // 1 步准备主路 + 每路副视频 1 步。
         let total_steps = 1 + others.len();
@@ -243,15 +240,9 @@ impl AlignService {
             if let Some(p) = progress {
                 p.set_current_label("抽取主路画面…");
             }
-            extract_reference_gray_seq(
-                &self.ffmpeg_path,
-                reference,
-                secs,
-                around_ms,
-                visual_params,
-            )
-            .ok()
-            .map(Arc::new)
+            extract_reference_gray_seq(&self.ffmpeg_path, reference, secs, around_ms, visual_params)
+                .ok()
+                .map(Arc::new)
         } else {
             None
         };
@@ -380,14 +371,7 @@ fn align_one_worker(
         if let Some(seq) = ref_gray.as_ref() {
             align_visual_ab_with_ref_seq(ffmpeg, video, secs, around_ms, visual_params, seq)
         } else {
-            align_visual_ab_params(
-                ffmpeg,
-                reference,
-                video,
-                secs,
-                around_ms,
-                visual_params,
-            )
+            align_visual_ab_params(ffmpeg, reference, video, secs, around_ms, visual_params)
         }
     };
 
@@ -522,13 +506,8 @@ fn align_audio_with_ref(
         r
     } else {
         stage_label(progress, name, "抽取主路音频");
-        ref_owned = extract_raw_pcm_bytes(
-            ffmpeg,
-            &reference.file_path,
-            secs,
-            around_ms,
-            sample_rate,
-        )?;
+        ref_owned =
+            extract_raw_pcm_bytes(ffmpeg, &reference.file_path, secs, around_ms, sample_rate)?;
         &ref_owned
     };
     if ref_raw.len() < sample_rate as usize / 2 {
@@ -540,8 +519,7 @@ fn align_audio_with_ref(
         return Err(VideoReviewError::Message("主视频近无声".into()));
     }
     stage_label(progress, name, "抽取副路音频");
-    let other_raw =
-        extract_raw_pcm_bytes(ffmpeg, &video.file_path, secs, around_ms, sample_rate)?;
+    let other_raw = extract_raw_pcm_bytes(ffmpeg, &video.file_path, secs, around_ms, sample_rate)?;
     if other_raw.len() < sample_rate as usize / 2 {
         return Err(VideoReviewError::Message("副视频音频过短".into()));
     }

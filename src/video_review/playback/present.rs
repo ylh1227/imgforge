@@ -540,9 +540,7 @@ fn mpv_err_msg(err: i32) -> String {
         if p.is_null() {
             format!("code {err}")
         } else {
-            std::ffi::CStr::from_ptr(p)
-                .to_string_lossy()
-                .into_owned()
+            std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
         }
     }
 }
