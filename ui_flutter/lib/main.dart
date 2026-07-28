@@ -8,7 +8,11 @@ import 'host/host_controller.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final host = HostClient();
-  await host.start();
+  try {
+    await host.start();
+  } catch (e) {
+    debugPrint('Host start deferred: $e');
+  }
   runApp(
     ChangeNotifierProvider(
       create: (_) => HostController(host)..bootstrap(),
