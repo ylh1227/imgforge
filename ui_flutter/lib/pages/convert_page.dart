@@ -58,16 +58,27 @@ class _ConvertPageState extends State<ConvertPage> {
 
   Future<void> _loadFormats() async {
     final host = context.read<HostController>();
-    final res = await host.call('app.formats');
-    final list = (res['formats'] as List?)?.cast<Map>() ?? [];
-    setState(() {
-      formats = list.map((e) => e.cast<String, dynamic>()).toList();
-      if (formats.isNotEmpty) {
-        format = formats.first['extension'] as String? ?? 'webp';
-      }
-    });
-    final remote = await host.call('remote.status');
-    setState(() => preferRemote = remote['prefer_remote'] == true);
+    if (!host.connected) {
+      await host.bootstrap();
+    }
+    if (!host.connected) {
+      setState(() => status = host.lastError ?? 'Host 未连接');
+      return;
+    }
+    try {
+      final res = await host.call('app.formats');
+      final list = (res['formats'] as List?)?.cast<Map>() ?? [];
+      setState(() {
+        formats = list.map((e) => e.cast<String, dynamic>()).toList();
+        if (formats.isNotEmpty) {
+          format = formats.first['extension'] as String? ?? 'webp';
+        }
+      });
+      final remote = await host.call('remote.status');
+      setState(() => preferRemote = remote['prefer_remote'] == true);
+    } catch (e) {
+      setState(() => status = '加载失败：$e');
+    }
   }
 
   Map<String, dynamic> _params({bool async = true}) => {

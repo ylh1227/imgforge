@@ -26,16 +26,28 @@ class HostClient {
           '  cargo build --features host --bin imgforge-host\n'
           'and set IMGFORGE_HOST.');
     }
-    _process = await Process.start(path, [], workingDirectory: Directory.current.path);
-    _stdin = _process!.stdin;
-    _process!.stdout
+    debugPrint('Starting host: $path');
+    final process = await Process.start(
+      path,
+      const [],
+      workingDirectory: File(path).parent.parent.parent.path, // repo root-ish
+      runInShell: false,
+    );
+    _process = process;
+    _stdin = process.stdin;
+    process.stdout
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen(_onLine, onError: (e) => debugPrint('host stdout error: $e'));
-    _process!.stderr
+    process.stderr
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen((line) => debugPrint('[host] $line'));
+    process.exitCode.then((code) {
+      debugPrint('host exited: $code');
+      _process = null;
+      _stdin = null;
+    });
     await call('app.ping');
   }
 
@@ -65,6 +77,10 @@ class HostClient {
     String method, [
     Map<String, dynamic>? params,
   ]) async {
+    final stdin = _stdin;
+    if (stdin == null || _process == null) {
+      throw StateError('imgforge-host is not running');
+    }
     final id = _nextId++;
     final completer = Completer<dynamic>();
     _pending[id] = completer;
@@ -74,8 +90,8 @@ class HostClient {
       'method': method,
       'params': params ?? <String, dynamic>{},
     });
-    _stdin!.writeln(payload);
-    await _stdin!.flush();
+    stdin.writeln(payload);
+    await stdin.flush();
     return completer.future.timeout(const Duration(minutes: 30));
   }
 
