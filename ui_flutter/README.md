@@ -5,13 +5,22 @@ Desktop UI for ImgForge. Talks to `imgforge-host` over NDJSON JSON-RPC (stdio).
 ## Develop
 
 ```bash
-# Build host
+# 1) Build host
 cargo build --features host --bin imgforge-host
 
-# Run shell (expects host next to binary or via IMGFORGE_HOST)
+# 2) Run shell (macOS needs full Xcode.app, not just CLT)
+./ui_flutter/run_macos.sh
+# or:
 cd ui_flutter
 export IMGFORGE_HOST="$(pwd)/../target/debug/imgforge-host"
 flutter run -d macos
+```
+
+若报 `unable to find utility "xcodebuild"`：从 App Store 安装 **Xcode**，再执行：
+
+```bash
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+sudo xcodebuild -license accept
 ```
 
 ## Layout
