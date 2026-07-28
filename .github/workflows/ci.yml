@@ -23,6 +23,11 @@ jobs:
         with:
           shared-key: lint
 
+      - name: Install libmpv
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmpv-dev pkg-config
+
       - name: Format check
         run: cargo fmt --all -- --check
 
@@ -48,6 +53,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+    # Windows 暂无完整 libmpv 开发头文件，链接失败不挡主线。
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +62,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Install libmpv (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libmpv-dev pkg-config
+
+      - name: Install libmpv (macOS)
+        if: runner.os == 'macOS'
+        run: brew install mpv
 
       - name: Build
         run: cargo build --verbose
@@ -80,6 +97,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -101,7 +119,12 @@ jobs:
             libxcb-xfixes0-dev \
             libxkbcommon-dev \
             libssl-dev \
+            libmpv-dev \
             pkg-config
+
+      - name: Install libmpv (macOS)
+        if: runner.os == 'macOS'
+        run: brew install mpv
 
       - name: Build GUI features
         run: cargo build --features gui --bins

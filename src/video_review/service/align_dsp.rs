@@ -15,11 +15,7 @@ pub fn cross_correlate_lag_limited(
 }
 
 /// GCC-PHAT：相位变换互相关，对频响差 / 混响更稳。
-pub fn gcc_phat_lag_limited(
-    reference: &[f32],
-    other: &[f32],
-    max_lag_samples: i64,
-) -> (i64, f32) {
+pub fn gcc_phat_lag_limited(reference: &[f32], other: &[f32], max_lag_samples: i64) -> (i64, f32) {
     correlate_fft(reference, other, max_lag_samples, CorrelateKind::GccPhat)
 }
 

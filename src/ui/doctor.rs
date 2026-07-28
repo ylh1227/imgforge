@@ -89,7 +89,12 @@ pub fn doctor_report() -> DoctorReport {
     .collect();
 
     let mut tools = vec![
-        probe_tool("ffmpeg", "ffmpeg", &["-version"], cfg!(feature = "video-review")),
+        probe_tool(
+            "ffmpeg",
+            "ffmpeg",
+            &["-version"],
+            cfg!(feature = "video-review"),
+        ),
         probe_tool(
             "ffprobe",
             "ffprobe",

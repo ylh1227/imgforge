@@ -53,9 +53,7 @@ fn fit_to_budget(
     let sh = src_h.max(2).min(SOURCE_MAX_H);
     let bw = budget_w.min(max_edge).max(160);
     let bh = budget_h.min(max_edge).max(90);
-    let scale = (bw as f32 / sw as f32)
-        .min(bh as f32 / sh as f32)
-        .min(1.0);
+    let scale = (bw as f32 / sw as f32).min(bh as f32 / sh as f32).min(1.0);
     (
         ((sw as f32) * scale).round().max(2.0) as u32,
         ((sh as f32) * scale).round().max(2.0) as u32,
@@ -350,11 +348,7 @@ impl ComparePlayer {
         }
 
         let mut t = if let Some(master_id) = self.audio_master {
-            if let Some(local) = self
-                .sessions
-                .get(&master_id)
-                .and_then(|s| s.time_pos_ms())
-            {
+            if let Some(local) = self.sessions.get(&master_id).and_then(|s| s.time_pos_ms()) {
                 let global = (local as i64 - master_offset_ms).max(0) as u64;
                 self.clock.sync_from_master(global);
                 global
@@ -486,7 +480,14 @@ impl ComparePlayer {
         scrubbing: bool,
         pane_size: egui::Vec2,
     ) {
-        self.present_with_sizes(ctx, videos, global_ms, scrubbing, pane_size, &HashMap::new());
+        self.present_with_sizes(
+            ctx,
+            videos,
+            global_ms,
+            scrubbing,
+            pane_size,
+            &HashMap::new(),
+        );
     }
 
     /// `size_hints`：某路优先用指定显示分辨率（如 Solo 全屏）。
@@ -539,8 +540,7 @@ impl ComparePlayer {
             let budget_pts = size_hints.get(&video.id).copied().unwrap_or_else(|| {
                 let n = visible_lanes as f32;
                 let aw = ((pane_size.x / n.sqrt()).max(160.0)).round() as u32;
-                let ah = ((aw as f32)
-                    * (video.height.max(1) as f32 / video.width.max(1) as f32))
+                let ah = ((aw as f32) * (video.height.max(1) as f32 / video.width.max(1) as f32))
                     .round()
                     .max(90.0) as u32;
                 (aw, ah)
@@ -576,9 +576,7 @@ impl ComparePlayer {
             };
             session.set_display_size(dw, dh);
 
-            let local = video
-                .effective_time_ms(global_ms)
-                .min(video.duration_ms);
+            let local = video.effective_time_ms(global_ms).min(video.duration_ms);
 
             if force {
                 if scrubbing {
@@ -620,14 +618,7 @@ impl ComparePlayer {
         for (vid, egui_id, size, flip_y) in gpu_updates {
             self.present_mode_hint = PresentMode::Gl;
             if let Some(id) = egui_id {
-                self.gpu_views.insert(
-                    vid,
-                    GpuView {
-                        id,
-                        size,
-                        flip_y,
-                    },
-                );
+                self.gpu_views.insert(vid, GpuView { id, size, flip_y });
             } else if let Some(view) = self.gpu_views.get_mut(&vid) {
                 view.size = size;
                 view.flip_y = flip_y;

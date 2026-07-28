@@ -31,19 +31,20 @@ pub fn rgb_to_cb_cr(r: u8, g: u8, b: u8) -> (i8, i8) {
     // BT.709 full-range style chroma (centered).
     let cb = (-0.114572 * rf - 0.385428 * gf + 0.500000 * bf).round();
     let cr = (0.500000 * rf - 0.454153 * gf - 0.045847 * bf).round();
-    (
-        cb.clamp(-128.0, 127.0) as i8,
-        cr.clamp(-128.0, 127.0) as i8,
-    )
+    (cb.clamp(-128.0, 127.0) as i8, cr.clamp(-128.0, 127.0) as i8)
 }
 
 /// 将 Cb/Cr 映射到 `[0, size)` 密度图坐标（中心为 0,0）。
 #[inline]
 pub fn cb_cr_to_scope_xy(cb: i8, cr: i8, size: u32) -> (u32, u32) {
     let half = (size as f32 - 1.0) * 0.5;
-    let x = ((cb as f32 / 128.0) * half + half).round().clamp(0.0, size as f32 - 1.0) as u32;
+    let x = ((cb as f32 / 128.0) * half + half)
+        .round()
+        .clamp(0.0, size as f32 - 1.0) as u32;
     // Cr 向上为正（示波器习惯：上方偏红）。
-    let y = ((-cr as f32 / 128.0) * half + half).round().clamp(0.0, size as f32 - 1.0) as u32;
+    let y = ((-cr as f32 / 128.0) * half + half)
+        .round()
+        .clamp(0.0, size as f32 - 1.0) as u32;
     (x, y)
 }
 

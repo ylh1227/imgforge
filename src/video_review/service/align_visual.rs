@@ -173,8 +173,7 @@ fn finish_visual_align(
 
     let hz = 1000.0 / params.sample_ms.max(1) as f32;
     let max_lag_samples = ((MAX_LAG_MS as f64) * f64::from(hz) / 1000.0).round() as i64;
-    let (lag_samples, mut conf) =
-        cross_correlate_lag_limited(&ref_sig, &oth_sig, max_lag_samples);
+    let (lag_samples, mut conf) = cross_correlate_lag_limited(&ref_sig, &oth_sig, max_lag_samples);
     let mut offset_ms = ((lag_samples as f64) * params.sample_ms as f64).round() as i64;
 
     if offset_ms.abs() > MAX_LAG_MS {
@@ -385,9 +384,8 @@ fn extract_gray_rawvideo(
     }
     let mut frames = Vec::with_capacity(bytes.len() / frame_bytes);
     for chunk in bytes.chunks_exact(frame_bytes) {
-        let img = GrayImage::from_raw(width, height, chunk.to_vec()).ok_or_else(|| {
-            VideoReviewError::Message("构造灰度帧失败".into())
-        })?;
+        let img = GrayImage::from_raw(width, height, chunk.to_vec())
+            .ok_or_else(|| VideoReviewError::Message("构造灰度帧失败".into()))?;
         frames.push(img);
     }
     Ok((frames, width, height))
@@ -415,11 +413,7 @@ fn temporal_signal(frames: &[GrayImage]) -> Vec<f32> {
     }
     let luma_n = normalize(&luma);
     let mot_n = normalize(&motion);
-    luma_n
-        .into_iter()
-        .zip(mot_n)
-        .map(|(a, b)| a + b)
-        .collect()
+    luma_n.into_iter().zip(mot_n).map(|(a, b)| a + b).collect()
 }
 
 fn normalize(v: &[f32]) -> Vec<f32> {

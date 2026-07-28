@@ -12,9 +12,7 @@ use crate::video_review::domain::{
     VideoSegment, VideoTag,
 };
 use crate::video_review::error::{VideoReviewError, VideoReviewResult};
-use crate::video_review::service::align_service::{
-    AlignBatchResult, AlignService,
-};
+use crate::video_review::service::align_service::{AlignBatchResult, AlignService};
 use crate::video_review::service::contact_sheet::{ContactSheetResult, FrameProvider};
 use crate::video_review::service::defect_package::{
     create_defect_package, CreateDefectRequest, CreateDefectResult,
@@ -417,14 +415,8 @@ impl VideoReviewService {
         quality: crate::video_review::service::AlignQuality,
         progress: Option<&dyn ProgressReporter>,
     ) -> VideoReviewResult<AlignBatchResult> {
-        AlignService::new(self.backend.ffmpeg_bin()).align_to_reference(
-            reference,
-            others,
-            around_ms,
-            mode,
-            quality,
-            progress,
-        )
+        AlignService::new(self.backend.ffmpeg_bin())
+            .align_to_reference(reference, others, around_ms, mode, quality, progress)
     }
 
     /// 从当前对比视频打包缺陷（目录 + zip + DB 记录）。

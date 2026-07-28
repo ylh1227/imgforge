@@ -9,12 +9,12 @@ use eframe::egui::{self, Color32, Context, RichText, TextureHandle, Ui, Vec2};
 use crate::gui::{theme, widgets, BackgroundJob, JobContext};
 use crate::ui::progress::ProgressReporter;
 use crate::video_review::domain::VideoItem;
+use crate::video_review::playback::RgbaFrame;
 use crate::video_review::scopes::{
     sample_timestamps, AggregateAccumulator, AggregateCacheKey, AggregateRange, AggregateRangeMode,
     AggregatedScope, HistogramMode, HistogramScale, ScopeCacheKey, ScopeEngine, ScopeKind,
     ScopeOptions, ScopeRequest, ScopeRgba, ScopeViewMode, WaveformMode, AGG_FRAME_WIDTH,
 };
-use crate::video_review::playback::RgbaFrame;
 use crate::video_review::service::ffmpeg_backend::{FfmpegBackend, VideoBackend};
 use crate::video_review::service::frame_cache::FrameCache;
 use crate::video_review::service::VideoReviewService;
@@ -474,7 +474,10 @@ impl ScopesPanel {
         let tex = ctx.load_texture(
             format!(
                 "video_scope_agg_{}_{}_{}_{}",
-                ok.key.video_id, ok.key.start_ms, ok.key.end_ms, ok.key.kind.label()
+                ok.key.video_id,
+                ok.key.start_ms,
+                ok.key.end_ms,
+                ok.key.kind.label()
             ),
             color,
             egui::TextureOptions::LINEAR,
@@ -667,14 +670,7 @@ impl ScopesPanel {
         self.aggregate_job
             .spawn_with_context(ctx, sample_n, move |job: JobContext| {
                 run_aggregate_job(
-                    job,
-                    engine,
-                    video_path,
-                    range,
-                    timestamps,
-                    kind,
-                    options,
-                    key,
+                    job, engine, video_path, range, timestamps, kind, options, key,
                 )
             });
     }
@@ -713,9 +709,8 @@ impl ScopesPanel {
                     rgba,
                     width,
                     height,
-                } => image::RgbaImage::from_raw(width, height, rgba.to_vec()).ok_or_else(|| {
-                    "播放器截帧尺寸与数据不匹配".to_string()
-                })?,
+                } => image::RgbaImage::from_raw(width, height, rgba.to_vec())
+                    .ok_or_else(|| "播放器截帧尺寸与数据不匹配".to_string())?,
                 PendingFrameSource::Disk {
                     frame_path,
                     video_path,
@@ -724,8 +719,11 @@ impl ScopesPanel {
                     let backend: Arc<dyn VideoBackend> = Arc::new(FfmpegBackend::with_defaults());
                     let cache = FrameCache::new(backend).ok();
                     if let Some(cache) = cache.as_ref() {
-                        match cache.ensure_frame_lossless(&video_path, local_time_ms, AGG_FRAME_WIDTH)
-                        {
+                        match cache.ensure_frame_lossless(
+                            &video_path,
+                            local_time_ms,
+                            AGG_FRAME_WIDTH,
+                        ) {
                             Ok(path) => image::open(&path)
                                 .map_err(|e| format!("读取分析帧失败：{e}"))?
                                 .to_rgba8(),

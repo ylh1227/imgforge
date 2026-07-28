@@ -188,8 +188,8 @@ fn handle(
         }
         "review.import_folder" => {
             let folder: String = required(&params, "folder")?;
-            let name: String = optional_string(&params, "name")
-                .unwrap_or_else(|| default_batch_name(&folder));
+            let name: String =
+                optional_string(&params, "name").unwrap_or_else(|| default_batch_name(&folder));
             let recursive = params
                 .get("recursive")
                 .and_then(|v| v.as_bool())
@@ -202,7 +202,8 @@ fn handle(
             Ok(json!({ "batch_id": id }))
         }
         "review.import_paths" => {
-            let name: String = optional_string(&params, "name").unwrap_or_else(|| "队列导入".into());
+            let name: String =
+                optional_string(&params, "name").unwrap_or_else(|| "队列导入".into());
             let paths: Vec<String> = required(&params, "paths")?;
             let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
             let id = state
@@ -224,7 +225,10 @@ fn handle(
         "review.set_status" => {
             let image_id: i64 = required(&params, "image_id")?;
             let status: ReviewStatus = required(&params, "status")?;
-            state.review()?.set_status(image_id, status).map_err(app_err)?;
+            state
+                .review()?
+                .set_status(image_id, status)
+                .map_err(app_err)?;
             Ok(json!({ "ok": true }))
         }
         "review.set_remark" => {
@@ -308,7 +312,9 @@ fn handle(
                 .import_folder_with_options(
                     Path::new(&folder),
                     batch_name.as_deref(),
-                    ImportFolderOptions { generate_thumbnails },
+                    ImportFolderOptions {
+                        generate_thumbnails,
+                    },
                     None,
                 )
                 .map_err(app_err)?;
@@ -344,10 +350,7 @@ fn handle(
         "video.set_remark" => {
             let id: i64 = required(&params, "id")?;
             let remark: String = required(&params, "remark")?;
-            state
-                .video()?
-                .update_remark(id, &remark)
-                .map_err(app_err)?;
+            state.video()?.update_remark(id, &remark).map_err(app_err)?;
             Ok(json!({ "ok": true }))
         }
         "video.set_offset" => {
@@ -466,9 +469,7 @@ fn handle(
         "video.batch_update_status" => {
             let ids: Vec<i64> = required(&params, "ids")?;
             let status: ReviewStatus = required(&params, "status")?;
-            let result = state
-                .video()?
-                .batch_update_status_result(&ids, status);
+            let result = state.video()?.batch_update_status_result(&ids, status);
             Ok(json!({
                 "requested": result.requested,
                 "applied": result.applied,
@@ -478,10 +479,7 @@ fn handle(
         }
         "video.export_grid_video" => {
             let ids: Vec<i64> = required(&params, "ids")?;
-            let start_ms: u64 = params
-                .get("start_ms")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
+            let start_ms: u64 = params.get("start_ms").and_then(|v| v.as_u64()).unwrap_or(0);
             let duration_ms: u64 = params
                 .get("duration_ms")
                 .and_then(|v| v.as_u64())
@@ -581,11 +579,7 @@ fn convert_run(
                 }
             };
             let progress_reporter: Arc<dyn ProgressReporter> = progress_bg.clone();
-            let result = rt.block_on(run_batch(
-                config,
-                cancel_bg,
-                Some(progress_reporter),
-            ));
+            let result = rt.block_on(run_batch(config, cancel_bg, Some(progress_reporter)));
             match result {
                 Ok(report) => {
                     let msg = format!(
@@ -648,7 +642,12 @@ fn convert_run(
     }
 }
 
-fn emit_progress(events: &Option<EventSink>, job_id: &str, progress: &crate::ui::progress::GuiProgress, message: &str) {
+fn emit_progress(
+    events: &Option<EventSink>,
+    job_id: &str,
+    progress: &crate::ui::progress::GuiProgress,
+    message: &str,
+) {
     if let Some(sink) = events {
         let total = progress.total.load(Ordering::Relaxed);
         let current = progress.completed.load(Ordering::Relaxed);
@@ -682,14 +681,14 @@ fn emit_finished(
 fn convert_config_from_params(state: &HostState, params: &Value) -> Result<AppConfig, RpcError> {
     let mut config = AppConfig::default();
     config.input_dir = PathBuf::from(required::<String>(params, "input_dir")?);
-    config.output_dir = PathBuf::from(
-        optional_string(params, "output_dir").unwrap_or_else(|| "./output".into()),
-    );
+    config.output_dir =
+        PathBuf::from(optional_string(params, "output_dir").unwrap_or_else(|| "./output".into()));
     if let Some(fmt) = optional_string(params, "format") {
         config.target_format = parse_format(&fmt)?;
     }
     if let Some(q) = params.get("quality").and_then(|v| v.as_u64()) {
-        config.quality = Quality::new(q as u8).map_err(|e| RpcError::invalid_params(e.to_string()))?;
+        config.quality =
+            Quality::new(q as u8).map_err(|e| RpcError::invalid_params(e.to_string()))?;
     }
     config.recursive = params
         .get("recursive")

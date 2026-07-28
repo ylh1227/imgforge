@@ -134,7 +134,10 @@ impl MultiVideoCompare {
                 self.view_mode = CompareViewMode::Grid;
             }
             _ => {
-                if let Some(id) = self.focused_id.or_else(|| self.compare_ids.first().copied()) {
+                if let Some(id) = self
+                    .focused_id
+                    .or_else(|| self.compare_ids.first().copied())
+                {
                     self.view_mode = CompareViewMode::Solo { video_id: id };
                 }
             }
@@ -314,11 +317,7 @@ impl MultiVideoCompare {
                     self.draw_pane_at(ctx, ui, service, player, video, slot, true, &mut action);
                 }
             }
-            CompareViewMode::Wipe {
-                left,
-                right,
-                split,
-            } => {
+            CompareViewMode::Wipe { left, right, split } => {
                 self.draw_wipe(
                     ctx,
                     ui,
@@ -371,16 +370,7 @@ impl MultiVideoCompare {
                         continue;
                     };
                     let is_focus = focused == Some(video.id);
-                    self.draw_pane_at(
-                        ctx,
-                        ui,
-                        service,
-                        player,
-                        video,
-                        slot,
-                        is_focus,
-                        &mut action,
-                    );
+                    self.draw_pane_at(ctx, ui, service, player, video, slot, is_focus, &mut action);
                 }
             }
         }
@@ -416,8 +406,11 @@ impl MultiVideoCompare {
             slot.rect.max,
         );
 
-        ui.painter()
-            .rect_filled(slot.rect, 4.0, theme::video_stage_fill(ui.visuals().dark_mode));
+        ui.painter().rect_filled(
+            slot.rect,
+            4.0,
+            theme::video_stage_fill(ui.visuals().dark_mode),
+        );
         let border = if focused {
             Stroke::new(2.0, ui.visuals().selection.stroke.color)
         } else {
@@ -461,23 +454,16 @@ impl MultiVideoCompare {
             ui.set_clip_rect(title_rect);
             ui.horizontal(|ui| {
                 let c = video.status.color_rgba();
-                ui.colored_label(
-                    Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]),
-                    "●",
-                );
+                ui.colored_label(Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]), "●");
                 let name_c = Color32::from_rgb(230, 230, 235);
                 let meta_c = theme::video_timecode_on_stage();
                 if focused {
                     ui.label(RichText::new(&name).strong().size(12.0).color(name_c));
                     ui.label(
-                        RichText::new(format!(
-                            "{}ms · {}",
-                            video.offset_ms,
-                            format_ms(effective)
-                        ))
-                        .monospace()
-                        .size(11.0)
-                        .color(meta_c),
+                        RichText::new(format!("{}ms · {}", video.offset_ms, format_ms(effective)))
+                            .monospace()
+                            .size(11.0)
+                            .color(meta_c),
                     );
                 } else {
                     ui.label(RichText::new(&short).size(11.0).color(name_c));
@@ -528,9 +514,7 @@ impl MultiVideoCompare {
                     self.view_mode = CompareViewMode::Grid;
                 }
                 _ => {
-                    self.view_mode = CompareViewMode::Solo {
-                        video_id: video.id,
-                    };
+                    self.view_mode = CompareViewMode::Solo { video_id: video.id };
                     self.focused_id = Some(video.id);
                 }
             }
@@ -591,13 +575,14 @@ impl MultiVideoCompare {
         };
 
         if !painted {
-            let msg = player.session_error(video.id).unwrap_or(
-                if player.backend_info().available {
-                    "解码中…"
-                } else {
-                    "抽帧中…"
-                },
-            );
+            let msg =
+                player
+                    .session_error(video.id)
+                    .unwrap_or(if player.backend_info().available {
+                        "解码中…"
+                    } else {
+                        "抽帧中…"
+                    });
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -822,8 +807,12 @@ impl MultiVideoCompare {
         a: &VideoItem,
         b: &VideoItem,
     ) -> Option<TextureHandle> {
-        let pa = service.frame_at(a, self.current_time_ms, DIFF_MAX_W).ok()??;
-        let pb = service.frame_at(b, self.current_time_ms, DIFF_MAX_W).ok()??;
+        let pa = service
+            .frame_at(a, self.current_time_ms, DIFF_MAX_W)
+            .ok()??;
+        let pb = service
+            .frame_at(b, self.current_time_ms, DIFF_MAX_W)
+            .ok()??;
         let ia = image::open(&pa).ok()?.to_rgba8();
         let ib = image::open(&pb).ok()?.to_rgba8();
         let w = ia.width().min(ib.width());
@@ -891,13 +880,7 @@ fn short_name(name: &str, max: usize) -> String {
     }
 }
 
-fn paint_pane_tex(
-    ui: &Ui,
-    rect: Rect,
-    tex: &PaneTexture<'_>,
-    tint: Color32,
-    clip: Option<Rect>,
-) {
+fn paint_pane_tex(ui: &Ui, rect: Rect, tex: &PaneTexture<'_>, tint: Color32, clip: Option<Rect>) {
     match tex {
         PaneTexture::Cpu(handle) => paint_tex(ui, rect, handle, tint, clip),
         PaneTexture::Gpu(g) => {
