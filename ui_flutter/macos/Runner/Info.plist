@@ -28,5 +28,9 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>用于根据当地日出、日落时间自动切换浅色与深色主题。</string>
+	<key>NSLocationUsageDescription</key>
+	<string>用于根据当地日出、日落时间自动切换浅色与深色主题。</string>
 </dict>
 </plist>

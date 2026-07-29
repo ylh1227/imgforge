@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../host/host_controller.dart';
+import '../widgets/glass_dropdown.dart';
 import '../widgets/glass_list_panel.dart';
 import '../widgets/liquid_glass.dart';
 import '../widgets/page_chrome.dart';
@@ -226,7 +227,8 @@ class _ConvertPageState extends State<ConvertPage> {
                   children: [
                     SizedBox(
                       width: 180,
-                      child: DropdownButtonFormField<String>(
+                      child: GlassDropdownButtonFormField<String>(
+                        width: 180,
                         value: format,
                         items: formats
                             .map((f) => DropdownMenuItem(
@@ -338,7 +340,7 @@ class _ConvertPageState extends State<ConvertPage> {
                     value: brightnessMatch,
                     onChanged: (v) => setState(() => brightnessMatch = v),
                   ),
-                  DropdownButtonFormField<String>(
+                  GlassDropdownButtonFormField<String>(
                     value: brightnessMode,
                     items: const [
                       DropdownMenuItem(value: 'paired', child: Text('配对同名图')),

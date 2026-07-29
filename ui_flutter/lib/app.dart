@@ -8,6 +8,8 @@ import 'pages/review_page.dart';
 import 'pages/tasks_page.dart';
 import 'pages/video_page.dart';
 import 'theme.dart';
+import 'theme/theme_controller.dart';
+import 'widgets/glass_dropdown.dart';
 import 'widgets/liquid_glass.dart';
 
 class ImgForgeApp extends StatelessWidget {
@@ -15,12 +17,13 @@ class ImgForgeApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = context.watch<ThemeController>();
     return MaterialApp(
       title: 'ImgForge',
       debugShowCheckedModeBanner: false,
       theme: ImgForgeTheme.light(),
       darkTheme: ImgForgeTheme.dark(),
-      themeMode: ThemeMode.system,
+      themeMode: theme.themeMode,
       home: const ShellScaffold(),
     );
   }
@@ -203,6 +206,8 @@ class _ShellScaffoldState extends State<ShellScaffold> {
                         },
                       ),
                     ),
+                    const SizedBox(height: 8),
+                    const _ThemeScheduleControl(),
                   ],
                 ),
               ),
@@ -280,6 +285,85 @@ class _SidebarItemState extends State<_SidebarItem> {
               ),
               child: body,
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ThemeScheduleControl extends StatelessWidget {
+  const _ThemeScheduleControl();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.watch<ThemeController>();
+    final scheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Tooltip(
+      message: theme.statusLine,
+      waitDuration: const Duration(milliseconds: 400),
+      child: LiquidGlass(
+        borderRadius: LiquidGlassTokens.controlRadius,
+        interactive: true,
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+        child: PopupMenuButton<ThemeSchedule>(
+          tooltip: '主题模式',
+          padding: EdgeInsets.zero,
+          offset: const Offset(0, -168),
+          elevation: 0,
+          color: GlassMenuStyle.background(context),
+          shape: GlassMenuStyle.panelShape(context),
+          onSelected: theme.setSchedule,
+          itemBuilder: (context) => ThemeSchedule.values
+              .map(
+                (mode) => PopupMenuItem(
+                  value: mode,
+                  child: Row(
+                    children: [
+                      Icon(
+                        mode.icon,
+                        size: 18,
+                        color: theme.schedule == mode ? scheme.primary : null,
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        mode.label,
+                        style: TextStyle(
+                          fontWeight:
+                              theme.schedule == mode ? FontWeight.w600 : FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+              .toList(),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                theme.schedule.icon,
+                size: 16,
+                color: scheme.primary,
+              ),
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(
+                  theme.schedule == ThemeSchedule.sunCycle
+                      ? (isDark ? '夜间' : '日间')
+                      : theme.schedule.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                ),
+              ),
+            ],
           ),
         ),
       ),

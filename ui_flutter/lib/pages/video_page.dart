@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../host/host_controller.dart';
+import '../widgets/glass_dropdown.dart';
 import '../widgets/glass_list_panel.dart';
 import '../widgets/liquid_glass.dart';
 import '../widgets/page_chrome.dart';
@@ -298,7 +299,7 @@ class _VideoPageState extends State<VideoPage> {
                       SizedBox(
                         width: 140,
                         height: 40,
-                        child: DropdownMenu<String>(
+                        child: GlassDropdownMenu<String>(
                           width: 140,
                           initialSelection: alignQuality,
                           requestFocusOnTap: false,

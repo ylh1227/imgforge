@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../host/host_controller.dart';
+import '../widgets/glass_dropdown.dart';
 import '../widgets/glass_list_panel.dart';
 import '../widgets/liquid_glass.dart';
 import '../widgets/page_chrome.dart';
@@ -219,7 +220,7 @@ class _ReviewPageState extends State<ReviewPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      DropdownButtonFormField<String>(
+                      GlassDropdownButtonFormField<String>(
                         value: ['Pending', 'Approved', 'NeedsFix', 'Rejected'].contains(status)
                             ? status
                             : 'Pending',

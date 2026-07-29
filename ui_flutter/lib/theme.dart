@@ -221,7 +221,7 @@ class ImgForgeTheme {
         elevation: 0,
         color: isDark ? const Color(0xF02C2C2E) : const Color(0xF5FFFFFF),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(LiquidGlassTokens.controlRadius),
           side: BorderSide(color: hairline, width: 0.7),
         ),
       ),
@@ -233,10 +233,11 @@ class ImgForgeTheme {
           ),
           shape: WidgetStatePropertyAll(
             RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(LiquidGlassTokens.controlRadius),
               side: BorderSide(color: hairline, width: 0.7),
             ),
           ),
+          padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 6)),
         ),
       ),
       dropdownMenuTheme: DropdownMenuThemeData(
@@ -261,10 +262,11 @@ class ImgForgeTheme {
           ),
           shape: WidgetStatePropertyAll(
             RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(LiquidGlassTokens.controlRadius),
               side: BorderSide(color: hairline, width: 0.7),
             ),
           ),
+          padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(vertical: 6)),
         ),
       ),
       dataTableTheme: DataTableThemeData(
