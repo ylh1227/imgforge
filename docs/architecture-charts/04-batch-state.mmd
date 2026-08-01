@@ -1,0 +1,19 @@
+%%{init: {'themeVariables': {'fontSize': '16px', 'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif'}}}%%
+stateDiagram-v2
+  [*] --> Collecting: 创建批次
+  Collecting --> Uploading: 开始上传
+  Uploading --> Uploading: 分片/续传/旁路log
+  Uploading --> UploadComplete: 本批媒体+log 收齐事件
+  UploadComplete --> Matching: 自动入队匹配
+  UploadComplete --> ReadyCheck: 齐套检查
+  ReadyCheck --> Collecting: 缺采/缺传/版本不一致
+  ReadyCheck --> Reviewable: 齐套通过
+  Matching --> MatchReady: 索引完成
+  Matching --> MatchFailed: 可重试
+  Reviewable --> Reviewing: 打开评审会话
+  Reviewing --> Reviewing: 对比/建草稿
+  Reviewing --> Submitting: 批量提交
+  Submitting --> Submitted: 缺陷平台确认
+  MatchReady --> EvidenceAvailable: 开发可点图下载
+  Submitted --> Closed: 归档
+  Submitted --> Collecting: 打回重采

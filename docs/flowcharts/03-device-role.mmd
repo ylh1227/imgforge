@@ -1,0 +1,9 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TD
+  A([双机均已加载同一专项]) --> B[记录机型 · SN · build · ADB]
+  B --> C[指定对比机 baseline]
+  B --> D[指定测试机 dut]
+  C --> E{两机专项包版本一致?}
+  D --> E
+  E -->|否| F[统一重载同一版本 · 回 ①]
+  E -->|是| G([进入 ③ 采集])

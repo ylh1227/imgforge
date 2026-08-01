@@ -1,0 +1,69 @@
+%%{init: {'flowchart': {  'nodeSpacing': 28, 'rankSpacing': 32, 'padding': 12,   'htmlLabels': true, 'wrappingWidth': 240}, 'themeVariables': {  'fontSize': '18px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TB
+  subgraph Clients["客户端层"]
+    MA[机端采集 App]
+    PC[PC 汇聚工具]
+    WEB[任务门户 Web<br/>离线包下载]
+    RC[电脑评审端]
+  end
+
+  subgraph Edge["接入与传输"]
+    UG[上传网关<br/>断点续传 / 鉴权 / 限流]
+    DG[设备网关协议<br/>ADB·设备通道抽象]
+  end
+
+  subgraph Core["领域服务层"]
+    AUTH[认证适配]
+    TASK[任务与专项包服务]
+    DEVROLE[设备与角色服务]
+    CAPPROG[采集进度服务]
+    ASSET[资产入库服务]
+    READY[齐套校验服务]
+    REVIEW[评审会话服务]
+    DEFECT[缺陷草稿与提交服务]
+    MATCH[证据匹配编排]
+  end
+
+  subgraph Async["异步与计算"]
+    Q[(任务队列)]
+    MW[匹配 Worker]
+    IDX[证据索引构建]
+  end
+
+  subgraph Data["数据层"]
+    META[(元数据库)]
+    OBJ[(对象存储<br/>图/视频/log/dump/包)]
+    CACHE[(缓存 / 会话)]
+  end
+
+  subgraph Ext["外部"]
+    DP[缺陷管理平台]
+  end
+
+  MA --> AUTH
+  MA --> TASK
+  MA --> DEVROLE
+  MA --> CAPPROG
+  MA --> UG
+  WEB --> TASK
+  PC --> DG
+  PC --> UG
+  RC --> REVIEW
+  RC --> DEFECT
+  UG --> ASSET
+  ASSET --> READY
+  ASSET --> Q
+  Q --> MW
+  MW --> IDX
+  REVIEW --> ASSET
+  DEFECT --> DP
+  MATCH --> IDX
+  TASK --> META
+  TASK --> OBJ
+  ASSET --> META
+  ASSET --> OBJ
+  READY --> META
+  REVIEW --> META
+  DEFECT --> META
+  IDX --> META
+  IDX --> OBJ

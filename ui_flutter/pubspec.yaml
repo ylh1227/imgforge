@@ -18,6 +18,10 @@ dependencies:
   dart_suncalc: ^0.2.1
   geolocator: ^14.0.2
   shared_preferences: ^2.5.5
+  video_player: ^2.9.5
+  video_player_media_kit: ^2.0.0
+  media_kit_libs_macos_video: any
+  media_kit_libs_windows_video: any
 
 dev_dependencies:
   flutter_test:

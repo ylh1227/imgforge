@@ -1,0 +1,21 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TD
+  T[测试同学] --> T1[① 在线或离线加载]
+  T1 --> T2[② 标定角色]
+  T2 --> T3[③ 采集]
+  T3 --> T4[④ 选通道 A/B1]
+  T4 --> T5[⑤ 齐套]
+  P[PC 汇聚] --> P0[离线：下任务 zip]
+  P0 -.-> T1
+  P --> P1[④-B2 拉取暂存上传]
+  T4 --> P1
+  P1 --> T5
+  T5 --> R[电脑评审端]
+  R --> R1[⑥ 批量对比图/视频]
+  R1 --> R2[⑥b 建缺陷自动带素材]
+  R2 --> R3[⑦ 按模块选开发批量提交]
+  T5 --> S[服务器]
+  S --> S1[上传完成后后台匹配 dump/log]
+  R3 --> D[开发]
+  S1 -.-> D
+  D --> D1[点图下载时段 log + dump]

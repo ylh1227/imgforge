@@ -290,6 +290,20 @@ impl VideoRepository for SqliteVideoRepository {
         Ok(())
     }
 
+    fn update_video_file_path(&self, id: i64, new_path: &Path) -> VideoReviewResult<()> {
+        let n = self.conn.execute(
+            "UPDATE video_review_item SET file_path = ?1, updated_at = ?2 WHERE id = ?3",
+            params![new_path.to_string_lossy().as_ref(), now_ts(), id],
+        )?;
+        if n == 0 {
+            return Err(VideoReviewError::NotFound {
+                entity: "video_review_item",
+                id,
+            });
+        }
+        Ok(())
+    }
+
     fn set_thumbnail_path(&self, id: i64, path: &Path) -> VideoReviewResult<()> {
         self.conn.execute(
             "UPDATE video_review_item SET thumbnail_path = ?1, updated_at = ?2 WHERE id = ?3",
@@ -338,10 +352,16 @@ impl VideoRepository for SqliteVideoRepository {
 
     fn create_tag(&self, name: &str, color: [u8; 4]) -> VideoReviewResult<i64> {
         self.conn.execute(
-            "INSERT INTO video_review_tag (name, color, created_at) VALUES (?1, ?2, ?3)",
+            "INSERT INTO video_review_tag (name, color, created_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(name) DO UPDATE SET color = excluded.color",
             params![name, color_to_sql(color), now_ts()],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        let id: i64 = self.conn.query_row(
+            "SELECT id FROM video_review_tag WHERE name = ?1",
+            [name],
+            |row| row.get(0),
+        )?;
+        Ok(id)
     }
 
     fn delete_tag(&self, id: i64) -> VideoReviewResult<()> {

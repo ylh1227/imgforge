@@ -18,7 +18,9 @@ use crate::host::state::{EventSink, HostState};
 use crate::job::{preview_batch, run_batch};
 use crate::mobile::{list_devices, MobilePullConfig};
 use crate::prefs::{ConvertPresetSnapshot, GuiPrefs, TaskHistoryEntry};
-use crate::review::domain::image_item::{ImageFilter, ReviewStatus};
+use crate::review::domain::annotation::AnnotationPosition;
+use crate::review::domain::image_item::{ImageFilter, ImageSortKey, ReviewStatus};
+use crate::review::{BatchJsonExportRequest, ExportService};
 use crate::ui::doctor::doctor_report;
 use crate::ui::progress::ProgressReporter;
 use crate::video_review::service::ImportFolderOptions;
@@ -186,6 +188,38 @@ fn handle(
                 .map_err(app_err)?;
             serde_json::to_value(stats).map_err(ser_err)
         }
+        "review.import_paths" => {
+            let name: String =
+                optional_string(&params, "name").unwrap_or_else(|| "队列导入".into());
+            let paths: Vec<String> = required(&params, "paths")?;
+            let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+            let auto_recognize = params
+                .get("auto_recognize")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let id = state
+                .review()?
+                .batch_service()
+                .create_from_paths(&name, &paths)
+                .map_err(app_err)?;
+            let mut out = json!({ "batch_id": id });
+            if auto_recognize {
+                match recognize_batch_with_events(
+                    &events,
+                    &format!("scene-recognize-{id}"),
+                    state.review()?,
+                    id,
+                ) {
+                    Ok(report) => {
+                        out["recognize"] = serde_json::to_value(report).map_err(ser_err)?;
+                    }
+                    Err(e) => {
+                        out["recognize_error"] = json!(e.message);
+                    }
+                }
+            }
+            Ok(out)
+        }
         "review.import_folder" => {
             let folder: String = required(&params, "folder")?;
             let name: String =
@@ -194,28 +228,228 @@ fn handle(
                 .get("recursive")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
+            let auto_recognize = params
+                .get("auto_recognize")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let id = state
                 .review()?
                 .batch_service()
                 .create_from_folder(&name, Path::new(&folder), recursive)
                 .map_err(app_err)?;
-            Ok(json!({ "batch_id": id }))
+            let mut out = json!({ "batch_id": id });
+            if auto_recognize {
+                match recognize_batch_with_events(
+                    &events,
+                    &format!("scene-recognize-{id}"),
+                    state.review()?,
+                    id,
+                ) {
+                    Ok(report) => {
+                        out["recognize"] = serde_json::to_value(report).map_err(ser_err)?;
+                    }
+                    Err(e) => {
+                        out["recognize_error"] = json!(e.message);
+                    }
+                }
+            }
+            Ok(out)
         }
-        "review.import_paths" => {
-            let name: String =
-                optional_string(&params, "name").unwrap_or_else(|| "队列导入".into());
-            let paths: Vec<String> = required(&params, "paths")?;
-            let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-            let id = state
-                .review()?
-                .batch_service()
-                .create_from_paths(&name, &paths)
-                .map_err(app_err)?;
-            Ok(json!({ "batch_id": id }))
+        "review.recognize_scenes" => {
+            let batch_id: i64 = required(&params, "batch_id")?;
+            // Async so app.cancel_job can be handled while recognition runs.
+            let job_id = format!("scene-recognize-{batch_id}");
+            let (cancel, _) = state.begin_named_job(job_id.clone(), "scene-recognize");
+            let events_bg = events.clone();
+            let job_id_bg = job_id.clone();
+            thread::spawn(move || {
+                match crate::review::service::ReviewService::open() {
+                    Ok(service) => {
+                        let events_for_progress = events_bg.clone();
+                        let job_for_progress = job_id_bg.clone();
+                        let progress = move |current: usize, total: usize, message: &str| {
+                            emit_scene_progress(
+                                &events_for_progress,
+                                &job_for_progress,
+                                current,
+                                total,
+                                message,
+                            );
+                        };
+                        match crate::review::recognize_and_rename_batch(
+                            &service,
+                            batch_id,
+                            Some(&progress),
+                            Some(&cancel),
+                        ) {
+                            Ok(report) => {
+                                let msg = if report.cancelled {
+                                    format!(
+                                        "场景识别已取消：已完成 {}/{}，匹配 {}，重命名 {}",
+                                        report.items.len(),
+                                        report.total,
+                                        report.matched,
+                                        report.renamed
+                                    )
+                                } else {
+                                    format!(
+                                        "场景识别完成：匹配 {}/{}，重命名 {}",
+                                        report.matched, report.total, report.renamed
+                                    )
+                                };
+                                emit_finished(
+                                    &events_bg,
+                                    &job_id_bg,
+                                    true,
+                                    msg,
+                                    serde_json::to_value(&report).ok(),
+                                );
+                            }
+                            Err(e) => {
+                                emit_finished(&events_bg, &job_id_bg, false, e.to_string(), None);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        emit_finished(&events_bg, &job_id_bg, false, e.to_string(), None);
+                    }
+                }
+            });
+            Ok(json!({ "job_id": job_id, "async": true, "batch_id": batch_id }))
         }
+        "scene.catalog_get" => {
+            let cat = crate::review::SceneCatalog::load().map_err(app_err)?;
+            serde_json::to_value(cat).map_err(ser_err)
+        }
+        "scene.catalog_set" => {
+            let cat: crate::review::SceneCatalog = if let Some(c) = params.get("catalog") {
+                serde_json::from_value(c.clone())
+                    .map_err(|e| RpcError::invalid_params(e.to_string()))?
+            } else {
+                serde_json::from_value(params.clone())
+                    .map_err(|e| RpcError::invalid_params(format!("catalog: {e}")))?
+            };
+            cat.validate().map_err(app_err)?;
+            cat.save().map_err(app_err)?;
+            Ok(json!({ "ok": true, "count": cat.scenes.len() }))
+        }
+        "scene.catalog_import_table" => {
+            let merge = params
+                .get("merge")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let imported = if let Some(path) = optional_string(&params, "path") {
+                crate::review::SceneCatalog::from_table_file(Path::new(&path)).map_err(app_err)?
+            } else if let Some(text) = optional_string(&params, "text") {
+                crate::review::SceneCatalog::from_table_text(&text).map_err(app_err)?
+            } else {
+                return Err(RpcError::invalid_params(
+                    "需要 path（表格文件）或 text（CSV/TSV 文本）".to_string(),
+                ));
+            };
+            let count = imported.scenes.len();
+            let mut cat = if merge {
+                crate::review::SceneCatalog::load().unwrap_or_default()
+            } else {
+                crate::review::SceneCatalog::default()
+            };
+            if merge {
+                cat.merge_with(imported);
+            } else {
+                cat = imported;
+            }
+            if cat.scenes.is_empty() {
+                return Err(RpcError::invalid_params(
+                    "导入结果为空：请确认表格含 id、name 列及至少一行数据".to_string(),
+                ));
+            }
+            cat.validate().map_err(app_err)?;
+            cat.save().map_err(app_err)?;
+            Ok(json!({
+                "ok": true,
+                "count": cat.scenes.len(),
+                "imported": count,
+                "merge": merge,
+            }))
+        }
+        "scene.config_get" => {
+            let cfg = crate::review::SceneRecognizeConfig::load().map_err(app_err)?;
+            let mut v = serde_json::to_value(cfg).map_err(ser_err)?;
+            if let Some(obj) = v.as_object_mut() {
+                // 只返回是否已配置，绝不回传 Key 明文。
+                obj.insert(
+                    "has_api_key".into(),
+                    json!(crate::review::SceneRecognizeConfig::has_api_key()),
+                );
+                obj.insert(
+                    "api_key_in_keychain".into(),
+                    json!(crate::review::has_keychain_api_key()),
+                );
+            }
+            Ok(v)
+        }
+        "scene.api_key_set" => {
+            // 一次性写入钥匙串；响应不含 Key。调用方勿把 Key 打日志。
+            let key = optional_string(&params, "api_key")
+                .ok_or_else(|| RpcError::invalid_params("需要 api_key".to_string()))?;
+            crate::review::store_api_key(&key).map_err(app_err)?;
+            Ok(json!({ "ok": true, "has_api_key": true }))
+        }
+        "scene.api_key_clear" => {
+            crate::review::clear_api_key().map_err(app_err)?;
+            Ok(json!({
+                "ok": true,
+                "has_api_key": crate::review::has_api_key(),
+            }))
+        }
+        "scene.config_set" => {
+            // 忽略任何试图经配置写入的 api_key 字段，避免明文落盘。
+            let mut cfg = crate::review::SceneRecognizeConfig::load().map_err(app_err)?;
+            if let Some(v) = params.get("enabled").and_then(|x| x.as_bool()) {
+                cfg.enabled = v;
+            }
+            if let Some(v) = optional_string(&params, "base_url") {
+                if !(v.starts_with("https://")
+                    || v.starts_with("http://127.0.0.1")
+                    || v.starts_with("http://localhost"))
+                {
+                    return Err(RpcError::invalid_params(
+                        "base_url 必须使用 HTTPS（本地可用 http://127.0.0.1）".to_string(),
+                    ));
+                }
+                cfg.base_url = v;
+            }
+            if let Some(v) = optional_string(&params, "model") {
+                cfg.model = v;
+            }
+            if let Some(v) = params.get("timeout_secs").and_then(|x| x.as_u64()) {
+                cfg.timeout_secs = v;
+            }
+            if let Some(v) = params.get("auto_on_import").and_then(|x| x.as_bool()) {
+                cfg.auto_on_import = v;
+            }
+            if let Some(v) = params.get("prefix_unknown").and_then(|x| x.as_bool()) {
+                cfg.prefix_unknown = v;
+            }
+            if let Some(v) = params.get("concurrency").and_then(|x| x.as_u64()) {
+                cfg.concurrency = (v as usize).clamp(1, 16);
+            }
+            if let Some(v) = params.get("max_edge").and_then(|x| x.as_u64()) {
+                cfg.max_edge = (v as u32).clamp(256, 1280);
+            }
+            if let Some(v) = params.get("enable_thinking").and_then(|x| x.as_bool()) {
+                cfg.enable_thinking = v;
+            }
+            if let Some(v) = params.get("thinking_budget").and_then(|x| x.as_u64()) {
+                cfg.thinking_budget = v as u32;
+            }
+            cfg.save().map_err(app_err)?;
+            Ok(json!({ "ok": true }))
+        }
+
         "review.list_images" => {
             let batch_id: i64 = required(&params, "batch_id")?;
-            let filter = ImageFilter::default();
+            let filter = parse_image_filter(&params);
             let items = state
                 .review()?
                 .list_images(batch_id, &filter)
@@ -258,6 +492,106 @@ fn handle(
             let id: i64 = required(&params, "id")?;
             state.review()?.remove_annotation(id).map_err(app_err)?;
             Ok(json!({ "ok": true }))
+        }
+        "review.update_annotation" => {
+            let id: i64 = required(&params, "id")?;
+            let service = state.review()?;
+            if let Some(pos_val) = params.get("position") {
+                let position: AnnotationPosition = serde_json::from_value(pos_val.clone())
+                    .map_err(|e| RpcError::invalid_params(e.to_string()))?;
+                service
+                    .update_annotation_position(id, &position)
+                    .map_err(app_err)?;
+            }
+            if let Some(content) = params.get("content").and_then(|v| v.as_str()) {
+                service
+                    .update_annotation_content(id, content)
+                    .map_err(app_err)?;
+            }
+            Ok(json!({ "ok": true }))
+        }
+        "review.undo_last_annotation" => {
+            let image_id: i64 = required(&params, "image_id")?;
+            state
+                .review()?
+                .undo_last_annotation(image_id)
+                .map_err(app_err)?;
+            Ok(json!({ "ok": true }))
+        }
+        "review.list_tags" => {
+            let tags = state.review()?.list_tags().map_err(app_err)?;
+            let rows: Vec<Value> = tags
+                .into_iter()
+                .map(|t| {
+                    json!({
+                        "id": t.id,
+                        "name": t.name,
+                        "color": t.color,
+                        "created_at": t.created_at,
+                    })
+                })
+                .collect();
+            Ok(json!(rows))
+        }
+        "review.create_tag" => {
+            let name: String = required(&params, "name")?;
+            let color: [u8; 4] = params
+                .get("color")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or([0, 122, 255, 255]);
+            let id = state.review()?.create_tag(&name, color).map_err(app_err)?;
+            Ok(json!({ "id": id }))
+        }
+        "review.set_image_tag" => {
+            let image_id: i64 = required(&params, "image_id")?;
+            let tag_id: i64 = required(&params, "tag_id")?;
+            let on: bool = required(&params, "on")?;
+            state
+                .review()?
+                .set_image_tag(image_id, tag_id, on)
+                .map_err(app_err)?;
+            Ok(json!({ "ok": true }))
+        }
+        "review.tags_for_image" => {
+            let image_id: i64 = required(&params, "image_id")?;
+            let ids = state.review()?.tags_for_image(image_id).map_err(app_err)?;
+            Ok(json!({ "tag_ids": ids }))
+        }
+        "review.batch_set_status" => {
+            let ids: Vec<i64> = required(&params, "image_ids")?;
+            let status: ReviewStatus = required(&params, "status")?;
+            state
+                .review()?
+                .batch_set_status(&ids, status)
+                .map_err(app_err)?;
+            Ok(json!({ "ok": true }))
+        }
+        "review.export_annotations_json" => {
+            let batch_id: i64 = required(&params, "batch_id")?;
+            let output_dir: String = required(&params, "output_dir")?;
+            let service = state.review()?;
+            let paths = ExportService::export_batch_annotation_json(
+                service.repo(),
+                &BatchJsonExportRequest {
+                    batch_id,
+                    output_dir: PathBuf::from(output_dir),
+                },
+            )
+            .map_err(app_err)?;
+            let written: Vec<String> = paths
+                .into_iter()
+                .map(|p| p.display().to_string())
+                .collect();
+            Ok(json!({ "ok": true, "count": written.len(), "paths": written }))
+        }
+        "review.export_sidecar" => {
+            let image_id: i64 = required(&params, "image_id")?;
+            let path: String = required(&params, "path")?;
+            let dest = state
+                .review()?
+                .export_sidecar(image_id, Path::new(&path))
+                .map_err(app_err)?;
+            Ok(json!({ "ok": true, "path": dest.display().to_string() }))
         }
         "review.session_restore" => {
             let (batch_id, image_id) = state.review()?.restore_session().map_err(app_err)?;
@@ -307,6 +641,10 @@ fn handle(
                 .get("generate_thumbnails")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+            let auto_recognize = params
+                .get("auto_recognize")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let result = state
                 .video()?
                 .import_folder_with_options(
@@ -318,14 +656,91 @@ fn handle(
                     None,
                 )
                 .map_err(app_err)?;
-            Ok(json!({
+            let mut out = json!({
                 "batch_id": result.batch_id,
                 "imported": result.imported,
                 "skipped": result.skipped.iter().map(|s| json!({
                     "path": s.path,
                     "reason": s.reason,
                 })).collect::<Vec<_>>(),
-            }))
+            });
+            if auto_recognize {
+                match recognize_video_batch_with_events(
+                    &events,
+                    &format!("video-scene-recognize-{}", result.batch_id),
+                    state.video()?,
+                    result.batch_id,
+                ) {
+                    Ok(report) => {
+                        out["recognize"] = serde_json::to_value(report).map_err(ser_err)?;
+                    }
+                    Err(e) => {
+                        out["recognize_error"] = json!(e.message);
+                    }
+                }
+            }
+            Ok(out)
+        }
+        "video.recognize_scenes" => {
+            let batch_id: i64 = required(&params, "batch_id")?;
+            let job_id = format!("video-scene-recognize-{batch_id}");
+            let (cancel, _) = state.begin_named_job(job_id.clone(), "video-scene-recognize");
+            let events_bg = events.clone();
+            let job_id_bg = job_id.clone();
+            thread::spawn(move || {
+                match crate::video_review::service::VideoReviewService::open() {
+                    Ok(service) => {
+                        let events_for_progress = events_bg.clone();
+                        let job_for_progress = job_id_bg.clone();
+                        let progress = move |current: usize, total: usize, message: &str| {
+                            emit_scene_progress(
+                                &events_for_progress,
+                                &job_for_progress,
+                                current,
+                                total,
+                                message,
+                            );
+                        };
+                        match crate::video_review::recognize_and_rename_video_batch(
+                            &service,
+                            batch_id,
+                            Some(&progress),
+                            Some(&cancel),
+                        ) {
+                            Ok(report) => {
+                                let msg = if report.cancelled {
+                                    format!(
+                                        "视频场景识别已取消：已完成 {}/{}，匹配 {}，重命名 {}",
+                                        report.items.len(),
+                                        report.total,
+                                        report.matched,
+                                        report.renamed
+                                    )
+                                } else {
+                                    format!(
+                                        "视频场景识别完成：匹配 {}/{}，重命名 {}",
+                                        report.matched, report.total, report.renamed
+                                    )
+                                };
+                                emit_finished(
+                                    &events_bg,
+                                    &job_id_bg,
+                                    true,
+                                    msg,
+                                    serde_json::to_value(&report).ok(),
+                                );
+                            }
+                            Err(e) => {
+                                emit_finished(&events_bg, &job_id_bg, false, e.to_string(), None);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        emit_finished(&events_bg, &job_id_bg, false, e.to_string(), None);
+                    }
+                }
+            });
+            Ok(json!({ "job_id": job_id, "async": true, "batch_id": batch_id }))
         }
         "video.list_videos" => {
             let batch_id: i64 = required(&params, "batch_id")?;
@@ -642,23 +1057,85 @@ fn convert_run(
     }
 }
 
-fn emit_progress(
+fn emit_scene_progress(
     events: &Option<EventSink>,
     job_id: &str,
-    progress: &crate::ui::progress::GuiProgress,
+    current: usize,
+    total: usize,
     message: &str,
 ) {
     if let Some(sink) = events {
-        let total = progress.total.load(Ordering::Relaxed);
-        let current = progress.completed.load(Ordering::Relaxed);
+        let fraction = if total == 0 {
+            0.0
+        } else {
+            (current as f32 / total as f32).clamp(0.0, 1.0)
+        };
         sink(HostEvent::JobProgress {
             job_id: job_id.into(),
             current,
             total,
-            fraction: progress.fraction(),
+            fraction,
             message: message.into(),
         });
     }
+}
+
+fn recognize_batch_with_events(
+    events: &Option<EventSink>,
+    job_id: &str,
+    service: &crate::review::service::ReviewService,
+    batch_id: i64,
+) -> Result<crate::review::RecognizeBatchReport, RpcError> {
+    let events_for_progress = events.clone();
+    let job_id_owned = job_id.to_string();
+    let progress = move |current: usize, total: usize, message: &str| {
+        emit_scene_progress(&events_for_progress, &job_id_owned, current, total, message);
+    };
+    let report =
+        crate::review::recognize_and_rename_batch(service, batch_id, Some(&progress), None)
+            .map_err(app_err)?;
+    emit_finished(
+        events,
+        job_id,
+        true,
+        format!(
+            "场景识别完成：匹配 {}/{}，重命名 {}",
+            report.matched, report.total, report.renamed
+        ),
+        None,
+    );
+    Ok(report)
+}
+
+fn recognize_video_batch_with_events(
+    events: &Option<EventSink>,
+    job_id: &str,
+    service: &crate::video_review::service::VideoReviewService,
+    batch_id: i64,
+) -> Result<crate::video_review::VideoRecognizeBatchReport, RpcError> {
+    let events_for_progress = events.clone();
+    let job_id_owned = job_id.to_string();
+    let progress = move |current: usize, total: usize, message: &str| {
+        emit_scene_progress(&events_for_progress, &job_id_owned, current, total, message);
+    };
+    let report = crate::video_review::recognize_and_rename_video_batch(
+        service,
+        batch_id,
+        Some(&progress),
+        None,
+    )
+    .map_err(app_err)?;
+    emit_finished(
+        events,
+        job_id,
+        true,
+        format!(
+            "视频场景识别完成：匹配 {}/{}，重命名 {}",
+            report.matched, report.total, report.renamed
+        ),
+        None,
+    );
+    Ok(report)
 }
 
 fn emit_finished(
@@ -674,6 +1151,25 @@ fn emit_finished(
             ok,
             message,
             result,
+        });
+    }
+}
+
+fn emit_progress(
+    events: &Option<EventSink>,
+    job_id: &str,
+    progress: &crate::ui::progress::GuiProgress,
+    message: &str,
+) {
+    if let Some(sink) = events {
+        let total = progress.total.load(Ordering::Relaxed);
+        let current = progress.completed.load(Ordering::Relaxed);
+        sink(HostEvent::JobProgress {
+            job_id: job_id.into(),
+            current,
+            total,
+            fraction: progress.fraction(),
+            message: message.into(),
         });
     }
 }
@@ -820,6 +1316,56 @@ fn default_batch_name(folder: &str) -> String {
         .and_then(|s| s.to_str())
         .unwrap_or("batch")
         .to_string()
+}
+
+fn parse_image_filter(params: &Value) -> ImageFilter {
+    let mut filter = ImageFilter::default();
+    if let Some(status) = params.get("status") {
+        if let Ok(s) = serde_json::from_value::<ReviewStatus>(status.clone()) {
+            filter.status = Some(s);
+        } else if let Some(s) = status.as_str() {
+            filter.status = match s {
+                "Pending" | "pending" => Some(ReviewStatus::Pending),
+                "Approved" | "passed" => Some(ReviewStatus::Approved),
+                "NeedsFix" | "need_fix" => Some(ReviewStatus::NeedsFix),
+                "Rejected" | "rejected" => Some(ReviewStatus::Rejected),
+                "All" | "all" | "" => None,
+                _ => None,
+            };
+        }
+    }
+    if let Some(search) = params.get("search").and_then(|v| v.as_str()) {
+        filter.search = search.to_string();
+    }
+    if let Some(remark) = params.get("remark_contains").and_then(|v| v.as_str()) {
+        filter.remark_contains = remark.to_string();
+    }
+    if let Some(sort) = params.get("sort_by").and_then(|v| v.as_str()) {
+        filter.sort_by = match sort {
+            "Status" | "status" => ImageSortKey::Status,
+            "UpdatedAt" | "updated_at" => ImageSortKey::UpdatedAt,
+            "FileSize" | "file_size" => ImageSortKey::FileSize,
+            "Resolution" | "resolution" => ImageSortKey::Resolution,
+            "AnnotationCount" | "annotation_count" => ImageSortKey::AnnotationCount,
+            _ => ImageSortKey::FilePath,
+        };
+    }
+    if let Some(asc) = params.get("sort_asc").and_then(|v| v.as_bool()) {
+        filter.sort_asc = asc;
+    }
+    if let Some(mode) = params.get("annotation_filter").and_then(|v| v.as_str()) {
+        use crate::review::domain::image_item::AnnotationFilter;
+        filter.annotation_filter = match mode {
+            "None" | "none" => AnnotationFilter::None,
+            "Has" | "has" => AnnotationFilter::Has,
+            "AtLeast" | "at_least" => AnnotationFilter::AtLeast,
+            _ => AnnotationFilter::Any,
+        };
+    }
+    if let Some(n) = params.get("min_annotations").and_then(|v| v.as_i64()) {
+        filter.min_annotations = Some(n as i32);
+    }
+    filter
 }
 
 fn required<T: for<'de> Deserialize<'de>>(params: &Value, key: &str) -> Result<T, RpcError> {

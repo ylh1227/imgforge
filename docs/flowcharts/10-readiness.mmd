@@ -1,0 +1,13 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TD
+  A([上传结束]) --> B{对比机有上传?}
+  B -->|否| Back1[回 ④ 补传对比机]
+  B -->|是| C{测试机有上传?}
+  C -->|否| Back2[回 ④ 补传测试机]
+  C -->|是| D{专项包版本一致?}
+  D -->|否| Back3[回 ① 统一版本]
+  D -->|是| E{场景齐套或缺项已认可?}
+  E -->|否| Back4[回 ③ 补采或 ④ 补传]
+  E -->|是| F{bbklog 日志队列已完?}
+  F -->|否| Back5[回 ④ 等日志传完]
+  F -->|是| G([进入 ⑥ 电脑评审端])

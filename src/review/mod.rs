@@ -2,6 +2,7 @@
 
 pub mod domain;
 pub mod error;
+pub mod scene_recognize;
 pub mod service;
 pub mod storage;
 
@@ -12,6 +13,10 @@ pub use domain::{
     ConvertParams, CustomStatusLabel, ImageMetadata, ImageSortKey, ReviewTag, TagFilterMode,
 };
 pub use error::{ReviewError, ReviewResult};
+pub use scene_recognize::{
+    clear_api_key, has_api_key, has_keychain_api_key, recognize_and_rename_batch, store_api_key,
+    RecognizeBatchReport, SceneCatalog, SceneRecognizeConfig, SceneSpec,
+};
 pub use service::{
     is_irreversible_transition, save_custom_binding, BatchAnnotateRequest, BatchAnnotateResult,
     BatchItemFailure, BatchJsonExportRequest, BatchOperations, BatchRemarkRequest,

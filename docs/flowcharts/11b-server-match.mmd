@@ -1,0 +1,15 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TD
+  Done([本批数据上传完成]) --> Trig[服务器自动触发匹配]
+  Trig --> Bg[后台队列执行匹配算法]
+  Bg --> R1[问题图片 ↔ dump]
+  Bg --> R2[问题图片 ↔ 时段 log]
+  Bg --> R3[其它关联数据]
+  R1 --> Ready{后台匹配完成?}
+  R2 --> Ready
+  R3 --> Ready
+  Ready -->|进行中| Parallel[评审端可同时对比 / 建缺陷]
+  Ready -->|完成| OK[缺陷详情可取 log + dump]
+  Parallel -.-> Gate{开发下载时匹配完成?}
+  Gate -->|否| Wait[等待后台匹配结束]
+  Gate -->|是| OK

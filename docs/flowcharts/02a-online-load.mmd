@@ -1,0 +1,15 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TD
+  A([手机连网]) --> B[登录账号]
+  B --> C[进入「在线加载」]
+  C --> D[刷新任务列表]
+  D --> E[筛选项目]
+  E --> F[选择特定任务]
+  F --> G{本地已加载过?}
+  G -->|否| H[点击「加载」]
+  G -->|是| I[点击「重新加载」]
+  H --> J[服务器拉取并加载场景]
+  I --> J
+  J --> L{任务卡出现且机型_SN 可见?}
+  L -->|否| D
+  L -->|是| M([进入 ② 标定角色])

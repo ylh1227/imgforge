@@ -116,6 +116,8 @@ pub struct VideoReviewPanel {
     import_job: BackgroundJob<ImportFolderResult>,
     import_job_started: Option<Instant>,
     import_job_folder: Option<PathBuf>,
+    /// 导入后自动场景识别（与图片评审共用 SceneRecognizeConfig.auto_on_import）。
+    auto_recognize_on_import: bool,
     align_job: BackgroundJob<AlignBatchResult>,
     align_review: Option<AlignBatchResult>,
     align_review_open: bool,
@@ -255,6 +257,9 @@ impl VideoReviewPanel {
             import_job: BackgroundJob::default(),
             import_job_started: None,
             import_job_folder: None,
+            auto_recognize_on_import: crate::review::SceneRecognizeConfig::load()
+                .map(|c| c.auto_on_import)
+                .unwrap_or(false),
             align_job: BackgroundJob::default(),
             align_review: None,
             align_review_open: false,
@@ -537,6 +542,31 @@ impl VideoReviewPanel {
                     self.start_import_folder(ctx, folder);
                 }
             }
+            if ui
+                .checkbox(&mut self.auto_recognize_on_import, "导入后场景识别")
+                .changed()
+            {
+                if let Ok(mut cfg) = crate::review::SceneRecognizeConfig::load() {
+                    cfg.auto_on_import = self.auto_recognize_on_import;
+                    let _ = cfg.save();
+                }
+            }
+            ui.horizontal(|ui| {
+                if widgets::compact_secondary_button(
+                    ui,
+                    "场景识别命名",
+                    self.current_batch.is_some() && !self.import_job.is_running(),
+                )
+                .clicked()
+                {
+                    self.run_video_scene_recognize();
+                }
+            });
+            ui.label(
+                RichText::new("场景列表与 API 设置见图片评审「场景识别设置」")
+                    .small()
+                    .weak(),
+            );
             if self.import_job.is_running() {
                 if let Some(progress) = self.import_job.progress() {
                     ui.add(egui::ProgressBar::new(progress.fraction()).show_percentage());
@@ -2437,6 +2467,28 @@ impl VideoReviewPanel {
         self.status_hint = "正在导入视频…".into();
     }
 
+    fn run_video_scene_recognize(&mut self) {
+        let Some(batch_id) = self.current_batch else {
+            self.error = Some("请先选择视频批次".into());
+            return;
+        };
+        match crate::video_review::recognize_and_rename_video_batch(
+            &self.service,
+            batch_id,
+            None,
+            None,
+        ) {
+            Ok(rep) => {
+                self.status_hint = format!(
+                    "场景识别完成：匹配 {}/{}，重命名 {}，失败 {}",
+                    rep.matched, rep.total, rep.renamed, rep.failed
+                );
+                let _ = self.reload_videos();
+            }
+            Err(e) => self.error = Some(e.to_string()),
+        }
+    }
+
     fn poll_import_job(&mut self, ctx: &Context) {
         let Some(result) = self.import_job.poll(ctx) else {
             return;
@@ -2467,6 +2519,25 @@ impl VideoReviewPanel {
                 );
                 if let Some(note) = remote_note {
                     msg.push_str(&format!(" · {note}"));
+                }
+                if self.auto_recognize_on_import {
+                    match crate::video_review::recognize_and_rename_video_batch(
+                        &self.service,
+                        r.batch_id,
+                        None,
+                        None,
+                    ) {
+                        Ok(rep) => {
+                            msg.push_str(&format!(
+                                " · 场景识别 {}/{}，重命名 {}",
+                                rep.matched, rep.total, rep.renamed
+                            ));
+                        }
+                        Err(e) => {
+                            self.error =
+                                Some(format!("导入成功，但场景识别失败：{e}"));
+                        }
+                    }
                 }
                 if !r.skipped.is_empty() {
                     let sample: Vec<_> = r

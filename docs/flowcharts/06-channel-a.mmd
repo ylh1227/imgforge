@@ -1,0 +1,10 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TD
+  A([手机接入拓展坞]) --> B{有线网通服务器?}
+  B -->|否| Z[改走 B1 或 B2]
+  B -->|是| C[打开「上传」Tab]
+  C --> D[对照片任务点上传]
+  D --> E[bbklog 旁路队列并行]
+  E --> F{剩余文件 = 0?}
+  F -->|否 · 保持网络| E
+  F -->|是| G([进入 ⑤ 齐套检查])

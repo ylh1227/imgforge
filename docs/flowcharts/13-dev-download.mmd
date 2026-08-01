@@ -1,0 +1,11 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TD
+  A([开发打开缺陷管理平台]) --> B[打开有问题缺陷单]
+  B --> C[点击缺陷关联的问题图片]
+  C --> D[下载问题时间段 log]
+  C --> E[下载图片对应 dump]
+  D --> F[本地分析 / 定位]
+  E --> F
+  F --> G{是否修复完成?}
+  G -->|否| F
+  G -->|是| H[回写缺陷状态]

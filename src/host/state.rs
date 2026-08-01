@@ -46,17 +46,31 @@ impl HostState {
 
     pub fn begin_job(&mut self, kind: &str) -> (String, Arc<AtomicBool>, Arc<GuiProgress>) {
         let job_id = uuid::Uuid::new_v4().to_string();
+        let (cancel, progress) = self.begin_named_job(job_id.clone(), kind);
+        (job_id, cancel, progress)
+    }
+
+    /// Register / replace a job under a stable id (e.g. `scene-recognize-{batch}`).
+    /// If the same id is already running, its cancel flag is set first.
+    pub fn begin_named_job(
+        &mut self,
+        job_id: String,
+        kind: &str,
+    ) -> (Arc<AtomicBool>, Arc<GuiProgress>) {
+        if let Some(prev) = self.jobs.get(&job_id) {
+            prev.cancel.store(true, Ordering::Relaxed);
+        }
         let cancel = Arc::new(AtomicBool::new(false));
         let progress = Arc::new(GuiProgress::new());
         self.jobs.insert(
-            job_id.clone(),
+            job_id,
             JobRecord {
                 cancel: Arc::clone(&cancel),
                 progress: Arc::clone(&progress),
                 kind: kind.into(),
             },
         );
-        (job_id, cancel, progress)
+        (cancel, progress)
     }
 
     pub fn cancel_job(&self, job_id: &str) -> bool {

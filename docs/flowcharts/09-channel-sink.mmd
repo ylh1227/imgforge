@@ -1,0 +1,7 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart LR
+  Phone[手机素材 / bbklog]
+  Phone -->|A 拓展坞网口| Svr[(服务器)]
+  Phone -->|B1 USB 共享网直传| Svr
+  Phone -->|B2 ADB / panda| PC[电脑暂存<br/>C:\cis 等]
+  PC -->|批量上传| Svr

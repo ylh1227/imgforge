@@ -265,6 +265,10 @@ impl VideoReviewService {
         self.repo.update_video_offset(id, offset_ms)
     }
 
+    pub fn update_file_path(&self, id: i64, new_path: &Path) -> VideoReviewResult<()> {
+        self.repo.update_video_file_path(id, new_path)
+    }
+
     pub fn list_tags(&self) -> VideoReviewResult<Vec<VideoTag>> {
         self.repo.list_tags()
     }

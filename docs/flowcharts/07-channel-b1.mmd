@@ -1,0 +1,11 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TD
+  A([USB 连接电脑]) --> B[开启 USB 网络共享]
+  B --> C{手机能访问服务器?}
+  C -->|否| Z[改走 B2 或排查共享]
+  C -->|是| D[机端 App「上传」Tab 发起]
+  D --> E[照片队列 + bbklog 旁路]
+  E --> F{队列清空?}
+  F -->|否| E
+  F -->|是| G([进入 ⑤ 齐套检查])
+  D -.-> note1[PC 仅作网关 · 不落盘]

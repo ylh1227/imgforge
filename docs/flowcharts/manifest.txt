@@ -1,0 +1,19 @@
+01-end-to-end	图 1 · 端到端总流程	01-end-to-end.png
+02-load-mode-compare	一眼对照	02-load-mode-compare.png
+02-load-mode-decide	一眼对照	02-load-mode-decide.png
+02a-online-load	图 2a · 在线加载（逐步）	02a-online-load.png
+02b-offline-load	图 2b · 离线加载（逐步）	02b-offline-load.png
+03-device-role	图 3 · ② 标定设备角色	03-device-role.png
+04-capture	图 4 · ③ 按场景采集	04-capture.png
+05-upload-decide	图 5 · ④ 上传通道决策	05-upload-decide.png
+06-channel-a	图 6 · 通道 A：拓展坞网口直连	06-channel-a.png
+07-channel-b1	图 7 · 通道 B1：USB 共享网直传	07-channel-b1.png
+08-channel-b2	图 8 · 通道 B2：拉取暂存再上传	08-channel-b2.png
+09-channel-sink	图 9 · 通道对照（数据落点）	09-channel-sink.png
+10-readiness	图 10 · ⑤ 素材齐套检查	10-readiness.png
+11-review-defect	图 11 · ⑥ 电脑评审端：批量对比 → 建缺陷	11-review-defect.png
+11b-server-match	图 11b · ⑥c 服务器后台匹配（数据上传完成后触发）	11b-server-match.png
+12-assign-submit	图 12 · ⑦ 按模块指派开发并批量提交	12-assign-submit.png
+13-dev-download	图 13 · 开发取证：点图下载 log + dump	13-dev-download.png
+14-exceptions	图 14 · 异常回退	14-exceptions.png
+15-roles	图 15 · 角色分工泳道	15-roles.png

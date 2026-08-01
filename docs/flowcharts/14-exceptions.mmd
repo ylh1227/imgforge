@@ -1,0 +1,17 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TD
+  A1["在线加载失败 → 重试刷新 / 换网 / 重新登录"]
+  A2["在线不可用 → 改走离线加载"]
+  A3["离线包损坏 → 浏览器重新下载后重选"]
+  A4["A 网口不通 → 改 B1 或 B2"]
+  A5["B1 共享网不通 → 查 USB 共享或改 B2"]
+  A6["B2 设备不可用 → 重插线 · 开 ADB · 重启 panda"]
+  A7["上传中断 → 保持网络 · 勿杀进程 · 续传"]
+  A8["包名无 SN → 停传 · 重打包 · 再传"]
+  A9["双机版本不一致 → 统一重载同一版本后再评"]
+  A10["缺陷未带图/视频 → 重新选中问题素材再建"]
+  A11["匹配长时间未完成 → 确认上传完成 · 查后台队列"]
+  A12["开发点图无 dump/log → 确认匹配完成 · 权限 · 时段"]
+  A13["批量提交失败 → 检查模块指派与平台连通"]
+  A1 --> A2 --> A3 --> A4 --> A5 --> A6 --> A7
+  A7 --> A8 --> A9 --> A10 --> A11 --> A12 --> A13

@@ -1,0 +1,5 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TD
+  Start([打开机端 App · 准备加载任务]) --> Q{现场能否稳定联网登录?}
+  Q -->|是| Online([走在线加载 · 图 2a])
+  Q -->|否 / 手里已有任务 zip| Offline([走离线加载 · 图 2b])

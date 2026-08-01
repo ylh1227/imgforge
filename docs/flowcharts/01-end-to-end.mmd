@@ -1,0 +1,23 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TD
+  Start([开始专项]) --> LoadPick{① 加载方式}
+  LoadPick -->|在线| Online[联网登录 · 刷新选任务]
+  LoadPick -->|离线| Offline[浏览器下 zip · 手机解压]
+  Online --> Role[② 标定对比机 / 测试机]
+  Offline --> Role
+  Role --> Cap[③ 按场景采集至进度满]
+  Cap --> Pick{④ 上传通道}
+  Pick -->|A| A[网口直传]
+  Pick -->|B1| B1[USB 共享网直传]
+  Pick -->|B2| B2[PC 暂存再传]
+  A --> Check[⑤ 齐套检查]
+  B1 --> Check
+  B2 --> Check
+  Check --> Uploaded[上传完成]
+  Uploaded --> Review[⑥ 批量对比图 / 视频]
+  Uploaded -.-> BgMatch[⑥c 服务器后台匹配]
+  Review --> Defect[⑥b 建缺陷并带入素材]
+  Defect --> Assign[⑦ 按模块选开发 · 批量提交]
+  Assign --> Dev[开发点图下载 log + dump]
+  BgMatch -.-> Dev
+  Dev --> End([归档结束])

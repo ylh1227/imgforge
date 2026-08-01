@@ -1,0 +1,31 @@
+%%{init: {'flowchart': {  'nodeSpacing': 28, 'rankSpacing': 32, 'padding': 12,   'htmlLabels': true, 'wrappingWidth': 240}, 'themeVariables': {  'fontSize': '18px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TB
+  tester[测试同学]
+  reviewer[评审同学]
+  developer[开发同学]
+  ops[现场/实验室支持]
+
+  subgraph sys["成像专项评审系统"]
+    capture[机端采集应用]
+    pc_client[PC 汇聚工具]
+    review[电脑评审端]
+    platform[评审平台服务]
+  end
+
+  defect[缺陷管理平台]
+  idp[账号/权限]
+  net[现场网络与线材]
+
+  tester --> capture
+  tester --> pc_client
+  reviewer --> review
+  developer --> defect
+  capture --> platform
+  pc_client --> platform
+  pc_client --> capture
+  review --> platform
+  platform --> defect
+  platform --> idp
+  developer -.->|点图取证| platform
+  ops --> net
+  capture --> net

@@ -97,6 +97,14 @@ impl ReviewService {
         self.repo.update_image_remark(image_id, remark)
     }
 
+    pub fn update_image_file_path(
+        &self,
+        image_id: i64,
+        new_path: &Path,
+    ) -> ReviewResult<()> {
+        self.repo.update_image_file_path(image_id, new_path)
+    }
+
     pub fn add_annotation(&self, ann: &Annotation) -> ReviewResult<i64> {
         self.repo.insert_annotation(ann)
     }

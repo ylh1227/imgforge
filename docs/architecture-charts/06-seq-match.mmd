@@ -1,0 +1,20 @@
+%%{init: {'themeVariables': {'fontSize': '16px', 'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif'}}}%%
+sequenceDiagram
+  participant C as 机端/PC
+  participant UG as 上传网关
+  participant AS as 资产入库
+  participant Q as 队列
+  participant W as 匹配 Worker
+  participant R as 评审端
+  participant D as 缺陷服务
+
+  C->>UG: 最后一包 ACK / 队列清空
+  UG->>AS: BatchUploadComplete(batch_id)
+  AS->>Q: Enqueue(MatchJob)
+  AS-->>R: 批次可开评审(若齐套已过)
+  R->>D: 建缺陷草稿(挂 Asset)
+  Note over R,D: 不等待 MatchJob
+  Q->>W: MatchJob
+  W->>W: 图↔dump / 图↔时段log
+  W-->>AS: EvidenceIndex Ready
+  Note over D: 开发下载时读索引；未就绪则等待/提示

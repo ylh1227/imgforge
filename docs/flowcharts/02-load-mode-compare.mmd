@@ -1,0 +1,14 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TB
+  subgraph ONLINE["在线加载"]
+    direction TB
+    O1[手机连网] --> O2[登录] --> O3[在线加载] --> O4[刷新列表]
+    O4 --> O5[选任务] --> O6[下发场景] --> O7[任务卡就绪]
+  end
+  subgraph OFFLINE["离线加载"]
+    direction TB
+    F1[浏览器] --> F2[下 zip] --> F3[拷到手机] --> F4[离线加载]
+    F4 --> F5[选本地包] --> F6[解压加载] --> F7[任务卡就绪]
+  end
+  O7 --> SAME([之后相同：②标定 → ③采集 → …])
+  F7 --> SAME

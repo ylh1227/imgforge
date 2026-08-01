@@ -1,0 +1,37 @@
+%%{init: {'flowchart': {  'nodeSpacing': 28, 'rankSpacing': 32, 'padding': 12,   'htmlLabels': true, 'wrappingWidth': 240}, 'themeVariables': {  'fontSize': '18px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart LR
+  subgraph Load["① 任务加载"]
+    OL[在线: 登录→列表→下发]
+    OF[离线: zip→解压]
+  end
+  subgraph Field["②③ 现场"]
+    ROLE[标定 baseline/dut]
+    CAP[场景采集 + 本地进度]
+  end
+  subgraph Up["④ 上传"]
+    A[通道 A 网口]
+    B1[通道 B1 USB 共享网]
+    B2[通道 B2 PC 暂存]
+  end
+  subgraph Svr["服务端"]
+    IN[资产入库]
+    RD[齐套]
+    RV[评审/缺陷草稿]
+    MQ[匹配队列]
+  end
+  subgraph Out["⑦ 出口"]
+    DP[缺陷平台]
+    DL[点图下载证据]
+  end
+
+  OL --> ROLE
+  OF --> ROLE
+  ROLE --> CAP
+  CAP --> A & B1 & B2
+  A & B1 & B2 --> IN
+  IN --> RD
+  IN --> MQ
+  RD --> RV
+  RV --> DP
+  MQ --> DL
+  DP --> DL

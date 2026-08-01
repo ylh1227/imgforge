@@ -153,6 +153,25 @@ impl SqliteReviewRepository {
         ReviewRepository::update_image_remark(self, item_id, remark)
     }
 
+    /// 场景识别前缀命名后更新磁盘路径。
+    pub fn update_image_file_path(
+        &self,
+        item_id: i64,
+        new_path: &std::path::Path,
+    ) -> ReviewResult<()> {
+        let n = self.conn.execute(
+            "UPDATE review_image_item SET file_path = ?1, updated_at = ?2 WHERE id = ?3",
+            params![new_path.to_string_lossy().as_ref(), now_ts(), item_id],
+        )?;
+        if n == 0 {
+            return Err(ReviewError::NotFound {
+                entity: "image",
+                id: item_id,
+            });
+        }
+        Ok(())
+    }
+
     pub fn update_image_jira(
         &self,
         item_id: i64,

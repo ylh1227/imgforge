@@ -2,6 +2,7 @@
 
 pub mod domain;
 pub mod error;
+pub mod scene_recognize;
 pub mod scopes;
 pub mod service;
 pub mod storage;
@@ -13,6 +14,9 @@ pub mod playback;
 pub mod ui;
 
 pub use error::{VideoReviewError, VideoReviewResult};
+pub use scene_recognize::{
+    recognize_and_rename_video_batch, VideoRecognizeBatchReport, VideoRecognizeItemResult,
+};
 pub use service::VideoReviewService;
 
 #[cfg(feature = "gui")]

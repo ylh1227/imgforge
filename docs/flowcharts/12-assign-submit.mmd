@@ -1,0 +1,10 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TD
+  A([部分或全部缺陷已建立]) --> B[按模块筛选缺陷]
+  B --> C[为模块选择对应开发]
+  C --> D[批量提交至缺陷管理平台]
+  D --> E{提交成功?}
+  E -->|否| F[修正指派 / 重试提交]
+  F --> D
+  E -->|是| G[缺陷单进入开发侧]
+  G --> H([进入图 13 · 开发取证])

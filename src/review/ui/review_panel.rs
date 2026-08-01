@@ -94,6 +94,19 @@ pub struct ReviewPanel {
     error: Option<String>,
     status_hint: String,
     pending_import: Option<(Vec<PathBuf>, String)>,
+    /// 导入后自动场景识别并前缀命名。
+    auto_recognize_on_import: bool,
+    show_scene_recognize_panel: bool,
+    scene_catalog_rows: Vec<crate::review::SceneSpec>,
+    scene_table_import_buf: String,
+    /// 外部导入时：true=合并（同 id 覆盖），false=整表替换。
+    scene_table_import_merge: bool,
+    scene_cfg_base_url: String,
+    scene_cfg_model: String,
+    scene_cfg_enabled: bool,
+    scene_cfg_prefix_unknown: bool,
+    /// 仅用于一次性写入钥匙串，不持久化。
+    scene_api_key_buf: String,
     dialog: Option<DialogState>,
     batch_target_status: ReviewStatus,
     batch_remark_mode: RemarkWriteMode,
@@ -179,6 +192,28 @@ impl ReviewPanel {
             error: None,
             status_hint: String::new(),
             pending_import: None,
+            auto_recognize_on_import: crate::review::SceneRecognizeConfig::load()
+                .map(|c| c.auto_on_import)
+                .unwrap_or(false),
+            show_scene_recognize_panel: false,
+            scene_catalog_rows: crate::review::SceneCatalog::load()
+                .map(|c| c.scenes)
+                .unwrap_or_default(),
+            scene_table_import_buf: String::new(),
+            scene_table_import_merge: false,
+            scene_cfg_base_url: crate::review::SceneRecognizeConfig::load()
+                .map(|c| c.base_url)
+                .unwrap_or_else(|_| {
+                    crate::review::SceneRecognizeConfig::default().base_url
+                }),
+            scene_cfg_model: crate::review::SceneRecognizeConfig::load()
+                .map(|c| c.model)
+                .unwrap_or_else(|_| crate::review::SceneRecognizeConfig::default().model),
+            scene_cfg_enabled: crate::review::SceneRecognizeConfig::load()
+                .map(|c| c.enabled)
+                .unwrap_or(false),
+            scene_cfg_prefix_unknown: false,
+            scene_api_key_buf: String::new(),
             dialog: None,
             batch_target_status: ReviewStatus::Approved,
             batch_remark_mode: RemarkWriteMode::Overwrite,
@@ -408,6 +443,11 @@ impl ReviewPanel {
             });
             ui.add_space(8.0);
         }
+
+        if self.show_scene_recognize_panel {
+            self.scene_recognize_settings_ui(ui);
+            ui.add_space(8.0);
+        }
     }
 
     fn status_message(&self, dark: bool) -> String {
@@ -462,10 +502,21 @@ impl ReviewPanel {
                 }
                 if widgets::full_width_secondary_button_in(
                     ui,
-                    "导出 CSV",
+                    "场景识别",
                     self.current_batch.is_some(),
                     cell,
                 )
+                .clicked()
+                {
+                    self.run_scene_recognize();
+                }
+            });
+            ui.add_space(6.0);
+            ui.checkbox(&mut self.auto_recognize_on_import, "导入后场景识别");
+            ui.add_space(gap);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                if widgets::full_width_secondary_button_in(ui, "导出 CSV", self.current_batch.is_some(), cell)
                 .clicked()
                 {
                     self.export_csv();
@@ -605,6 +656,22 @@ impl ReviewPanel {
             {
                 let paths = host.conversion_queue_paths().to_vec();
                 self.import_from_paths(&paths, "转换队列导入");
+            }
+            ui.checkbox(&mut self.auto_recognize_on_import, "导入后场景识别");
+            if widgets::compact_secondary_button(
+                ui,
+                "场景识别命名",
+                self.current_batch.is_some(),
+            )
+            .clicked()
+            {
+                self.run_scene_recognize();
+            }
+            if widgets::compact_secondary_button(ui, "场景识别设置", true).clicked() {
+                self.show_scene_recognize_panel = !self.show_scene_recognize_panel;
+                if self.show_scene_recognize_panel {
+                    self.reload_scene_recognize_panel_fields();
+                }
             }
 
             if widgets::compact_secondary_button(ui, "导出 CSV", self.current_batch.is_some())
@@ -2638,6 +2705,15 @@ impl ReviewPanel {
                 if let Some(note) = remote_note {
                     msg.push_str(&format!(" · {note}"));
                 }
+                if self.auto_recognize_on_import {
+                    match self.run_scene_recognize_for_batch(id) {
+                        Ok(note) => {
+                            msg.push_str(" · ");
+                            msg.push_str(&note);
+                        }
+                        Err(e) => self.error = Some(format!("导入成功，但场景识别失败：{e}")),
+                    }
+                }
                 self.set_status(msg);
             }
             Err(e) => self.error = Some(e.to_string()),
@@ -3515,10 +3591,320 @@ impl ReviewPanel {
                 if let Some(note) = remote_note {
                     msg.push_str(&format!(" · {note}"));
                 }
+                if self.auto_recognize_on_import {
+                    match self.run_scene_recognize_for_batch(id) {
+                        Ok(note) => {
+                            msg.push_str(" · ");
+                            msg.push_str(&note);
+                        }
+                        Err(e) => self.error = Some(format!("导入成功，但场景识别失败：{e}")),
+                    }
+                }
                 self.set_status(msg);
             }
             Err(e) => self.error = Some(e.to_string()),
         }
+    }
+
+    fn reload_scene_recognize_panel_fields(&mut self) {
+        self.scene_catalog_rows = crate::review::SceneCatalog::load()
+            .map(|c| c.scenes)
+            .unwrap_or_default();
+        self.scene_table_import_buf.clear();
+        if let Ok(cfg) = crate::review::SceneRecognizeConfig::load() {
+            self.scene_cfg_base_url = cfg.base_url;
+            self.scene_cfg_model = cfg.model;
+            self.scene_cfg_enabled = cfg.enabled;
+            self.scene_cfg_prefix_unknown = cfg.prefix_unknown;
+            self.auto_recognize_on_import = cfg.auto_on_import;
+        }
+    }
+
+    fn scene_recognize_settings_ui(&mut self, ui: &mut egui::Ui) {
+        widgets::grouped_section(ui, "场景识别设置", |ui| {
+            ui.label(
+                RichText::new("识别结果前缀写入文件名：场景名_原文件名。API Key 存系统钥匙串（不落盘、设置页不回显）。云端走 HTTPS。")
+                    .small()
+                    .weak(),
+            );
+            ui.checkbox(&mut self.scene_cfg_enabled, "启用场景识别");
+            ui.checkbox(&mut self.auto_recognize_on_import, "导入后自动识别命名");
+            ui.checkbox(
+                &mut self.scene_cfg_prefix_unknown,
+                "未匹配时加「未识别_」前缀",
+            );
+            ui.horizontal(|ui| {
+                ui.label("API Base URL");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.scene_cfg_base_url)
+                        .desired_width(360.0),
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("Model");
+                ui.add(egui::TextEdit::singleline(&mut self.scene_cfg_model).desired_width(200.0));
+            });
+            let has_key = crate::review::has_api_key();
+            let in_kc = crate::review::has_keychain_api_key();
+            ui.label(if has_key {
+                RichText::new(if in_kc {
+                    "已配置 API Key（系统钥匙串）"
+                } else {
+                    "已配置 API Key（环境变量回退）"
+                })
+                .color(egui::Color32::from_rgb(40, 160, 80))
+            } else {
+                RichText::new("未配置 API Key（下方可写入钥匙串）")
+                    .color(egui::Color32::from_rgb(200, 80, 60))
+            });
+            ui.horizontal(|ui| {
+                ui.label("新 API Key");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.scene_api_key_buf)
+                        .password(true)
+                        .desired_width(280.0)
+                        .hint_text("粘贴后点写入，不会回显已保存值"),
+                );
+                if widgets::compact_primary_button(ui, "写入钥匙串", true).clicked() {
+                    match crate::review::store_api_key(&self.scene_api_key_buf) {
+                        Ok(()) => {
+                            self.scene_api_key_buf.clear();
+                            self.set_status("API Key 已写入钥匙串");
+                        }
+                        Err(e) => self.error = Some(e.to_string()),
+                    }
+                }
+                if widgets::compact_secondary_button(ui, "清除钥匙串", in_kc).clicked() {
+                    match crate::review::clear_api_key() {
+                        Ok(()) => self.set_status("已清除钥匙串 API Key"),
+                        Err(e) => self.error = Some(e.to_string()),
+                    }
+                }
+            });
+
+            ui.add_space(8.0);
+            ui.label(RichText::new("场景列表").strong());
+            ui.label(
+                RichText::new("表格列：id（英文标识）· name（前缀用中文名）· description（可选）")
+                    .small()
+                    .weak(),
+            );
+
+            let mut remove_idx: Option<usize> = None;
+            egui::ScrollArea::vertical()
+                .max_height(220.0)
+                .show(ui, |ui| {
+                    egui::Grid::new("scene_catalog_table")
+                        .num_columns(4)
+                        .spacing([8.0, 4.0])
+                        .striped(true)
+                        .min_col_width(80.0)
+                        .show(ui, |ui| {
+                            ui.label(RichText::new("id").strong());
+                            ui.label(RichText::new("name").strong());
+                            ui.label(RichText::new("description").strong());
+                            ui.label("");
+                            ui.end_row();
+
+                            for (i, row) in self.scene_catalog_rows.iter_mut().enumerate() {
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut row.id)
+                                        .desired_width(100.0)
+                                        .hint_text("night"),
+                                );
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut row.name)
+                                        .desired_width(120.0)
+                                        .hint_text("夜景"),
+                                );
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut row.description)
+                                        .desired_width(200.0)
+                                        .hint_text("可选说明"),
+                                );
+                                if widgets::compact_secondary_button(ui, "删除", true).clicked() {
+                                    remove_idx = Some(i);
+                                }
+                                ui.end_row();
+                            }
+                        });
+                });
+
+            if let Some(i) = remove_idx {
+                self.scene_catalog_rows.remove(i);
+            }
+
+            ui.horizontal(|ui| {
+                if widgets::compact_secondary_button(ui, "添加一行", true).clicked() {
+                    self.scene_catalog_rows.push(crate::review::SceneSpec {
+                        id: String::new(),
+                        name: String::new(),
+                        description: String::new(),
+                    });
+                }
+                if widgets::compact_primary_button(ui, "外部导入表格…", true).clicked() {
+                    self.import_external_scene_table();
+                }
+                if widgets::compact_secondary_button(
+                    ui,
+                    "导出 CSV…",
+                    !self.scene_catalog_rows.is_empty(),
+                )
+                .clicked()
+                {
+                    let cat = crate::review::SceneCatalog {
+                        scenes: self.scene_catalog_rows.clone(),
+                    };
+                    if let Some(path) = rfd::FileDialog::new()
+                        .set_file_name("scene_catalog.csv")
+                        .add_filter("CSV", &["csv"])
+                        .save_file()
+                    {
+                        match std::fs::write(&path, cat.to_csv_table()) {
+                            Ok(()) => self.set_status(format!("已导出：{}", path.display())),
+                            Err(e) => self.error = Some(e.to_string()),
+                        }
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("导入模式");
+                ui.radio_value(&mut self.scene_table_import_merge, false, "替换当前列表");
+                ui.radio_value(&mut self.scene_table_import_merge, true, "合并（同 id 覆盖）");
+            });
+            ui.label(
+                RichText::new("支持外部文件：Excel（.xlsx/.xls）、CSV、TSV、TXT（含 UTF-8/UTF-16 BOM）")
+                    .small()
+                    .weak(),
+            );
+
+            ui.collapsing("从剪贴板/文本粘贴表格", |ui| {
+                ui.label(
+                    RichText::new("每行：id,name,description（或 Tab 分隔）；首行可为表头")
+                        .small()
+                        .weak(),
+                );
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.scene_table_import_buf)
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(4),
+                );
+                if widgets::compact_secondary_button(
+                    ui,
+                    "解析到表格",
+                    !self.scene_table_import_buf.trim().is_empty(),
+                )
+                .clicked()
+                {
+                    match crate::review::SceneCatalog::from_table_text(&self.scene_table_import_buf)
+                    {
+                        Ok(imported) => {
+                            self.apply_imported_scene_catalog(imported);
+                            self.scene_table_import_buf.clear();
+                        }
+                        Err(e) => self.error = Some(e.to_string()),
+                    }
+                }
+            });
+
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if widgets::compact_primary_button(ui, "保存设置", true).clicked() {
+                    self.save_scene_recognize_settings();
+                }
+                if widgets::compact_secondary_button(ui, "关闭", true).clicked() {
+                    self.show_scene_recognize_panel = false;
+                }
+            });
+        });
+    }
+
+    fn apply_imported_scene_catalog(&mut self, imported: crate::review::SceneCatalog) {
+        let n = imported.scenes.len();
+        if self.scene_table_import_merge {
+            let mut cat = crate::review::SceneCatalog {
+                scenes: self.scene_catalog_rows.clone(),
+            };
+            cat.merge_with(imported);
+            self.scene_catalog_rows = cat.scenes;
+            self.set_status(format!(
+                "已合并导入 {n} 条，当前共 {} 条（请点保存）",
+                self.scene_catalog_rows.len()
+            ));
+        } else {
+            self.scene_catalog_rows = imported.scenes;
+            self.set_status(format!("已导入 {n} 条场景（请点保存）"));
+        }
+    }
+
+    fn import_external_scene_table(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("表格", &["xlsx", "xls", "xlsm", "csv", "tsv", "txt"])
+            .pick_file()
+        {
+            match crate::review::SceneCatalog::from_table_file(&path) {
+                Ok(imported) => self.apply_imported_scene_catalog(imported),
+                Err(e) => self.error = Some(e.to_string()),
+            }
+        }
+    }
+
+    fn save_scene_recognize_settings(&mut self) {
+        let cat = crate::review::SceneCatalog {
+            scenes: self
+                .scene_catalog_rows
+                .iter()
+                .map(|s| crate::review::SceneSpec {
+                    id: s.id.trim().to_string(),
+                    name: s.name.trim().to_string(),
+                    description: s.description.trim().to_string(),
+                })
+                .filter(|s| !s.id.is_empty() || !s.name.is_empty())
+                .collect(),
+        };
+        if let Err(e) = cat.validate() {
+            self.error = Some(e.to_string());
+            return;
+        }
+        if let Err(e) = cat.save() {
+            self.error = Some(e.to_string());
+            return;
+        }
+        self.scene_catalog_rows = cat.scenes;
+
+        let mut cfg = crate::review::SceneRecognizeConfig::load().unwrap_or_default();
+        cfg.enabled = self.scene_cfg_enabled;
+        cfg.base_url = self.scene_cfg_base_url.trim().to_string();
+        cfg.model = self.scene_cfg_model.trim().to_string();
+        cfg.auto_on_import = self.auto_recognize_on_import;
+        cfg.prefix_unknown = self.scene_cfg_prefix_unknown;
+        match cfg.save() {
+            Ok(()) => self.set_status("场景识别设置已保存"),
+            Err(e) => self.error = Some(e.to_string()),
+        }
+    }
+
+    fn run_scene_recognize(&mut self) {
+        let Some(batch_id) = self.current_batch else {
+            self.error = Some("请先选择评审批次".into());
+            return;
+        };
+        match self.run_scene_recognize_for_batch(batch_id) {
+            Ok(msg) => self.set_status(msg),
+            Err(e) => self.error = Some(e),
+        }
+    }
+
+    fn run_scene_recognize_for_batch(&mut self, batch_id: i64) -> Result<String, String> {
+        let report = crate::review::recognize_and_rename_batch(&self.service, batch_id, None, None)
+            .map_err(|e| e.to_string())?;
+        let _ = self.reload_images();
+        self.reload_current_image_tags();
+        let _ = self.reload_tags();
+        Ok(format!(
+            "场景识别完成：匹配 {}/{}，重命名 {}，失败 {}",
+            report.matched, report.total, report.renamed, report.failed
+        ))
     }
 
     fn export_csv(&mut self) {

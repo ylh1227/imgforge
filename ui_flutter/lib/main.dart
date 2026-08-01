@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:video_player_media_kit/video_player_media_kit.dart';
 
 import 'app.dart';
 import 'host/host_client.dart';
@@ -8,6 +9,11 @@ import 'theme/theme_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  VideoPlayerMediaKit.ensureInitialized(
+    macOS: true,
+    windows: true,
+  );
+
   final theme = ThemeController();
   await theme.init();
 

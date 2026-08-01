@@ -1,0 +1,44 @@
+%%{init: {'flowchart': {  'nodeSpacing': 28, 'rankSpacing': 32, 'padding': 12,   'htmlLabels': true, 'wrappingWidth': 240}, 'themeVariables': {  'fontSize': '18px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TB
+  subgraph FieldSite["现场 / 实验室"]
+    Phones[对比机 + 测试机]
+    Dock[拓展坞有线网]
+    Laptop[评审/汇聚 PC]
+    Phones --> Dock
+    Phones --> Laptop
+  end
+
+  subgraph DMZ["接入区"]
+    LB[负载均衡]
+    UG[上传网关集群]
+    LB --> UG
+  end
+
+  subgraph AppZone["应用区"]
+    API[领域 API 集群]
+    WRK[匹配 Worker 池]
+    API --> WRK
+  end
+
+  subgraph DataZone["数据区"]
+    DB[(元数据库主从)]
+    OS[(对象存储)]
+    MQ[(消息队列)]
+  end
+
+  subgraph SaaS["外部 SaaS/内网平台"]
+    DEF[缺陷管理平台]
+  end
+
+  Dock --> LB
+  Laptop --> LB
+  Laptop --> API
+  UG --> OS
+  UG --> API
+  API --> DB
+  API --> OS
+  API --> MQ
+  WRK --> MQ
+  WRK --> OS
+  WRK --> DB
+  API --> DEF

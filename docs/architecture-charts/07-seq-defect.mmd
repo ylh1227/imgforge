@@ -1,0 +1,18 @@
+%%{init: {'themeVariables': {'fontSize': '16px', 'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif'}}}%%
+sequenceDiagram
+  participant R as 评审端
+  participant D as 缺陷服务
+  participant DP as 缺陷平台
+  participant Dev as 开发
+  participant API as 证据 API
+
+  R->>D: 按模块筛选 + 指派 + 批量提交
+  D->>DP: CreateTickets(media refs)
+  DP-->>D: ticket ids
+  Dev->>DP: 打开缺陷 · 点击问题图
+  DP->>API: ResolveEvidence(asset_id)
+  alt 匹配已完成
+    API-->>Dev: 时段 log URL + dump URL
+  else 匹配未完成
+    API-->>Dev: 202 / 提示等待
+  end

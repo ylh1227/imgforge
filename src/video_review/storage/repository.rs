@@ -39,6 +39,8 @@ pub trait VideoRepository {
         device_model: Option<&str>,
     ) -> VideoReviewResult<()>;
     fn update_video_offset(&self, id: i64, offset_ms: i64) -> VideoReviewResult<()>;
+    /// 场景识别前缀命名后更新磁盘路径。
+    fn update_video_file_path(&self, id: i64, new_path: &Path) -> VideoReviewResult<()>;
     fn set_thumbnail_path(&self, id: i64, path: &Path) -> VideoReviewResult<()>;
     fn batch_stats(&self, batch_id: i64) -> VideoReviewResult<BatchStats>;
 

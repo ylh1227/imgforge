@@ -1,0 +1,20 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TD
+  A([USB 连接 · 打开 cis-client]) --> B{ADB 看到设备?}
+  B -->|否| B1[重插线 / 开调试]
+  B1 --> B
+  B -->|是| C{panda 通道可用?}
+  C -->|否| C1[等待可用]
+  C1 --> C
+  C -->|是| D{需端口模式?}
+  D -->|是| E[重启 panda]
+  D -->|否| F[拉取素材到 PC 暂存]
+  E --> F
+  F --> G[命名 album 包]
+  G --> H[选择上传目录]
+  H --> I[批量上传]
+  I --> J{待上传 = 0?}
+  J -->|否| I
+  J -->|是| K{还有下一台设备?}
+  K -->|是| A
+  K -->|否| L([进入 ⑤ 齐套检查])

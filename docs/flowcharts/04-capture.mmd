@@ -1,0 +1,12 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TD
+  A([打开场景宫格]) --> B[按序号拍摄当前场景]
+  B --> C{该场景 n/n 满?}
+  C -->|否| B
+  C -->|是| D{还有下一场景?}
+  D -->|是| B
+  D -->|否| E{总进度已采/应采满?}
+  E -->|否| F[记录缺项并补拍]
+  F --> B
+  E -->|是| G[确认 bbklog 将旁路上传]
+  G --> H([进入 ④ 选上传通道])

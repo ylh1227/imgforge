@@ -1,0 +1,14 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TD
+  A([电脑浏览器打开任务平台]) --> B[下载任务压缩包 zip]
+  B --> C[拷到手机或共享目录]
+  C --> D[机端选择「离线加载」]
+  D --> E[选择本地任务压缩包]
+  E --> F[解压]
+  F --> G{解压成功?}
+  G -->|否| H[换包 / 重新下载后重试]
+  H --> E
+  G -->|是| I[从压缩包加载场景]
+  I --> K{任务卡出现且机型_SN 可见?}
+  K -->|否| D
+  K -->|是| L([进入 ② 标定角色])

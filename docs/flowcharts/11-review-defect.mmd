@@ -1,0 +1,15 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TD
+  A([打开电脑评审端]) --> B[选择专项 / 批次]
+  B --> C[批量对比图片和/或视频]
+  C --> D{当前场景有问题?}
+  D -->|否| E[通过 / 跳过]
+  D -->|是| F[建立缺陷]
+  F --> G[自动带入对应问题素材]
+  G --> H[可继续建下一条]
+  E --> I{还有场景要看?}
+  H --> I
+  I -->|是| C
+  I -->|否| J{本轮缺陷已建够?}
+  J -->|否| C
+  J -->|是| K([进入 ⑥c / ⑦])

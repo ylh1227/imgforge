@@ -118,10 +118,20 @@ pub fn ensure_schema(conn: &Connection) -> ReviewResult<()> {
     if version < 4 {
         migrate_v3_to_v4(conn)?;
         version = 4;
+    } else {
+        // 与 video_review 共用同一库与 user_version（视频侧可达 7+）。
+        // 版本号已高于评审 schema 时仍要补齐列，避免跳过 v4 迁移。
+        migrate_v3_to_v4(conn)?;
     }
 
     let _ = version;
-    conn.pragma_update(None, "user_version", REVIEW_SCHEMA_VERSION)?;
+    // 禁止把共用库的 user_version 降回评审版本（会破坏视频侧迁移状态）。
+    let current: i32 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .unwrap_or(0);
+    if current < REVIEW_SCHEMA_VERSION {
+        conn.pragma_update(None, "user_version", REVIEW_SCHEMA_VERSION)?;
+    }
     Ok(())
 }
 

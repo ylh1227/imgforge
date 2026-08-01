@@ -1,0 +1,80 @@
+%%{init: {'themeVariables': {'fontSize': '16px', 'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif'}}}%%
+erDiagram
+  SPECIALTY ||--o{ TASK_PACKAGE : contains
+  TASK_PACKAGE ||--o{ SCENE_SPEC : defines
+  TASK_PACKAGE ||--o{ DEVICE_BINDING : loaded_on
+  DEVICE_BINDING ||--o{ CAPTURE_ITEM : produces
+  SCENE_SPEC ||--o{ CAPTURE_ITEM : satisfies
+  BATCH ||--o{ CAPTURE_ITEM : groups
+  BATCH ||--o{ UPLOAD_RECEIPT : tracks
+  BATCH ||--o| READINESS : checked_by
+  BATCH ||--o| MATCH_JOB : triggers
+  CAPTURE_ITEM ||--o{ ASSET : materializes
+  ASSET ||--o{ EVIDENCE_LINK : indexed_as
+  REVIEW_SESSION ||--o{ DEFECT_DRAFT : creates
+  DEFECT_DRAFT }o--|| ASSET : attaches
+  DEFECT_DRAFT }o--o| EXTERNAL_TICKET : submits_as
+  MATCH_JOB ||--o{ EVIDENCE_LINK : outputs
+
+  SPECIALTY {
+    string id
+    string name
+    string module_taxonomy
+  }
+  TASK_PACKAGE {
+    string id
+    string version
+    string checksum
+    enum source "online|offline_zip"
+  }
+  SCENE_SPEC {
+    string id
+    int seq
+    int required_count
+  }
+  DEVICE_BINDING {
+    string device_id
+    string sn
+    string model
+    string build
+    enum role "baseline|dut"
+  }
+  CAPTURE_ITEM {
+    string id
+    string scene_id
+    enum media_type "image|video"
+    datetime captured_at
+  }
+  BATCH {
+    string id
+    string specialty_id
+    enum status
+  }
+  ASSET {
+    string id
+    string storage_key
+    enum kind "image|video|log|dump|package"
+    string content_hash
+  }
+  READINESS {
+    bool both_devices
+    bool version_aligned
+    bool scenes_complete_or_waived
+    bool log_queue_done
+  }
+  MATCH_JOB {
+    string id
+    enum status "queued|running|done|failed"
+  }
+  EVIDENCE_LINK {
+    string asset_id
+    string related_asset_id
+    enum relation "image_to_dump|image_to_period_log"
+    string time_window
+  }
+  DEFECT_DRAFT {
+    string id
+    string module
+    string assignee
+    enum state "draft|submitted"
+  }

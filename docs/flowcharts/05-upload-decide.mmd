@@ -1,0 +1,10 @@
+%%{init: {'flowchart': {  'nodeSpacing': 36, 'rankSpacing': 40, 'padding': 14,   'htmlLabels': true, 'wrappingWidth': 260}, 'themeVariables': {  'fontSize': '20px',   'fontFamily': 'PingFang SC, Microsoft YaHei, sans-serif',   'lineColor': '#333333'}}}%%
+flowchart TD
+  Start([采集完成 · 准备上传]) --> Q1{拓展坞网口能通服务器?}
+  Q1 -->|是| A([走通道 A])
+  Q1 -->|否| Q2{USB 连电脑且能共享网络?}
+  Q2 -->|否| Fix[排查线材 / 驱动 / 网络后重试]
+  Fix --> Q1
+  Q2 -->|是| Q3{需 PC 整理或弱网重传?}
+  Q3 -->|否| B1([走通道 B1])
+  Q3 -->|是| B2([走通道 B2])
